@@ -109,11 +109,11 @@
             <Button Width="112"
                     Margin="0,0,8,0"
                     Content="Read Paragraph"
-                    Command="{Binding ReadParagraphCommand}" />
+                    Click="OnReadParagraphButtonClick" />
             <Button Width="112"
                     Margin="0,0,8,0"
                     Content="Read Document"
-                    Command="{Binding ReadDocumentCommand}" />
+                    Click="OnReadDocumentButtonClick" />
             <Button Width="88"
                     Content="Stop"
                     Command="{Binding StopCommand}" />

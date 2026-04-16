@@ -125,6 +125,13 @@ Validated tray-focus reliability note:
   - `TopLevelWindowForOverflowXamlIsland`
 - Do not remove these exclusions or relax tray focus-restore verification without rerunning manual Notepad selected-text tests for both hotkey and tray flows.
 
+Validated paragraph-read reliability notes:
+- A confirmed regression occurred where `Read Paragraph` in Notepad failed with `UI Automation returned an empty paragraph` when only a caret/insertion point existed.
+- The fix depends on paragraph retrieval expanding insertion ranges to enclosing units (`Paragraph`, then `Line`) when direct selection text is empty.
+- A confirmed regression also occurred where clicking `Read Paragraph`/`Read Document` from the app window shifted focus to RightSpeak and caused retrieval against the wrong window.
+- The fix depends on routing these UI-triggered external reads through the same focus-sensitive restore path used by tray reads.
+- Do not simplify paragraph retrieval back to raw `GetSelection().GetText(-1)` only, and do not bypass focus restore for UI paragraph/document triggers without rerunning manual Notepad tests for tray and app-button paths.
+
 ### Global Hotkeys
 Global hotkeys are a first-class feature.
 

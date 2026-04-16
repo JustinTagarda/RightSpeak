@@ -93,7 +93,7 @@ public partial class App : WpfApplication
         _trayService.Initialize();
         ApplyTrayHotkeyHints();
 
-        _mainWindow = new MainWindow(_mainViewModel, _hotkeyService, _activateWindowMessageId);
+        _mainWindow = new MainWindow(_mainViewModel, _hotkeyService, _activateWindowMessageId, ExecuteTrayFocusSensitiveReadAsync);
         _mainWindow.Closing += OnMainWindowClosing;
         _mainWindow.Show();
     }

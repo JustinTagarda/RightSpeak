@@ -1,3 +1,5 @@
+using System;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Interop;
 using RightSpeak.Services;
@@ -9,14 +11,20 @@ public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
     private readonly IGlobalHotkeyService _hotkeyService;
+    private readonly Func<Action, Task>? _executeFocusSensitiveReadAsync;
     private readonly uint _activateWindowMessageId;
     private HwndSource? _windowSource;
 
-    public MainWindow(MainViewModel viewModel, IGlobalHotkeyService hotkeyService, uint activateWindowMessageId)
+    public MainWindow(
+        MainViewModel viewModel,
+        IGlobalHotkeyService hotkeyService,
+        uint activateWindowMessageId,
+        Func<Action, Task>? executeFocusSensitiveReadAsync = null)
     {
         InitializeComponent();
         _viewModel = viewModel;
         _hotkeyService = hotkeyService;
+        _executeFocusSensitiveReadAsync = executeFocusSensitiveReadAsync;
         _activateWindowMessageId = activateWindowMessageId;
         DataContext = _viewModel;
 
@@ -78,6 +86,28 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void OnReadParagraphButtonClick(object sender, RoutedEventArgs e)
+    {
+        if (_executeFocusSensitiveReadAsync is not null)
+        {
+            await _executeFocusSensitiveReadAsync(ExecuteReadParagraph).ConfigureAwait(true);
+            return;
+        }
+
+        ExecuteReadParagraph();
+    }
+
+    private async void OnReadDocumentButtonClick(object sender, RoutedEventArgs e)
+    {
+        if (_executeFocusSensitiveReadAsync is not null)
+        {
+            await _executeFocusSensitiveReadAsync(ExecuteReadDocument).ConfigureAwait(true);
+            return;
+        }
+
+        ExecuteReadDocument();
+    }
+
     private nint WndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
     {
         if ((uint)msg != _activateWindowMessageId)
@@ -94,5 +124,21 @@ public partial class MainWindow : Window
         Activate();
         handled = true;
         return nint.Zero;
+    }
+
+    private void ExecuteReadParagraph()
+    {
+        if (_viewModel.ReadParagraphCommand.CanExecute(null))
+        {
+            _viewModel.ReadParagraphCommand.Execute(null);
+        }
+    }
+
+    private void ExecuteReadDocument()
+    {
+        if (_viewModel.ReadDocumentCommand.CanExecute(null))
+        {
+            _viewModel.ReadDocumentCommand.Execute(null);
+        }
     }
 }
