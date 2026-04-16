@@ -62,7 +62,9 @@ public partial class App : WpfApplication
         var paragraphTextRetrievalService = new ParagraphTextRetrievalService(
             new List<IParagraphTextProvider>
             {
-                new UiAutomationParagraphTextProvider()
+                new UiAutomationParagraphTextProvider(),
+                new FocusedControlParagraphTextProvider(),
+                new ClipboardParagraphTextProvider()
             });
         var documentTextRetrievalService = new DocumentTextRetrievalService(
             new List<IDocumentTextProvider>

@@ -146,6 +146,7 @@ public sealed class WindowsSpeechService : ISpeechService, IDisposable
         var waveBytes = await Task.Run(() => RenderWaveBytes(text, options, cancellationToken), cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
 
+        var playbackDuration = GetPlaybackDuration(waveBytes);
         using var waveStream = new MemoryStream(waveBytes, writable: false);
         using var soundPlayer = new SoundPlayer(waveStream);
         soundPlayer.Load();
@@ -161,12 +162,9 @@ public sealed class WindowsSpeechService : ISpeechService, IDisposable
             _gate.Release();
         }
 
-        await Task.Run(() =>
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            soundPlayer.PlaySync();
-            cancellationToken.ThrowIfCancellationRequested();
-        }, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        soundPlayer.Play();
+        await Task.Delay(playbackDuration, cancellationToken).ConfigureAwait(false);
 
         return SpeechResult.Completed();
     }
@@ -334,6 +332,19 @@ public sealed class WindowsSpeechService : ISpeechService, IDisposable
         writer.Write(pcmBytes);
         writer.Flush();
         return stream.ToArray();
+    }
+
+    private static TimeSpan GetPlaybackDuration(byte[] waveBytes)
+    {
+        if (TryReadWave(waveBytes, out var format, out var pcmBytes) &&
+            format.ByteRate > 0 &&
+            pcmBytes.Length > 0)
+        {
+            var seconds = (double)pcmBytes.Length / format.ByteRate;
+            return TimeSpan.FromMilliseconds(Math.Ceiling((seconds * 1000) + 150));
+        }
+
+        return TimeSpan.FromSeconds(2);
     }
 
     private void ThrowIfDisposed()

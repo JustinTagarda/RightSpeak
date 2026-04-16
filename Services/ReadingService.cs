@@ -96,6 +96,12 @@ public sealed class ReadingService : IReadingService
     public async Task<SpeechResult> ReadParagraphAsync(CancellationToken cancellationToken = default)
     {
         var retrieval = await _paragraphTextRetrievalService.RetrieveParagraphTextAsync(cancellationToken).ConfigureAwait(false);
+        if ((!retrieval.Success || string.IsNullOrWhiteSpace(retrieval.Text)) && ShouldRetryParagraphRetrieval(retrieval))
+        {
+            await Task.Delay(220, cancellationToken).ConfigureAwait(false);
+            retrieval = await _paragraphTextRetrievalService.RetrieveParagraphTextAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         if (!retrieval.Success || string.IsNullOrWhiteSpace(retrieval.Text))
         {
             return SpeechResult.Failed(retrieval.Message);
@@ -168,5 +174,18 @@ public sealed class ReadingService : IReadingService
         }
 
         return null;
+    }
+
+    private static bool ShouldRetryParagraphRetrieval(TextRetrievalResult retrieval)
+    {
+        var message = retrieval.Message ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return true;
+        }
+
+        return message.Contains("UI Automation", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("focused control", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("clipboard paragraph fallback", StringComparison.OrdinalIgnoreCase);
     }
 }

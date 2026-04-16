@@ -132,6 +132,13 @@ Validated paragraph-read reliability notes:
 - The fix depends on routing these UI-triggered external reads through the same focus-sensitive restore path used by tray reads.
 - Do not simplify paragraph retrieval back to raw `GetSelection().GetText(-1)` only, and do not bypass focus restore for UI paragraph/document triggers without rerunning manual Notepad tests for tray and app-button paths.
 
+Validated selected-text scope reliability notes:
+- A confirmed regression occurred in VS Code where selected-text read spoke unrelated editor content (for example text with many slashes) because focused-control retrieval accepted full control value/document text instead of true selection.
+- The fix depends on keeping `FocusedControlSelectedTextProvider` selection-only for selected-text flow (read from `TextPattern.GetSelection()` ranges only).
+- For selected-text commands, do not use full control/document value as a success path.
+- If selection is unavailable through focused-control UI Automation patterns, the provider must fail so later fallback strategies (including clipboard) can run.
+- Do not restore document-wide fallback inside selected-text providers without rerunning VS Code selected-text tests for both hotkey and tray paths.
+
 ### Global Hotkeys
 Global hotkeys are a first-class feature.
 

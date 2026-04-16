@@ -24,4 +24,5 @@ internal static class ClipboardInterop
         keybd_event(VkC, 0, KeyEventfKeyUp, 0);
         keybd_event(VkControl, 0, KeyEventfKeyUp, 0);
     }
+
 }

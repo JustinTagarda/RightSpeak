@@ -1,0 +1,152 @@
+﻿[
+    {
+        "Area":  "Retrieval Matrix",
+        "Check":  "RightSpeak input box - Read typed text",
+        "Status":  "Fail",
+        "Notes":  "Typed text read still clips opening words; \"hello there\" lost consistently across multiple speech-path mitigations."
+    },
+    {
+        "Area":  "Retrieval Matrix",
+        "Check":  "RightSpeak input box - Read selected text",
+        "Status":  "Pass",
+        "Notes":  "fix was validated after adding leading PCM silence."
+    },
+    {
+        "Area":  "Retrieval Matrix",
+        "Check":  "Windows Notepad - Read selected text",
+        "Status":  "Pass",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Retrieval Matrix",
+        "Check":  "Windows Notepad - Read paragraph",
+        "Status":  "Pass",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Retrieval Matrix",
+        "Check":  "Windows Notepad - Read document",
+        "Status":  "Pass",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Retrieval Matrix",
+        "Check":  "VS Code editor - Read selected text",
+        "Status":  "Pass",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Retrieval Matrix",
+        "Check":  "VS Code editor - Read paragraph",
+        "Status":  "Pass",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Retrieval Matrix",
+        "Check":  "VS Code editor - Read document",
+        "Status":  "Pass",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Retrieval Matrix",
+        "Check":  "Edge/Chrome text field - Read selected text",
+        "Status":  "Pass",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Retrieval Matrix",
+        "Check":  "Edge/Chrome text field - Read paragraph",
+        "Status":  "Pass",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Retrieval Matrix",
+        "Check":  "Edge/Chrome page selection - Read selected text",
+        "Status":  "Pass",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Retrieval Matrix",
+        "Check":  "Edge/Chrome page selection - Context menu read",
+        "Status":  "Pass",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Hotkey/Tray",
+        "Check":  "Startup hotkey registration",
+        "Status":  "Pass",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Hotkey/Tray",
+        "Check":  "Apply new hotkeys in window",
+        "Status":  "Pass",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Hotkey/Tray",
+        "Check":  "Tray labels reflect hotkeys",
+        "Status":  "Pass",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Hotkey/Tray",
+        "Check":  "Hide to tray then restore",
+        "Status":  "Pass",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Hotkey/Tray",
+        "Check":  "Single-instance activation",
+        "Status":  "Pass",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Settings",
+        "Check":  "Save voice/rate/hotkeys and restart",
+        "Status":  "Pass",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Settings",
+        "Check":  "Missing settings file recovery",
+        "Status":  "Not Run",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Settings",
+        "Check":  "Malformed settings file recovery",
+        "Status":  "Not Run",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Installer/First-Run",
+        "Check":  "Install browser integration (single ID)",
+        "Status":  "Not Run",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Installer/First-Run",
+        "Check":  "Install browser integration (Chrome + Edge IDs)",
+        "Status":  "Not Run",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Installer/First-Run",
+        "Check":  "-RunBridgeTest path",
+        "Status":  "Not Run",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Installer/First-Run",
+        "Check":  "Troubleshooting doc followability",
+        "Status":  "Not Run",
+        "Notes":  ""
+    },
+    {
+        "Area":  "Diagnostics",
+        "Check":  "Success/failure events written to diagnostics log",
+        "Status":  "Not Run",
+        "Notes":  ""
+    }
+]

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Automation;
@@ -23,37 +24,32 @@ public sealed class FocusedControlSelectedTextProvider : ISelectedTextProvider
                 return Task.FromResult(TextRetrievalResult.Failed("No focused control is available.", Source));
             }
 
-            if (focusedElement.TryGetCurrentPattern(ValuePattern.Pattern, out var valuePatternObject) &&
-                valuePatternObject is ValuePattern valuePattern)
-            {
-                var valueText = Normalize(valuePattern.Current.Value);
-                if (!string.IsNullOrWhiteSpace(valueText))
-                {
-                    return Task.FromResult(
-                        TextRetrievalResult.Retrieved(
-                            valueText,
-                            Source,
-                            "Text retrieved from focused control value."));
-                }
-            }
-
             if (focusedElement.TryGetCurrentPattern(TextPattern.Pattern, out var textPatternObject) &&
                 textPatternObject is TextPattern textPattern)
             {
-                var documentText = Normalize(textPattern.DocumentRange.GetText(-1));
-                if (!string.IsNullOrWhiteSpace(documentText))
+                var selectedRanges = textPattern.GetSelection();
+                if (selectedRanges is not null && selectedRanges.Length > 0)
                 {
-                    return Task.FromResult(
-                        TextRetrievalResult.Retrieved(
-                            documentText,
-                            Source,
-                            "Text retrieved from focused control document range."));
+                    var selectedText = string.Join(
+                        Environment.NewLine,
+                        selectedRanges
+                            .Select(range => Normalize(range.GetText(-1)))
+                            .Where(text => !string.IsNullOrWhiteSpace(text)));
+
+                    if (!string.IsNullOrWhiteSpace(selectedText))
+                    {
+                        return Task.FromResult(
+                            TextRetrievalResult.Retrieved(
+                                selectedText,
+                                Source,
+                                "Selected text retrieved from focused control selection."));
+                    }
                 }
             }
 
             return Task.FromResult(
                 TextRetrievalResult.Failed(
-                    "Focused control does not expose readable text through supported UI Automation patterns.",
+                    "Focused control does not expose selected text through supported UI Automation patterns.",
                     Source));
         }
         catch (OperationCanceledException)

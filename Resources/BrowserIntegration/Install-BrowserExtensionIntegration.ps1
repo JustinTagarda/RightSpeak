@@ -5,7 +5,7 @@ param(
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Debug",
     [string]$Framework = "net10.0-windows",
-    [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path,
+    [string]$ProjectRoot = "",
     [switch]$RunBridgeTest
 )
 
@@ -25,6 +25,10 @@ function Normalize-ExtensionId {
     return $normalized
 }
 
+if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
+    $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+}
+
 $hostExecutablePath = Join-Path $ProjectRoot "RightSpeak.NativeHost\bin\$Configuration\$Framework\RightSpeak.NativeHost.exe"
 $installScriptPath = Join-Path $PSScriptRoot "Install-NativeHost.ps1"
 $testScriptPath = Join-Path $PSScriptRoot "Test-BrowserIntegration.ps1"
@@ -41,23 +45,7 @@ if ($AdditionalExtensionIds) {
 }
 
 $normalizedIds = $normalizedIds | Select-Object -Unique
-$allOrigins = $normalizedIds | ForEach-Object { "chrome-extension://$_/" }
-
-if (Test-Path $manifestPath) {
-    try {
-        $existingManifest = Get-Content -Raw -Path $manifestPath | ConvertFrom-Json
-        if ($existingManifest.allowed_origins) {
-            $allOrigins += @($existingManifest.allowed_origins)
-        }
-    }
-    catch {
-        Write-Warning "Existing native host manifest could not be parsed. It will be replaced."
-    }
-}
-
-$allOrigins = $allOrigins |
-    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-    Select-Object -Unique
+$allOrigins = $normalizedIds | ForEach-Object { "chrome-extension://$_/" } | Select-Object -Unique
 
 & $installScriptPath -HostExecutablePath $hostExecutablePath -ExtensionOrigins $allOrigins
 
