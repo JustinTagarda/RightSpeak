@@ -2,14 +2,18 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="RightSpeak"
-        Height="320"
+        Icon="/Resources/Icons/RightSpeak.ico"
+        Height="450"
         Width="480"
-        MinHeight="280"
+        MinHeight="420"
         MinWidth="420">
     <Grid Margin="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
@@ -18,13 +22,83 @@
                    Margin="0,0,0,8"
                    Text="Text To Read" />
 
-        <TextBox Grid.Row="1"
+        <StackPanel Grid.Row="1"
+                    Orientation="Horizontal"
+                    Margin="0,0,0,8">
+            <TextBlock VerticalAlignment="Center"
+                       Text="Voice"
+                       Margin="0,0,8,0" />
+            <ComboBox Width="260"
+                      ItemsSource="{Binding VoiceOptions}"
+                      SelectedItem="{Binding SelectedVoiceOption, UpdateSourceTrigger=PropertyChanged}" />
+            <Button Width="72"
+                    Margin="8,0,0,0"
+                    Content="Preview"
+                    Command="{Binding PreviewVoiceCommand}" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="2"
+                    Orientation="Horizontal"
+                    Margin="0,0,0,8">
+            <TextBlock VerticalAlignment="Center"
+                       Text="Rate"
+                       Margin="0,0,8,0" />
+            <Slider Width="180"
+                    Minimum="-10"
+                    Maximum="10"
+                    TickFrequency="1"
+                    IsSnapToTickEnabled="True"
+                    Value="{Binding SpeechRate, UpdateSourceTrigger=PropertyChanged}" />
+            <TextBlock Width="36"
+                       Margin="8,0,0,0"
+                       VerticalAlignment="Center"
+                       Text="{Binding SpeechRate}" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="3"
+                    Margin="0,0,0,8">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock VerticalAlignment="Center"
+                           Text="Hotkeys"
+                           Margin="0,0,8,0" />
+                <TextBlock VerticalAlignment="Center"
+                           Text="Ctrl+Shift+"
+                           Margin="0,0,4,0" />
+                <ComboBox Width="52"
+                          ItemsSource="{Binding HotkeyKeyOptions}"
+                          SelectedItem="{Binding ReadSelectedHotkeyKey, UpdateSourceTrigger=PropertyChanged}" />
+                <TextBlock VerticalAlignment="Center"
+                           Text="Sel"
+                           Margin="6,0,8,0" />
+                <ComboBox Width="52"
+                          ItemsSource="{Binding HotkeyKeyOptions}"
+                          SelectedItem="{Binding ReadTypedTextHotkeyKey, UpdateSourceTrigger=PropertyChanged}" />
+                <TextBlock VerticalAlignment="Center"
+                           Text="Typed"
+                           Margin="6,0,8,0" />
+                <ComboBox Width="52"
+                          ItemsSource="{Binding HotkeyKeyOptions}"
+                          SelectedItem="{Binding StopHotkeyKey, UpdateSourceTrigger=PropertyChanged}" />
+                <TextBlock VerticalAlignment="Center"
+                           Text="Stop"
+                           Margin="6,0,8,0" />
+                <Button Width="56"
+                        Content="Apply"
+                        Command="{Binding ApplyHotkeysCommand}" />
+            </StackPanel>
+            <TextBlock Margin="0,4,0,0"
+                       Text="{Binding ReadSelectedHotkeyDisplay}" />
+            <TextBlock Text="{Binding ReadTypedTextHotkeyDisplay}" />
+            <TextBlock Text="{Binding StopHotkeyDisplay}" />
+        </StackPanel>
+
+        <TextBox Grid.Row="4"
                  AcceptsReturn="True"
                  VerticalScrollBarVisibility="Auto"
                  TextWrapping="Wrap"
                  Text="{Binding InputText, UpdateSourceTrigger=PropertyChanged}" />
 
-        <StackPanel Grid.Row="2"
+        <StackPanel Grid.Row="5"
                     Margin="0,10,0,0"
                     Orientation="Horizontal"
                     HorizontalAlignment="Left">
@@ -32,12 +106,20 @@
                     Margin="0,0,8,0"
                     Content="Read"
                     Command="{Binding ReadCommand}" />
+            <Button Width="112"
+                    Margin="0,0,8,0"
+                    Content="Read Paragraph"
+                    Command="{Binding ReadParagraphCommand}" />
+            <Button Width="112"
+                    Margin="0,0,8,0"
+                    Content="Read Document"
+                    Command="{Binding ReadDocumentCommand}" />
             <Button Width="88"
                     Content="Stop"
                     Command="{Binding StopCommand}" />
         </StackPanel>
 
-        <TextBlock Grid.Row="3"
+        <TextBlock Grid.Row="6"
                    Margin="0,10,0,0"
                    Text="{Binding StatusMessage}"
                    TextWrapping="Wrap" />

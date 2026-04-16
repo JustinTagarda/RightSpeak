@@ -93,6 +93,10 @@ The abstraction must leave room for:
 
 Do not add cloud speech or AI dependencies for MVP TTS.
 
+Validated reliability note:
+- The current local speech path includes a leading-silence mitigation in the Windows speech service because some Windows systems clip the beginning of each utterance.
+- Do not remove or reduce that mitigation without rerunning manual typed-text playback validation against repeated reads and confirming the opening words remain audible.
+
 ### Text Retrieval
 Treat text retrieval as a multi-strategy pipeline, not a single API call.
 
@@ -111,6 +115,15 @@ Potential concrete classes:
 - `UiAutomationSelectedTextProvider`
 - `ClipboardSelectedTextProvider`
 - `FocusedControlDocumentProvider`
+
+Validated tray-focus reliability note:
+- A confirmed regression occurred where tray-triggered "Read Selected Text" restored focus to Explorer tray overflow windows instead of the previously focused app, causing selected-text retrieval and clipboard fallback timeouts.
+- The fix depends on treating tray shell windows as non-target foreground windows, including:
+  - `Shell_TrayWnd`
+  - `TrayNotifyWnd`
+  - `NotifyIconOverflowWindow`
+  - `TopLevelWindowForOverflowXamlIsland`
+- Do not remove these exclusions or relax tray focus-restore verification without rerunning manual Notepad selected-text tests for both hotkey and tray flows.
 
 ### Global Hotkeys
 Global hotkeys are a first-class feature.
@@ -257,6 +270,10 @@ Use minimal structured logging where it helps diagnose:
 
 Do not spam logs during normal interaction.
 If logging is added, prefer a clear abstraction over scattered debug output.
+
+Current stabilization rule:
+- Keep the current reduced JSON diagnostics in place while non-production bug fixing is ongoing.
+- Do not fully remove diagnostics until all known bugs are fixed and the build is explicitly being prepared for production shipment.
 
 ---
 

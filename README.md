@@ -84,13 +84,68 @@ It should avoid:
 
 ### Build
 ```powershell
-dotnet build .\RightSpeak.csproj
+dotnet build .\RightSpeak.slnx
 ```
 
 ### Run
 ```powershell
 dotnet run --project .\RightSpeak.csproj
 ```
+
+## Current Implementation
+- local Windows text-to-speech via `System.Speech`
+- manual text input with `Read` and `Stop`
+- selected-text reading pipeline with UI Automation, focused-control, and clipboard fallback stages
+- paragraph reading (first path via UI Automation paragraph expansion from focused selection/caret)
+- document reading (first path via focused-control UI Automation document or value patterns)
+- global hotkeys:
+  - `Ctrl+Shift+R` read selected text
+  - `Ctrl+Shift+T` read typed text from the app input box
+  - `Ctrl+Shift+X` stop reading
+  - keys are configurable in-app (modifier stays `Ctrl+Shift`)
+- tray quick actions:
+  - read typed text
+  - read selected text
+  - read paragraph
+  - read document
+  - stop reading
+  - typed/selected/stop items show current hotkey hints
+- browser context-menu integration for Chrome/Edge through an unpacked extension plus native messaging bridge
+
+## Browser Context Menu Setup
+Browser context-menu support is implemented only where specifically supported. It is currently provided through a Chrome/Edge extension, not as a universal Windows context menu.
+
+Files:
+- `Resources/BrowserIntegration/Extension`
+- `Resources/BrowserIntegration/Install-BrowserExtensionIntegration.ps1`
+
+Development setup:
+1. Build the solution.
+2. Load the unpacked extension from `Resources/BrowserIntegration/Extension`.
+3. Copy the extension ID from Chrome or Edge.
+4. Run:
+
+```powershell
+.\Resources\BrowserIntegration\Install-BrowserExtensionIntegration.ps1 -ExtensionId "<extension-id>"
+```
+
+If you use both Chrome and Edge unpacked extensions:
+
+```powershell
+.\Resources\BrowserIntegration\Install-BrowserExtensionIntegration.ps1 -ExtensionId "<chrome-id>" -AdditionalExtensionIds "<edge-id>" -RunBridgeTest
+```
+
+5. Start RightSpeak.
+6. In Chrome or Edge, select text, right-click, and choose `Read with RightSpeak`.
+
+Bridge verification:
+
+```powershell
+.\Resources\BrowserIntegration\Test-BrowserIntegration.ps1
+```
+
+Troubleshooting:
+- [Browser Integration Troubleshooting](./Resources/BrowserIntegration/TROUBLESHOOTING.md)
 
 ## Current Project Shape
 The repository currently starts as a single WPF project. As features are added, code should stay organized so it can later split cleanly into dedicated layers for UI, core logic, and Windows-specific integration.
