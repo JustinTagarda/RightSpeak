@@ -5,7 +5,8 @@ namespace RightSpeak.Services;
 public interface IGlobalHotkeyService : IDisposable
 {
     event EventHandler? ReadSelectedHotkeyPressed;
-    event EventHandler? ReadTypedTextHotkeyPressed;
+    event EventHandler? ReadParagraphHotkeyPressed;
+    event EventHandler? ReadDocumentHotkeyPressed;
     event EventHandler? StopHotkeyPressed;
     string LastRegistrationStatus { get; }
 

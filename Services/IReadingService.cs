@@ -8,9 +8,10 @@ namespace RightSpeak.Services;
 public interface IReadingService
 {
     bool IsReading { get; }
-    IReadOnlyList<string> AvailableVoices { get; }
+    IReadOnlyList<SpeechVoice> AvailableVoices { get; }
     int SpeechRate { get; set; }
     string? SelectedVoiceName { get; set; }
+    string TypedTextDraft { get; set; }
 
     Task<SpeechResult> ReadTextAsync(string text, CancellationToken cancellationToken = default);
 

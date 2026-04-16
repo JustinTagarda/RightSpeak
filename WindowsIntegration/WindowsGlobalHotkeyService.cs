@@ -11,11 +11,9 @@ namespace RightSpeak.WindowsIntegration;
 public sealed class WindowsGlobalHotkeyService : IGlobalHotkeyService
 {
     private const int ReadSelectedHotkeyId = 0x1000;
-    private const int StopHotkeyId = 0x1001;
-    private const int ReadTypedTextHotkeyId = 0x1002;
-    private const HotKeyModifiers ReadSelectedModifiers = HotKeyModifiers.Control | HotKeyModifiers.Shift;
-    private const HotKeyModifiers ReadTypedTextModifiers = HotKeyModifiers.Control | HotKeyModifiers.Shift;
-    private const HotKeyModifiers StopModifiers = HotKeyModifiers.Control | HotKeyModifiers.Shift;
+    private const int ReadParagraphHotkeyId = 0x1001;
+    private const int ReadDocumentHotkeyId = 0x1002;
+    private const int StopHotkeyId = 0x1003;
 
     private readonly IHotkeySettingsService _hotkeySettingsService;
     private readonly HashSet<int> _registeredHotkeys = new();
@@ -29,7 +27,8 @@ public sealed class WindowsGlobalHotkeyService : IGlobalHotkeyService
     }
 
     public event EventHandler? ReadSelectedHotkeyPressed;
-    public event EventHandler? ReadTypedTextHotkeyPressed;
+    public event EventHandler? ReadParagraphHotkeyPressed;
+    public event EventHandler? ReadDocumentHotkeyPressed;
     public event EventHandler? StopHotkeyPressed;
     public string LastRegistrationStatus { get; private set; } = "Hotkeys are not registered.";
 
@@ -39,7 +38,7 @@ public sealed class WindowsGlobalHotkeyService : IGlobalHotkeyService
 
         if (windowHandle == nint.Zero)
         {
-            LastRegistrationStatus = "Hotkey registration failed: invalid window handle.";
+            LastRegistrationStatus = "Hotkeys couldn't be turned on right now.";
             AppDiagnostics.Warn(
                 "hotkey_registration_failed_invalid_window",
                 new Dictionary<string, string?>
@@ -62,7 +61,7 @@ public sealed class WindowsGlobalHotkeyService : IGlobalHotkeyService
 
         if (_windowHandle == nint.Zero)
         {
-            LastRegistrationStatus = "Hotkey refresh failed: no active window handle.";
+            LastRegistrationStatus = "Hotkeys couldn't be updated right now.";
             AppDiagnostics.Warn(
                 "hotkey_refresh_failed_no_window",
                 new Dictionary<string, string?>
@@ -115,9 +114,16 @@ public sealed class WindowsGlobalHotkeyService : IGlobalHotkeyService
             return nint.Zero;
         }
 
-        if (hotkeyId == ReadTypedTextHotkeyId)
+        if (hotkeyId == ReadParagraphHotkeyId)
         {
-            ReadTypedTextHotkeyPressed?.Invoke(this, EventArgs.Empty);
+            ReadParagraphHotkeyPressed?.Invoke(this, EventArgs.Empty);
+            handled = true;
+            return nint.Zero;
+        }
+
+        if (hotkeyId == ReadDocumentHotkeyId)
+        {
+            ReadDocumentHotkeyPressed?.Invoke(this, EventArgs.Empty);
             handled = true;
             return nint.Zero;
         }
@@ -141,26 +147,32 @@ public sealed class WindowsGlobalHotkeyService : IGlobalHotkeyService
 
     private bool RegisterConfiguredHotkeys(HotkeyConfiguration configuration)
     {
-        var readSelectedRegistered = HotKeyInterop.RegisterHotKey(_windowHandle, ReadSelectedHotkeyId, (uint)ReadSelectedModifiers, configuration.ReadSelectedVirtualKey);
+        var readSelectedRegistered = HotKeyInterop.RegisterHotKey(_windowHandle, ReadSelectedHotkeyId, (uint)configuration.Modifiers, configuration.ReadSelectedVirtualKey);
         if (readSelectedRegistered)
         {
             _registeredHotkeys.Add(ReadSelectedHotkeyId);
         }
 
-        var readTypedTextRegistered = HotKeyInterop.RegisterHotKey(_windowHandle, ReadTypedTextHotkeyId, (uint)ReadTypedTextModifiers, configuration.ReadTypedTextVirtualKey);
-        if (readTypedTextRegistered)
+        var readParagraphRegistered = HotKeyInterop.RegisterHotKey(_windowHandle, ReadParagraphHotkeyId, (uint)configuration.Modifiers, configuration.ReadParagraphVirtualKey);
+        if (readParagraphRegistered)
         {
-            _registeredHotkeys.Add(ReadTypedTextHotkeyId);
+            _registeredHotkeys.Add(ReadParagraphHotkeyId);
         }
 
-        var stopRegistered = HotKeyInterop.RegisterHotKey(_windowHandle, StopHotkeyId, (uint)StopModifiers, configuration.StopVirtualKey);
+        var readDocumentRegistered = HotKeyInterop.RegisterHotKey(_windowHandle, ReadDocumentHotkeyId, (uint)configuration.Modifiers, configuration.ReadDocumentVirtualKey);
+        if (readDocumentRegistered)
+        {
+            _registeredHotkeys.Add(ReadDocumentHotkeyId);
+        }
+
+        var stopRegistered = HotKeyInterop.RegisterHotKey(_windowHandle, StopHotkeyId, (uint)configuration.Modifiers, configuration.StopVirtualKey);
         if (stopRegistered)
         {
             _registeredHotkeys.Add(StopHotkeyId);
         }
 
-        LastRegistrationStatus = BuildRegistrationStatusMessage(configuration, readSelectedRegistered, readTypedTextRegistered, stopRegistered);
-        if (readSelectedRegistered && readTypedTextRegistered && stopRegistered)
+        LastRegistrationStatus = BuildRegistrationStatusMessage(configuration, readSelectedRegistered, readParagraphRegistered, readDocumentRegistered, stopRegistered);
+        if (readSelectedRegistered && readParagraphRegistered && readDocumentRegistered && stopRegistered)
         {
             AppDiagnostics.Info(
                 "hotkey_registration_success",
@@ -179,7 +191,7 @@ public sealed class WindowsGlobalHotkeyService : IGlobalHotkeyService
                 });
         }
 
-        return readSelectedRegistered && readTypedTextRegistered && stopRegistered;
+        return readSelectedRegistered && readParagraphRegistered && readDocumentRegistered && stopRegistered;
     }
 
     private void UnregisterRegisteredHotkeys()
@@ -200,31 +212,30 @@ public sealed class WindowsGlobalHotkeyService : IGlobalHotkeyService
     private static string BuildRegistrationStatusMessage(
         HotkeyConfiguration configuration,
         bool readSelectedRegistered,
-        bool readTypedTextRegistered,
+        bool readParagraphRegistered,
+        bool readDocumentRegistered,
         bool stopRegistered)
     {
-        if (readSelectedRegistered && readTypedTextRegistered && stopRegistered)
+        if (readSelectedRegistered && readParagraphRegistered && readDocumentRegistered && stopRegistered)
         {
-            return $"Hotkeys registered: selected Ctrl+Shift+{(char)configuration.ReadSelectedVirtualKey}, typed Ctrl+Shift+{(char)configuration.ReadTypedTextVirtualKey}, stop Ctrl+Shift+{(char)configuration.StopVirtualKey}.";
+            var modifierLabel = GetModifierLabel(configuration.Modifiers);
+            return $"Hotkeys registered: selected {modifierLabel}+{(char)configuration.ReadSelectedVirtualKey}, paragraph {modifierLabel}+{(char)configuration.ReadParagraphVirtualKey}, document {modifierLabel}+{(char)configuration.ReadDocumentVirtualKey}, stop {modifierLabel}+{(char)configuration.StopVirtualKey}.";
         }
 
         var failures = new StringBuilder("Hotkey registration partial failure:");
-        if (!readSelectedRegistered)
-        {
-            failures.Append($" selected Ctrl+Shift+{(char)configuration.ReadSelectedVirtualKey};");
-        }
-
-        if (!readTypedTextRegistered)
-        {
-            failures.Append($" typed Ctrl+Shift+{(char)configuration.ReadTypedTextVirtualKey};");
-        }
-
-        if (!stopRegistered)
-        {
-            failures.Append($" stop Ctrl+Shift+{(char)configuration.StopVirtualKey};");
-        }
-
-        failures.Append(" Buttons and tray actions remain available.");
+        failures.Clear();
+        failures.Append("Some hotkeys couldn't be turned on. Another app may already be using them.");
         return failures.ToString();
+    }
+
+    private static string GetModifierLabel(HotKeyModifiers modifiers)
+    {
+        return modifiers switch
+        {
+            HotKeyModifiers.Control | HotKeyModifiers.Alt => "Ctrl+Alt",
+            HotKeyModifiers.Control | HotKeyModifiers.Shift => "Ctrl+Shift",
+            HotKeyModifiers.Alt | HotKeyModifiers.Shift => "Alt+Shift",
+            _ => "Ctrl+Shift"
+        };
     }
 }

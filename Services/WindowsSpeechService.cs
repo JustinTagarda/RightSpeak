@@ -1,9 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using System.Media;
-using System.Speech.Synthesis;
 using System.Threading;
 using System.Threading.Tasks;
 using RightSpeak.Models;
@@ -12,118 +9,89 @@ namespace RightSpeak.Services;
 
 public sealed class WindowsSpeechService : ISpeechService, IDisposable
 {
-    // Validated on a real target machine: some local audio paths clip the start of
-    // each utterance. This leading silence is intentional and must not be removed
-    // without repeated manual playback regression testing.
-    private const double LeadingSilenceSeconds = 0.85;
-
-    private readonly SemaphoreSlim _gate;
-    private readonly string[] _installedVoiceNames;
-    private readonly string? _defaultVoiceName;
-    private CancellationTokenSource? _playbackCancellationTokenSource;
-    private SoundPlayer? _currentSoundPlayer;
+    private readonly PiperSpeechService _piperSpeechService;
+    private readonly WindowsNeuralSpeechService _preferredSpeechService;
+    private readonly SystemSpeechService _fallbackSpeechService;
+    private readonly SpeechVoice[] _installedVoices;
     private bool _disposed;
 
     public WindowsSpeechService()
     {
-        using var voiceProbe = new SpeechSynthesizer();
-        _gate = new SemaphoreSlim(1, 1);
-        _installedVoiceNames = voiceProbe.GetInstalledVoices()
-            .Select(voice => voice.VoiceInfo.Name)
-            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+        _piperSpeechService = new PiperSpeechService();
+        _preferredSpeechService = new WindowsNeuralSpeechService();
+        _fallbackSpeechService = new SystemSpeechService();
+        _installedVoices = _piperSpeechService
+            .GetInstalledVoices()
+            .Concat(_preferredSpeechService.GetInstalledVoices())
+            .Concat(_fallbackSpeechService.GetInstalledVoices())
+            .GroupBy(voice => voice.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .OrderBy(voice => GetEnginePriority(voice.Engine))
+            .ThenBy(voice => voice.DisplayName, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        _defaultVoiceName = voiceProbe.Voice?.Name;
     }
 
-    public bool IsSpeaking { get; private set; }
+    public bool IsSpeaking =>
+        _piperSpeechService.IsSpeaking ||
+        _preferredSpeechService.IsSpeaking ||
+        _fallbackSpeechService.IsSpeaking;
 
-    public IReadOnlyList<string> GetInstalledVoiceNames() => _installedVoiceNames;
+    public IReadOnlyList<SpeechVoice> GetInstalledVoices() => _installedVoices;
 
     public async Task<SpeechResult> SpeakAsync(SpeechRequest request, CancellationToken cancellationToken = default)
     {
-        if (request is null)
+        ThrowIfDisposed();
+
+        var explicitVoiceName = request.Options.VoiceName;
+        var engineOrder = BuildEngineOrder(explicitVoiceName);
+        if (!string.IsNullOrWhiteSpace(explicitVoiceName) && engineOrder.Count == 0)
         {
-            throw new ArgumentNullException(nameof(request));
+            return SpeechResult.Failed($"Selected voice '{explicitVoiceName}' is not installed.");
         }
 
-        var text = request.Text?.Trim();
-        if (string.IsNullOrWhiteSpace(text))
+        SpeechResult? firstFailure = null;
+        foreach (var engine in engineOrder)
         {
-            return SpeechResult.Failed("Nothing to read. Enter text first.");
-        }
-
-        CancellationTokenSource playbackCancellationTokenSource;
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            ThrowIfDisposed();
-            CancelPlaybackUnsafe();
-
-            playbackCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            _playbackCancellationTokenSource = playbackCancellationTokenSource;
-            IsSpeaking = true;
-        }
-        finally
-        {
-            _gate.Release();
-        }
-
-        try
-        {
-            return await PlayRenderedAudioAsync(text, request.Options, playbackCancellationTokenSource.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            return SpeechResult.Stopped();
-        }
-        catch (Exception ex)
-        {
-            return SpeechResult.Failed($"Speech failed: {ex.Message}");
-        }
-        finally
-        {
-            await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-            try
+            var result = await engine.SpeakAsync(request, cancellationToken).ConfigureAwait(false);
+            if (result.Success || result.WasCancelled)
             {
-                _currentSoundPlayer?.Stop();
-                _currentSoundPlayer?.Dispose();
-                _currentSoundPlayer = null;
+                return result;
+            }
 
-                _playbackCancellationTokenSource?.Dispose();
-                _playbackCancellationTokenSource = null;
-                IsSpeaking = false;
-            }
-            finally
-            {
-                _gate.Release();
-            }
+            firstFailure ??= result;
+            AppDiagnostics.Warn(
+                "speech_fallback_engaged",
+                new Dictionary<string, string?>
+                {
+                    ["engine"] = GetEngineName(engine),
+                    ["voice"] = request.Options.VoiceName,
+                    ["reason"] = result.Message
+                });
         }
+
+        return firstFailure ?? SpeechResult.Failed("Couldn't start reading.");
     }
 
     public async Task<SpeechResult> StopAsync(CancellationToken cancellationToken = default)
     {
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            ThrowIfDisposed();
+        ThrowIfDisposed();
 
-            if (!IsSpeaking)
-            {
-                return SpeechResult.Completed("Speech is already stopped.");
-            }
+        if (_piperSpeechService.IsSpeaking)
+        {
+            return await _piperSpeechService.StopAsync(cancellationToken).ConfigureAwait(false);
+        }
 
-            CancelPlaybackUnsafe();
-            IsSpeaking = false;
-            return SpeechResult.Stopped();
-        }
-        catch (Exception ex)
+        if (_preferredSpeechService.IsSpeaking)
         {
-            return SpeechResult.Failed($"Stop failed: {ex.Message}");
+            return await _preferredSpeechService.StopAsync(cancellationToken).ConfigureAwait(false);
         }
-        finally
+
+        if (_fallbackSpeechService.IsSpeaking)
         {
-            _gate.Release();
+            return await _fallbackSpeechService.StopAsync(cancellationToken).ConfigureAwait(false);
         }
+
+        return SpeechResult.Completed("Speech is already stopped.");
     }
 
     public void Dispose()
@@ -133,218 +101,74 @@ public sealed class WindowsSpeechService : ISpeechService, IDisposable
             return;
         }
 
-        _playbackCancellationTokenSource?.Cancel();
-        _currentSoundPlayer?.Stop();
-        _currentSoundPlayer?.Dispose();
-        _playbackCancellationTokenSource?.Dispose();
-        _gate.Dispose();
+        _piperSpeechService.Dispose();
+        _preferredSpeechService.Dispose();
+        _fallbackSpeechService.Dispose();
         _disposed = true;
     }
 
-    private async Task<SpeechResult> PlayRenderedAudioAsync(string text, SpeechOptions options, CancellationToken cancellationToken)
+    private IReadOnlyList<ISpeechService> BuildEngineOrder(string? voiceName)
     {
-        var waveBytes = await Task.Run(() => RenderWaveBytes(text, options, cancellationToken), cancellationToken).ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        var playbackDuration = GetPlaybackDuration(waveBytes);
-        using var waveStream = new MemoryStream(waveBytes, writable: false);
-        using var soundPlayer = new SoundPlayer(waveStream);
-        soundPlayer.Load();
-
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        if (!string.IsNullOrWhiteSpace(voiceName))
         {
-            ThrowIfDisposed();
-            _currentSoundPlayer = soundPlayer;
-        }
-        finally
-        {
-            _gate.Release();
-        }
-
-        cancellationToken.ThrowIfCancellationRequested();
-        soundPlayer.Play();
-        await Task.Delay(playbackDuration, cancellationToken).ConfigureAwait(false);
-
-        return SpeechResult.Completed();
-    }
-
-    private byte[] RenderWaveBytes(string text, SpeechOptions options, CancellationToken cancellationToken)
-    {
-        using var synthesizer = new SpeechSynthesizer();
-        using var waveStream = new MemoryStream();
-
-        ApplyOptions(synthesizer, options);
-        synthesizer.SetOutputToWaveStream(waveStream);
-        synthesizer.Speak(text);
-
-        cancellationToken.ThrowIfCancellationRequested();
-        return PrependPrimerWave(waveStream.ToArray());
-    }
-
-    private void ApplyOptions(SpeechSynthesizer synthesizer, SpeechOptions options)
-    {
-        synthesizer.Rate = Math.Clamp(options.Rate, -10, 10);
-
-        if (string.IsNullOrWhiteSpace(options.VoiceName))
-        {
-            if (!string.IsNullOrWhiteSpace(_defaultVoiceName) &&
-                !string.Equals(synthesizer.Voice?.Name, _defaultVoiceName, StringComparison.OrdinalIgnoreCase))
+            if (_piperSpeechService.SupportsVoice(voiceName))
             {
-                synthesizer.SelectVoice(_defaultVoiceName);
+                return new[] { (ISpeechService)_piperSpeechService };
             }
 
-            return;
-        }
-
-        var match = _installedVoiceNames
-            .FirstOrDefault(name => string.Equals(name, options.VoiceName, StringComparison.OrdinalIgnoreCase));
-
-        if (match is not null &&
-            !string.Equals(synthesizer.Voice?.Name, match, StringComparison.OrdinalIgnoreCase))
-        {
-            synthesizer.SelectVoice(match);
-        }
-    }
-
-    private void CancelPlaybackUnsafe()
-    {
-        _playbackCancellationTokenSource?.Cancel();
-        _currentSoundPlayer?.Stop();
-    }
-
-    private byte[] PrependPrimerWave(byte[] speechWaveBytes)
-    {
-        if (!TryReadWave(speechWaveBytes, out var format, out var speechPcmBytes))
-        {
-            return speechWaveBytes;
-        }
-
-        var leadingSilencePcmBytes = BuildLeadingSilencePcm(format);
-        if (leadingSilencePcmBytes.Length == 0)
-        {
-            return speechWaveBytes;
-        }
-
-        var combinedPcmBytes = new byte[leadingSilencePcmBytes.Length + speechPcmBytes.Length];
-        Buffer.BlockCopy(leadingSilencePcmBytes, 0, combinedPcmBytes, 0, leadingSilencePcmBytes.Length);
-        Buffer.BlockCopy(speechPcmBytes, 0, combinedPcmBytes, leadingSilencePcmBytes.Length, speechPcmBytes.Length);
-        return BuildWave(format, combinedPcmBytes);
-    }
-
-    private static bool TryReadWave(byte[] waveBytes, out WaveFormat format, out byte[] pcmBytes)
-    {
-        format = default;
-        pcmBytes = Array.Empty<byte>();
-
-        try
-        {
-            using var stream = new MemoryStream(waveBytes, writable: false);
-            using var reader = new BinaryReader(stream);
-
-            if (new string(reader.ReadChars(4)) != "RIFF")
+            if (_preferredSpeechService.SupportsVoice(voiceName))
             {
-                return false;
+                return new[] { (ISpeechService)_preferredSpeechService };
             }
 
-            _ = reader.ReadInt32();
-            if (new string(reader.ReadChars(4)) != "WAVE")
+            if (_fallbackSpeechService.SupportsVoice(voiceName))
             {
-                return false;
+                return new[] { (ISpeechService)_fallbackSpeechService };
             }
 
-            byte[]? fmtChunk = null;
-            byte[]? dataChunk = null;
-
-            while (stream.Position < stream.Length)
-            {
-                var chunkId = new string(reader.ReadChars(4));
-                var chunkSize = reader.ReadInt32();
-                var chunkBytes = reader.ReadBytes(chunkSize);
-
-                if ((chunkSize & 1) == 1 && stream.Position < stream.Length)
-                {
-                    stream.Position += 1;
-                }
-
-                if (chunkId == "fmt ")
-                {
-                    fmtChunk = chunkBytes;
-                }
-                else if (chunkId == "data")
-                {
-                    dataChunk = chunkBytes;
-                }
-            }
-
-            if (fmtChunk is null || dataChunk is null || fmtChunk.Length < 16)
-            {
-                return false;
-            }
-
-            using var fmtStream = new MemoryStream(fmtChunk, writable: false);
-            using var fmtReader = new BinaryReader(fmtStream);
-            format = new WaveFormat(
-                AudioFormat: fmtReader.ReadInt16(),
-                ChannelCount: fmtReader.ReadInt16(),
-                SampleRate: fmtReader.ReadInt32(),
-                ByteRate: fmtReader.ReadInt32(),
-                BlockAlign: fmtReader.ReadInt16(),
-                BitsPerSample: fmtReader.ReadInt16());
-            pcmBytes = dataChunk;
-            return true;
+            return Array.Empty<ISpeechService>();
         }
-        catch
+
+        var engines = new List<ISpeechService>(3);
+        AddEngine(engines, _preferredSpeechService);
+        AddEngine(engines, _fallbackSpeechService);
+        if (engines.Count == 0 && _piperSpeechService.HasUsableInstallation)
         {
-            return false;
+            // Last-resort fallback only when Windows engines are unavailable.
+            AddEngine(engines, _piperSpeechService);
+        }
+
+        return engines;
+    }
+
+    private static void AddEngine(ICollection<ISpeechService> engines, ISpeechService engine)
+    {
+        if (!engines.Contains(engine))
+        {
+            engines.Add(engine);
         }
     }
 
-    private static byte[] BuildLeadingSilencePcm(WaveFormat format)
+    private static string GetEngineName(ISpeechService engine)
     {
-        if (format.AudioFormat != 1 || format.BlockAlign <= 0 || format.SampleRate <= 0)
+        return engine switch
         {
-            return Array.Empty<byte>();
-        }
-
-        var sampleCount = (int)(format.SampleRate * LeadingSilenceSeconds);
-        return new byte[sampleCount * format.BlockAlign];
+            PiperSpeechService => "piper",
+            WindowsNeuralSpeechService => "windows_onecore",
+            SystemSpeechService => "system_speech",
+            _ => engine.GetType().Name
+        };
     }
 
-    private static byte[] BuildWave(WaveFormat format, byte[] pcmBytes)
+    private static int GetEnginePriority(string engine)
     {
-        using var stream = new MemoryStream();
-        using var writer = new BinaryWriter(stream);
-
-        writer.Write("RIFF".ToCharArray());
-        writer.Write(36 + pcmBytes.Length);
-        writer.Write("WAVE".ToCharArray());
-        writer.Write("fmt ".ToCharArray());
-        writer.Write(16);
-        writer.Write(format.AudioFormat);
-        writer.Write(format.ChannelCount);
-        writer.Write(format.SampleRate);
-        writer.Write(format.ByteRate);
-        writer.Write(format.BlockAlign);
-        writer.Write(format.BitsPerSample);
-        writer.Write("data".ToCharArray());
-        writer.Write(pcmBytes.Length);
-        writer.Write(pcmBytes);
-        writer.Flush();
-        return stream.ToArray();
-    }
-
-    private static TimeSpan GetPlaybackDuration(byte[] waveBytes)
-    {
-        if (TryReadWave(waveBytes, out var format, out var pcmBytes) &&
-            format.ByteRate > 0 &&
-            pcmBytes.Length > 0)
+        return engine switch
         {
-            var seconds = (double)pcmBytes.Length / format.ByteRate;
-            return TimeSpan.FromMilliseconds(Math.Ceiling((seconds * 1000) + 150));
-        }
-
-        return TimeSpan.FromSeconds(2);
+            "Piper" => 0,
+            "Windows OneCore" => 1,
+            "System.Speech" => 2,
+            _ => 9
+        };
     }
 
     private void ThrowIfDisposed()
@@ -354,12 +178,4 @@ public sealed class WindowsSpeechService : ISpeechService, IDisposable
             throw new ObjectDisposedException(nameof(WindowsSpeechService));
         }
     }
-
-    private readonly record struct WaveFormat(
-        short AudioFormat,
-        short ChannelCount,
-        int SampleRate,
-        int ByteRate,
-        short BlockAlign,
-        short BitsPerSample);
 }

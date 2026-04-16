@@ -3,125 +3,386 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="RightSpeak"
         Icon="/Resources/Icons/RightSpeak.ico"
-        Height="450"
-        Width="480"
-        MinHeight="420"
-        MinWidth="420">
+        Width="700"
+        WindowStartupLocation="Manual"
+        Height="700"
+        MinWidth="700"
+        MinHeight="700"
+        Background="#F4F6F8"
+        Foreground="#1F2937"
+        FontFamily="Segoe UI"
+        FontSize="13">
+    <Window.Resources>
+        <Style x:Key="SectionHeaderStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+
+        <Style x:Key="SubtleTextStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#6B7280" />
+        </Style>
+
+        <Style x:Key="CardStyle" TargetType="Border">
+            <Setter Property="Background" Value="#FFFFFF" />
+            <Setter Property="BorderBrush" Value="#D7DDE5" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="10" />
+        </Style>
+
+        <Style x:Key="PrimaryButtonStyle" TargetType="Button">
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Padding" Value="14,6" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="Background" Value="#2563EB" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="BorderBrush" Value="#1D4ED8" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
+        <Style x:Key="SecondaryButtonStyle" TargetType="Button">
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Padding" Value="14,6" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+        </Style>
+
+        <Style x:Key="CollapsibleTextStyle" TargetType="TextBlock">
+            <Style.Triggers>
+                <Trigger Property="Text" Value="">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
     <Grid Margin="12">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <TextBlock Grid.Row="0"
-                   Margin="0,0,0,8"
-                   Text="Text To Read" />
+        <Border Grid.Row="1"
+                Style="{StaticResource CardStyle}"
+                Margin="0,0,0,6"
+                IsEnabled="{Binding IsTypedTextEnabled}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="1"
-                    Orientation="Horizontal"
-                    Margin="0,0,0,8">
-            <TextBlock VerticalAlignment="Center"
-                       Text="Voice"
-                       Margin="0,0,8,0" />
-            <ComboBox Width="260"
-                      ItemsSource="{Binding VoiceOptions}"
-                      SelectedItem="{Binding SelectedVoiceOption, UpdateSourceTrigger=PropertyChanged}" />
-            <Button Width="72"
-                    Margin="8,0,0,0"
-                    Content="Preview"
-                    Command="{Binding PreviewVoiceCommand}" />
-        </StackPanel>
+                <TextBlock Grid.Row="0"
+                           Text="Typed text"
+                           Style="{StaticResource SectionHeaderStyle}" />
+                <TextBlock Grid.Row="1"
+                           Text="Type or paste text below, then start reading."
+                           Margin="0,0,0,5"
+                           Style="{StaticResource SubtleTextStyle}" />
 
-        <StackPanel Grid.Row="2"
-                    Orientation="Horizontal"
-                    Margin="0,0,0,8">
-            <TextBlock VerticalAlignment="Center"
-                       Text="Rate"
-                       Margin="0,0,8,0" />
-            <Slider Width="180"
-                    Minimum="-10"
-                    Maximum="10"
-                    TickFrequency="1"
-                    IsSnapToTickEnabled="True"
-                    Value="{Binding SpeechRate, UpdateSourceTrigger=PropertyChanged}" />
-            <TextBlock Width="36"
-                       Margin="8,0,0,0"
-                       VerticalAlignment="Center"
-                       Text="{Binding SpeechRate}" />
-        </StackPanel>
+                <TextBox Grid.Row="2"
+                         AcceptsReturn="True"
+                         VerticalScrollBarVisibility="Auto"
+                         TextWrapping="Wrap"
+                         VerticalAlignment="Stretch"
+                         Text="{Binding InputText, UpdateSourceTrigger=PropertyChanged}" />
 
-        <StackPanel Grid.Row="3"
-                    Margin="0,0,0,8">
-            <StackPanel Orientation="Horizontal">
-                <TextBlock VerticalAlignment="Center"
-                           Text="Hotkeys"
-                           Margin="0,0,8,0" />
-                <TextBlock VerticalAlignment="Center"
-                           Text="Ctrl+Shift+"
-                           Margin="0,0,4,0" />
-                <ComboBox Width="52"
-                          ItemsSource="{Binding HotkeyKeyOptions}"
-                          SelectedItem="{Binding ReadSelectedHotkeyKey, UpdateSourceTrigger=PropertyChanged}" />
-                <TextBlock VerticalAlignment="Center"
-                           Text="Sel"
-                           Margin="6,0,8,0" />
-                <ComboBox Width="52"
-                          ItemsSource="{Binding HotkeyKeyOptions}"
-                          SelectedItem="{Binding ReadTypedTextHotkeyKey, UpdateSourceTrigger=PropertyChanged}" />
-                <TextBlock VerticalAlignment="Center"
-                           Text="Typed"
-                           Margin="6,0,8,0" />
-                <ComboBox Width="52"
-                          ItemsSource="{Binding HotkeyKeyOptions}"
-                          SelectedItem="{Binding StopHotkeyKey, UpdateSourceTrigger=PropertyChanged}" />
-                <TextBlock VerticalAlignment="Center"
-                           Text="Stop"
-                           Margin="6,0,8,0" />
-                <Button Width="56"
-                        Content="Apply"
-                        Command="{Binding ApplyHotkeysCommand}" />
+                <StackPanel Grid.Row="3"
+                            Margin="0,8,0,0"
+                            Orientation="Horizontal"
+                            HorizontalAlignment="Left">
+                    <Button Width="146"
+                            Content="Read Typed Text"
+                            Command="{Binding ReadCommand}"
+                            Style="{StaticResource PrimaryButtonStyle}" />
+                    <Button Width="78"
+                            Content="Clear"
+                            Command="{Binding ClearCommand}"
+                            Style="{StaticResource SecondaryButtonStyle}" />
+                    <Button Width="88"
+                            Content="Stop"
+                            Command="{Binding StopCommand}"
+                            Style="{StaticResource SecondaryButtonStyle}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="2"
+                Style="{StaticResource CardStyle}"
+                Margin="0,0,0,6"
+                IsEnabled="{Binding IsFocusedReadsEnabled}">
+            <StackPanel>
+                <Grid Margin="0,0,0,2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="Focused reads"
+                               Style="{StaticResource SectionHeaderStyle}" />
+                    <TextBlock Grid.Column="1"
+                               Margin="12,0,0,0"
+                               HorizontalAlignment="Right"
+                               VerticalAlignment="Center"
+                               Text="{Binding FocusedWindowText}"
+                               Style="{StaticResource SubtleTextStyle}"
+                               TextTrimming="CharacterEllipsis"
+                               TextWrapping="NoWrap" />
+                </Grid>
+                <TextBlock Text="Read selected text, paragraphs, or documents from the active app."
+                           Margin="0,0,0,6"
+                           Style="{StaticResource SubtleTextStyle}" />
+
+                <StackPanel Orientation="Horizontal"
+                            HorizontalAlignment="Left">
+                    <Button Width="154"
+                            Margin="0,0,8,0"
+                            Content="Read Selected Text"
+                            Click="OnReadSelectedTextButtonClick"
+                            Style="{StaticResource SecondaryButtonStyle}" />
+                    <Button Width="128"
+                            Margin="0,0,8,0"
+                            Content="Read Paragraph"
+                            Click="OnReadParagraphButtonClick"
+                            Style="{StaticResource SecondaryButtonStyle}" />
+                    <Button Width="128"
+                            Margin="0,0,8,0"
+                            Content="Read Document"
+                            Click="OnReadDocumentButtonClick"
+                            Style="{StaticResource SecondaryButtonStyle}" />
+                    <Button Width="128"
+                            Content="Stop Reading"
+                            Command="{Binding StopCommand}"
+                            Style="{StaticResource SecondaryButtonStyle}" />
+                </StackPanel>
             </StackPanel>
-            <TextBlock Margin="0,4,0,0"
-                       Text="{Binding ReadSelectedHotkeyDisplay}" />
-            <TextBlock Text="{Binding ReadTypedTextHotkeyDisplay}" />
-            <TextBlock Text="{Binding StopHotkeyDisplay}" />
-        </StackPanel>
+        </Border>
 
-        <TextBox Grid.Row="4"
-                 AcceptsReturn="True"
-                 VerticalScrollBarVisibility="Auto"
-                 TextWrapping="Wrap"
-                 Text="{Binding InputText, UpdateSourceTrigger=PropertyChanged}" />
+        <Grid Grid.Row="3"
+              Margin="0,0,0,6">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
 
-        <StackPanel Grid.Row="5"
-                    Margin="0,10,0,0"
-                    Orientation="Horizontal"
-                    HorizontalAlignment="Left">
-            <Button Width="88"
-                    Margin="0,0,8,0"
-                    Content="Read"
-                    Command="{Binding ReadCommand}" />
-            <Button Width="112"
-                    Margin="0,0,8,0"
-                    Content="Read Paragraph"
-                    Click="OnReadParagraphButtonClick" />
-            <Button Width="112"
-                    Margin="0,0,8,0"
-                    Content="Read Document"
-                    Click="OnReadDocumentButtonClick" />
-            <Button Width="88"
-                    Content="Stop"
-                    Command="{Binding StopCommand}" />
-        </StackPanel>
+            <Border Grid.Column="0"
+                    Style="{StaticResource CardStyle}"
+                    Margin="0,0,8,0">
+                <StackPanel>
+                    <TextBlock Text="Voice and rate"
+                               Style="{StaticResource SectionHeaderStyle}" />
+                    <TextBlock Text="Choose a voice, then adjust speech speed."
+                               Margin="0,0,0,6"
+                               Style="{StaticResource SubtleTextStyle}" />
 
-        <TextBlock Grid.Row="6"
-                   Margin="0,10,0,0"
-                   Text="{Binding StatusMessage}"
-                   TextWrapping="Wrap" />
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <ComboBox Height="30"
+                                  VerticalContentAlignment="Center"
+                                  ItemsSource="{Binding VoiceOptions}"
+                                  SelectedItem="{Binding SelectedVoiceOption, UpdateSourceTrigger=PropertyChanged}" />
+                    </Grid>
+
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock VerticalAlignment="Center"
+                                   Text="Rate"
+                                   Margin="0,0,8,0" />
+                        <Slider Grid.Column="1"
+                                Minimum="-10"
+                                Maximum="10"
+                                TickFrequency="1"
+                                IsSnapToTickEnabled="True"
+                                Value="{Binding SpeechRate, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Column="2"
+                                   Width="24"
+                                   Margin="8,0,0,0"
+                                   VerticalAlignment="Center"
+                                   Text="{Binding SpeechRate}" />
+                    </Grid>
+
+                    <StackPanel Orientation="Horizontal"
+                                HorizontalAlignment="Right"
+                                Margin="0,2,0,0">
+                        <Button Width="84"
+                                Content="Preview"
+                                Command="{Binding PreviewVoiceCommand}"
+                                Style="{StaticResource SecondaryButtonStyle}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Column="1"
+                    Style="{StaticResource CardStyle}"
+                    Margin="8,0,0,0">
+                <StackPanel>
+                    <Grid Margin="0,0,0,2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Hotkeys"
+                                   Style="{StaticResource SectionHeaderStyle}" />
+                        <Button Grid.Column="1"
+                                Width="28"
+                                Height="28"
+                                Padding="0"
+                                Margin="0,0,0,2"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Center"
+                                Content="↺"
+                                Command="{Binding ResetHotkeysCommand}"
+                                ToolTip="Reset hotkeys to defaults" />
+                    </Grid>
+                    <TextBlock Text="Choose a modifier, then assign one key per action."
+                               Margin="0,0,0,4"
+                               Style="{StaticResource SubtleTextStyle}" />
+                    <StackPanel Orientation="Horizontal"
+                                Margin="0,0,0,6">
+                        <RadioButton Content="Alt+Shift"
+                                     Margin="0,0,10,0"
+                                     IsChecked="{Binding IsAltShiftModifierSelected}" />
+                        <RadioButton Content="Ctrl+Shift"
+                                     Margin="0,0,10,0"
+                                     IsChecked="{Binding IsCtrlShiftModifierSelected}" />
+                        <RadioButton Content="Ctrl+Alt"
+                                     IsChecked="{Binding IsCtrlAltModifierSelected}" />
+                    </StackPanel>
+
+                    <Grid Margin="0,0,0,8">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="74" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Row="0"
+                                   VerticalAlignment="Center"
+                                   Text="Read selected"
+                                   Margin="0,0,6,4" />
+                        <ComboBox Grid.Row="0"
+                                  Grid.Column="2"
+                                  Height="30"
+                                  VerticalContentAlignment="Center"
+                                  ItemsSource="{Binding HotkeyKeyOptions}"
+                                  SelectedItem="{Binding ReadSelectedHotkeyKey, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="0"
+                                   Grid.Column="1"
+                                   VerticalAlignment="Center"
+                                   Text="{Binding HotkeyModifierLabel, StringFormat={}{0}+}"
+                                   Margin="0,0,4,4"
+                                   Style="{StaticResource SubtleTextStyle}" />
+
+                        <TextBlock Grid.Row="1"
+                                   VerticalAlignment="Center"
+                                   Text="Read paragraph"
+                                   Margin="0,0,6,4" />
+                        <ComboBox Grid.Row="1"
+                                  Grid.Column="2"
+                                  Height="30"
+                                  VerticalContentAlignment="Center"
+                                  ItemsSource="{Binding HotkeyKeyOptions}"
+                                  SelectedItem="{Binding ReadParagraphHotkeyKey, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="1"
+                                   Grid.Column="1"
+                                   VerticalAlignment="Center"
+                                   Text="{Binding HotkeyModifierLabel, StringFormat={}{0}+}"
+                                   Margin="0,0,4,4"
+                                   Style="{StaticResource SubtleTextStyle}" />
+
+                        <TextBlock Grid.Row="2"
+                                   VerticalAlignment="Center"
+                                   Text="Read document"
+                                   Margin="0,0,6,4" />
+                        <ComboBox Grid.Row="2"
+                                  Grid.Column="2"
+                                  Height="30"
+                                  VerticalContentAlignment="Center"
+                                  ItemsSource="{Binding HotkeyKeyOptions}"
+                                  SelectedItem="{Binding ReadDocumentHotkeyKey, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="2"
+                                   Grid.Column="1"
+                                   VerticalAlignment="Center"
+                                   Text="{Binding HotkeyModifierLabel, StringFormat={}{0}+}"
+                                   Margin="0,0,4,4"
+                                   Style="{StaticResource SubtleTextStyle}" />
+
+                        <TextBlock Grid.Row="3"
+                                   VerticalAlignment="Center"
+                                   Text="Stop"
+                                   Margin="0,0,6,0" />
+                        <ComboBox Grid.Row="3"
+                                  Grid.Column="2"
+                                  Height="30"
+                                  VerticalContentAlignment="Center"
+                                  ItemsSource="{Binding HotkeyKeyOptions}"
+                                  SelectedItem="{Binding StopHotkeyKey, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="3"
+                                   Grid.Column="1"
+                                   VerticalAlignment="Center"
+                                   Text="{Binding HotkeyModifierLabel, StringFormat={}{0}+}"
+                                   Margin="0,0,4,0"
+                                   Style="{StaticResource SubtleTextStyle}" />
+                    </Grid>
+
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <Border Grid.Row="4"
+                Background="#E8F1FF"
+                BorderBrush="#C7D7FE"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="12,5"
+                VerticalAlignment="Center">
+            <Grid VerticalAlignment="Center">
+                <TextBlock Text="{Binding StatusMessage}"
+                           TextWrapping="Wrap" />
+                <TextBlock Text="{Binding HotkeyModifierWarningMessage}"
+                           Margin="0,2,0,0"
+                           Foreground="#9A3412"
+                           TextWrapping="Wrap"
+                           Style="{StaticResource CollapsibleTextStyle}" />
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="5"
+              Margin="2,10,2,0"
+              VerticalAlignment="Bottom">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="© 2026 Justiniano Tagarda. All rights reserved."
+                       Foreground="#6B7280"
+                       FontSize="12"
+                       VerticalAlignment="Bottom" />
+            <TextBlock Grid.Column="1"
+                       Text="{Binding AppVersionText, RelativeSource={RelativeSource AncestorType=Window}}"
+                       Foreground="#6B7280"
+                       FontSize="12"
+                       VerticalAlignment="Bottom"
+                       HorizontalAlignment="Right" />
+        </Grid>
     </Grid>
 </Window>

@@ -97,6 +97,10 @@ Validated reliability note:
 - The current local speech path includes a leading-silence mitigation in the Windows speech service because some Windows systems clip the beginning of each utterance.
 - Do not remove or reduce that mitigation without rerunning manual typed-text playback validation against repeated reads and confirming the opening words remain audible.
 
+Validated voice-default semantics rule:
+- In the voice selector, the `System default` option must always mean the Windows OS/engine default voice (for example OneCore/System.Speech defaults), not an app-preferred voice and not Piper.
+- Do not route `System default` to Piper when Windows engine defaults are available.
+
 ### Text Retrieval
 Treat text retrieval as a multi-strategy pipeline, not a single API call.
 
@@ -330,6 +334,9 @@ Keep Windows-specific code isolated enough for manual testing and targeted integ
 5. add extension points only when justified
 
 ### When improving UI
+- preserve the existing control set by default
+- do not remove, merge, hide, repurpose, or significantly downgrade existing controls during UI improvements or optimizations unless the user clearly requested that outcome
+- if a control must be removed or materially changed to complete the task, stop first, explain exactly what would be removed or changed, why it is necessary, what behavior or access would be lost or replaced, and wait for explicit user confirmation before making that edit
 - keep the interface lightweight
 - prefer utility over visual flourish
 - keep keyboard accessibility where practical
@@ -344,6 +351,7 @@ Keep Windows-specific code isolated enough for manual testing and targeted integ
 - do not overwrite the clipboard carelessly
 - do not add cloud AI dependencies for core speech
 - do not introduce broad architectural churn
+- do not silently remove or downgrade UI controls during UI cleanup, redesign, or optimization work
 - do not rewrite unrelated files
 - do not remove code or comments unless you are confident they are obsolete
 

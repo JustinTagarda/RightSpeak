@@ -1,17 +1,26 @@
+using RightSpeak.Interop;
+
 namespace RightSpeak.Models;
 
 public sealed class HotkeyConfiguration
 {
-    public HotkeyConfiguration(uint readSelectedVirtualKey, uint readTypedTextVirtualKey, uint stopVirtualKey)
+    public HotkeyConfiguration(
+        HotKeyModifiers modifiers,
+        uint readSelectedVirtualKey,
+        uint readParagraphVirtualKey,
+        uint readDocumentVirtualKey,
+        uint stopVirtualKey)
     {
+        Modifiers = modifiers;
         ReadSelectedVirtualKey = readSelectedVirtualKey;
-        ReadTypedTextVirtualKey = readTypedTextVirtualKey;
+        ReadParagraphVirtualKey = readParagraphVirtualKey;
+        ReadDocumentVirtualKey = readDocumentVirtualKey;
         StopVirtualKey = stopVirtualKey;
     }
 
+    public HotKeyModifiers Modifiers { get; }
     public uint ReadSelectedVirtualKey { get; }
-
-    public uint ReadTypedTextVirtualKey { get; }
-
+    public uint ReadParagraphVirtualKey { get; }
+    public uint ReadDocumentVirtualKey { get; }
     public uint StopVirtualKey { get; }
 }

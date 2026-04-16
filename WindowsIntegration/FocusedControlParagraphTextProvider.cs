@@ -55,12 +55,6 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
 
     private static string? TryReadSelectionParagraph(TextPatternRange range)
     {
-        var direct = Normalize(range.GetText(-1));
-        if (!string.IsNullOrWhiteSpace(direct))
-        {
-            return direct;
-        }
-
         var paragraph = TryExpandAndRead(range, TextUnit.Paragraph);
         if (!string.IsNullOrWhiteSpace(paragraph))
         {

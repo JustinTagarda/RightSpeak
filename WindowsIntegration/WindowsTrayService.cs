@@ -12,6 +12,9 @@ namespace RightSpeak.WindowsIntegration;
 
 public sealed class WindowsTrayService : ITrayService
 {
+    private const int FocusRestoreTimeoutMilliseconds = 450;
+    private const int FocusRestorePollMilliseconds = 25;
+    private const int FocusRestoreReactivationIntervalMilliseconds = 80;
     private static readonly string[] IgnoredForegroundWindowClasses =
     {
         "Shell_TrayWnd",
@@ -23,22 +26,26 @@ public sealed class WindowsTrayService : ITrayService
     private NotifyIcon? _notifyIcon;
     private ContextMenuStrip? _contextMenu;
     private System.Windows.Forms.Timer? _foregroundWindowTrackerTimer;
-    private ToolStripMenuItem? _readTypedTextMenuItem;
     private ToolStripMenuItem? _readSelectedMenuItem;
+    private ToolStripMenuItem? _readParagraphMenuItem;
+    private ToolStripMenuItem? _readDocumentMenuItem;
     private ToolStripMenuItem? _stopMenuItem;
     private WindowFocusInterop.WinEventProc? _foregroundChangedCallback;
     private nint _foregroundChangedHook;
     private nint _lastExternalForegroundWindow;
+    private string _currentForegroundWindowTitle = "Current app";
     private bool _isContextMenuOpen;
     private bool _disposed;
 
-    public event EventHandler? ReadTypedTextRequested;
     public event EventHandler? ReadSelectedRequested;
     public event EventHandler? ReadParagraphRequested;
     public event EventHandler? ReadDocumentRequested;
     public event EventHandler? StopRequested;
     public event EventHandler? ShowRequested;
     public event EventHandler? ExitRequested;
+    public event EventHandler? ForegroundWindowChanged;
+
+    public string CurrentForegroundWindowTitle => _currentForegroundWindowTitle;
 
     public void Initialize()
     {
@@ -52,13 +59,13 @@ public sealed class WindowsTrayService : ITrayService
         var menu = new ContextMenuStrip();
         menu.Opening += OnMenuOpening;
         menu.Closed += OnMenuClosed;
-        _readTypedTextMenuItem = new ToolStripMenuItem("Read Typed Text", null, (_, _) => QueueMenuAction(menu, () => ReadTypedTextRequested?.Invoke(this, EventArgs.Empty)));
         _readSelectedMenuItem = new ToolStripMenuItem("Read Selected Text", null, (_, _) => QueueMenuAction(menu, () => ReadSelectedRequested?.Invoke(this, EventArgs.Empty)));
+        _readParagraphMenuItem = new ToolStripMenuItem("Read Paragraph", null, (_, _) => QueueMenuAction(menu, () => ReadParagraphRequested?.Invoke(this, EventArgs.Empty)));
+        _readDocumentMenuItem = new ToolStripMenuItem("Read Document", null, (_, _) => QueueMenuAction(menu, () => ReadDocumentRequested?.Invoke(this, EventArgs.Empty)));
         _stopMenuItem = new ToolStripMenuItem("Stop Reading", null, (_, _) => QueueMenuAction(menu, () => StopRequested?.Invoke(this, EventArgs.Empty)));
-        menu.Items.Add(_readTypedTextMenuItem);
         menu.Items.Add(_readSelectedMenuItem);
-        menu.Items.Add("Read Paragraph", null, (_, _) => QueueMenuAction(menu, () => ReadParagraphRequested?.Invoke(this, EventArgs.Empty)));
-        menu.Items.Add("Read Document", null, (_, _) => QueueMenuAction(menu, () => ReadDocumentRequested?.Invoke(this, EventArgs.Empty)));
+        menu.Items.Add(_readParagraphMenuItem);
+        menu.Items.Add(_readDocumentMenuItem);
         menu.Items.Add(_stopMenuItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Show RightSpeak", null, (_, _) => QueueMenuAction(menu, () => ShowRequested?.Invoke(this, EventArgs.Empty)));
@@ -87,21 +94,27 @@ public sealed class WindowsTrayService : ITrayService
         _notifyIcon.MouseClick += OnNotifyIconMouseClick;
     }
 
-    public void UpdateHotkeyHints(string readSelectedKey, string readTypedTextKey, string stopKey)
+    public void UpdateHotkeyHints(string modifierLabel, string readSelectedKey, string readParagraphKey, string readDocumentKey, string stopKey)
     {
+        var normalizedModifier = NormalizeModifierLabel(modifierLabel);
         if (_readSelectedMenuItem is not null)
         {
-            _readSelectedMenuItem.Text = $"Read Selected Text (Ctrl+Shift+{NormalizeKey(readSelectedKey)})";
+            _readSelectedMenuItem.Text = $"Read Selected Text ({normalizedModifier}+{NormalizeKey(readSelectedKey)})";
         }
 
-        if (_readTypedTextMenuItem is not null)
+        if (_readParagraphMenuItem is not null)
         {
-            _readTypedTextMenuItem.Text = $"Read Typed Text (Ctrl+Shift+{NormalizeKey(readTypedTextKey)})";
+            _readParagraphMenuItem.Text = $"Read Paragraph ({normalizedModifier}+{NormalizeKey(readParagraphKey)})";
+        }
+
+        if (_readDocumentMenuItem is not null)
+        {
+            _readDocumentMenuItem.Text = $"Read Document ({normalizedModifier}+{NormalizeKey(readDocumentKey)})";
         }
 
         if (_stopMenuItem is not null)
         {
-            _stopMenuItem.Text = $"Stop Reading (Ctrl+Shift+{NormalizeKey(stopKey)})";
+            _stopMenuItem.Text = $"Stop Reading ({normalizedModifier}+{NormalizeKey(stopKey)})";
         }
     }
 
@@ -155,17 +168,24 @@ public sealed class WindowsTrayService : ITrayService
             return false;
         }
 
-        for (var attempt = 0; attempt < 6; attempt++)
+        var deadlineUtc = DateTime.UtcNow.AddMilliseconds(FocusRestoreTimeoutMilliseconds);
+        var nextActivationUtc = DateTime.UtcNow;
+        while (DateTime.UtcNow < deadlineUtc)
         {
-            WindowFocusInterop.TryActivateWindow(_lastExternalForegroundWindow);
-            Thread.Sleep(80);
-
             var currentForeground = WindowFocusInterop.GetForegroundWindow();
             if (currentForeground == _lastExternalForegroundWindow)
             {
-                Thread.Sleep(120);
                 return true;
             }
+
+            var nowUtc = DateTime.UtcNow;
+            if (nowUtc >= nextActivationUtc)
+            {
+                WindowFocusInterop.TryActivateWindow(_lastExternalForegroundWindow);
+                nextActivationUtc = nowUtc.AddMilliseconds(FocusRestoreReactivationIntervalMilliseconds);
+            }
+
+            Thread.Sleep(FocusRestorePollMilliseconds);
         }
 
         var finalForeground = WindowFocusInterop.GetForegroundWindow();
@@ -224,6 +244,19 @@ public sealed class WindowsTrayService : ITrayService
         if (IsIgnoredForegroundWindowClass(foregroundWindow))
         {
             return;
+        }
+
+        var title = WindowFocusInterop.GetWindowText(foregroundWindow);
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            title = "Current app";
+        }
+
+        var titleChanged = !string.Equals(title, _currentForegroundWindowTitle, StringComparison.Ordinal);
+        if (titleChanged)
+        {
+            _currentForegroundWindowTitle = title;
+            ForegroundWindowChanged?.Invoke(this, EventArgs.Empty);
         }
 
         _lastExternalForegroundWindow = foregroundWindow;
@@ -301,6 +334,16 @@ public sealed class WindowsTrayService : ITrayService
 
         var normalized = key.Trim().ToUpperInvariant();
         return normalized.Length == 1 ? normalized : "?";
+    }
+
+    private static string NormalizeModifierLabel(string? modifierLabel)
+    {
+        if (string.IsNullOrWhiteSpace(modifierLabel))
+        {
+            return "Ctrl+Shift";
+        }
+
+        return modifierLabel.Trim();
     }
 
     private static bool IsIgnoredForegroundWindowClass(nint windowHandle)

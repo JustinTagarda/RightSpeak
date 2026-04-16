@@ -8,7 +8,7 @@ namespace RightSpeak.Services;
 public interface ISpeechService
 {
     bool IsSpeaking { get; }
-    IReadOnlyList<string> GetInstalledVoiceNames();
+    IReadOnlyList<SpeechVoice> GetInstalledVoices();
 
     Task<SpeechResult> SpeakAsync(SpeechRequest request, CancellationToken cancellationToken = default);
 

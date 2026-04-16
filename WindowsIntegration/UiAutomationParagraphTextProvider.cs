@@ -64,13 +64,6 @@ public sealed class UiAutomationParagraphTextProvider : IParagraphTextProvider
 
         foreach (var range in ranges)
         {
-            var directText = Normalize(range.GetText(-1));
-            if (!string.IsNullOrWhiteSpace(directText))
-            {
-                candidates.Add(directText);
-                continue;
-            }
-
             var paragraphText = TryExpandAndRead(range, TextUnit.Paragraph);
             if (!string.IsNullOrWhiteSpace(paragraphText))
             {

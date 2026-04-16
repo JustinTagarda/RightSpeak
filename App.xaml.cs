@@ -22,6 +22,7 @@ public partial class App : WpfApplication
     private WindowsGlobalHotkeyService? _hotkeyService;
     private WindowsNamedPipeContextReadIngressService? _contextReadIngressService;
     private WindowsTrayService? _trayService;
+    private JsonAppSettingsService? _appSettingsService;
     private IHotkeySettingsService? _hotkeySettingsService;
     private MainViewModel? _mainViewModel;
     private IReadingService? _readingService;
@@ -49,8 +50,8 @@ public partial class App : WpfApplication
         base.OnStartup(e);
 
         _speechService = new WindowsSpeechService();
-        var appSettingsService = new JsonAppSettingsService();
-        _hotkeySettingsService = new HotkeySettingsService(appSettingsService);
+        _appSettingsService = new JsonAppSettingsService();
+        _hotkeySettingsService = new HotkeySettingsService(_appSettingsService);
         _hotkeyService = new WindowsGlobalHotkeyService(_hotkeySettingsService);
         var selectedTextRetrievalService = new SelectedTextRetrievalService(
             new List<ISelectedTextProvider>
@@ -76,26 +77,31 @@ public partial class App : WpfApplication
             selectedTextRetrievalService,
             paragraphTextRetrievalService,
             documentTextRetrievalService,
-            appSettingsService);
-        _mainViewModel = new MainViewModel(_readingService, _hotkeySettingsService);
-        _mainViewModel.HotkeysApplyRequested += OnHotkeysApplyRequested;
+            _appSettingsService);
+        _mainViewModel = new MainViewModel(_readingService, _hotkeySettingsService, ApplyHotkeysAndRefreshTray);
 
         _contextReadIngressService = new WindowsNamedPipeContextReadIngressService();
         _contextReadIngressService.ReadRequested += OnContextReadRequested;
         _contextReadIngressService.Start();
 
         _trayService = new WindowsTrayService();
-        _trayService.ReadTypedTextRequested += OnTrayReadTypedTextRequested;
         _trayService.ReadSelectedRequested += OnTrayReadSelectedRequested;
         _trayService.ReadParagraphRequested += OnTrayReadParagraphRequested;
         _trayService.ReadDocumentRequested += OnTrayReadDocumentRequested;
         _trayService.StopRequested += OnTrayStopRequested;
         _trayService.ShowRequested += OnTrayShowRequested;
         _trayService.ExitRequested += OnTrayExitRequested;
+        _trayService.ForegroundWindowChanged += OnTrayForegroundWindowChanged;
         _trayService.Initialize();
         ApplyTrayHotkeyHints();
+        UpdateFocusedWindowText();
 
-        _mainWindow = new MainWindow(_mainViewModel, _hotkeyService, _activateWindowMessageId, ExecuteTrayFocusSensitiveReadAsync);
+        _mainWindow = new MainWindow(
+            _mainViewModel,
+            _hotkeyService,
+            _activateWindowMessageId,
+            ExecuteTrayFocusSensitiveReadAsync,
+            placeOnStartup: true);
         _mainWindow.Closing += OnMainWindowClosing;
         _mainWindow.Show();
     }
@@ -109,23 +115,20 @@ public partial class App : WpfApplication
         }
 
         _hotkeyService?.Dispose();
-        if (_mainViewModel is not null)
-        {
-            _mainViewModel.HotkeysApplyRequested -= OnHotkeysApplyRequested;
-        }
         if (_trayService is not null)
         {
-            _trayService.ReadTypedTextRequested -= OnTrayReadTypedTextRequested;
             _trayService.ReadSelectedRequested -= OnTrayReadSelectedRequested;
             _trayService.ReadParagraphRequested -= OnTrayReadParagraphRequested;
             _trayService.ReadDocumentRequested -= OnTrayReadDocumentRequested;
             _trayService.StopRequested -= OnTrayStopRequested;
             _trayService.ShowRequested -= OnTrayShowRequested;
             _trayService.ExitRequested -= OnTrayExitRequested;
+            _trayService.ForegroundWindowChanged -= OnTrayForegroundWindowChanged;
             _trayService.Dispose();
         }
 
         _speechService?.Dispose();
+        _appSettingsService?.Save();
         _singleInstanceMutex?.Dispose();
         base.OnExit(e);
     }
@@ -150,7 +153,13 @@ public partial class App : WpfApplication
         }
         catch (Exception ex)
         {
-            await Dispatcher.InvokeAsync(() => _mainViewModel.SetStatusMessage($"Context read request failed: {ex.Message}"));
+            AppDiagnostics.Warn(
+                "context_read_request_failed",
+                new Dictionary<string, string?>
+                {
+                    ["message"] = ex.Message
+                });
+            await Dispatcher.InvokeAsync(() => _mainViewModel.SetStatusMessage("Couldn't read the text that was sent to RightSpeak."));
         }
     }
 
@@ -242,14 +251,6 @@ public partial class App : WpfApplication
         WindowMessageInterop.PostMessage(WindowMessageInterop.HwndBroadcast, _activateWindowMessageId, nint.Zero, nint.Zero);
     }
 
-    private void OnTrayReadTypedTextRequested(object? sender, EventArgs e)
-    {
-        if (_mainViewModel?.ReadCommand.CanExecute(null) == true)
-        {
-            _mainViewModel.ReadCommand.Execute(null);
-        }
-    }
-
     private void OnTrayReadSelectedRequested(object? sender, EventArgs e)
     {
         _ = ExecuteTrayFocusSensitiveReadAsync(() =>
@@ -313,6 +314,11 @@ public partial class App : WpfApplication
         Shutdown();
     }
 
+    private void OnTrayForegroundWindowChanged(object? sender, EventArgs e)
+    {
+        UpdateFocusedWindowText();
+    }
+
     private void OnMainWindowClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
         if (_isShuttingDown)
@@ -325,22 +331,6 @@ public partial class App : WpfApplication
         _mainViewModel?.SetStatusMessage("RightSpeak is running in the system tray.");
     }
 
-    private void OnHotkeysApplyRequested(object? sender, EventArgs e)
-    {
-        if (_hotkeyService is not null)
-        {
-            var refreshed = _hotkeyService.RefreshHotkeys();
-            _mainViewModel?.SetStatusMessage(_hotkeyService.LastRegistrationStatus);
-            if (!refreshed)
-            {
-                ApplyTrayHotkeyHints();
-                return;
-            }
-        }
-
-        ApplyTrayHotkeyHints();
-    }
-
     private void ApplyTrayHotkeyHints()
     {
         if (_trayService is null || _hotkeySettingsService is null)
@@ -349,9 +339,43 @@ public partial class App : WpfApplication
         }
 
         _trayService.UpdateHotkeyHints(
+            GetModifierLabel(_hotkeySettingsService.ModifierPreset),
             _hotkeySettingsService.ReadSelectedKey,
-            _hotkeySettingsService.ReadTypedTextKey,
+            _hotkeySettingsService.ReadParagraphKey,
+            _hotkeySettingsService.ReadDocumentKey,
             _hotkeySettingsService.StopKey);
+    }
+
+    private (bool Success, string StatusMessage) ApplyHotkeysAndRefreshTray()
+    {
+        if (_hotkeyService is null)
+        {
+            return (false, "Hotkeys aren't available right now.");
+        }
+
+        var refreshed = _hotkeyService.RefreshHotkeys();
+        ApplyTrayHotkeyHints();
+        return (refreshed, _hotkeyService.LastRegistrationStatus);
+    }
+
+    private static string GetModifierLabel(RightSpeak.Models.HotkeyModifierPreset preset)
+    {
+        return preset switch
+        {
+            Models.HotkeyModifierPreset.CtrlShift => "Ctrl+Shift",
+            Models.HotkeyModifierPreset.CtrlAlt => "Ctrl+Alt",
+            _ => "Alt+Shift"
+        };
+    }
+
+    private void UpdateFocusedWindowText()
+    {
+        if (_mainViewModel is null || _trayService is null)
+        {
+            return;
+        }
+
+        _mainViewModel.SetFocusedWindowText(_trayService.CurrentForegroundWindowTitle);
     }
 
     private async Task ExecuteTrayFocusSensitiveReadAsync(Action executeCommand)
@@ -362,12 +386,10 @@ public partial class App : WpfApplication
             if (!restored)
             {
                 await Dispatcher.InvokeAsync(() =>
-                    _mainViewModel?.SetStatusMessage("Tray read failed: unable to restore the last active app window."));
+                    _mainViewModel?.SetStatusMessage("Couldn't switch back to the other app. Click that app first, then try again."));
                 AppDiagnostics.Warn("tray_focus_read_aborted_restore_failed");
                 return;
             }
-
-            await Task.Delay(220).ConfigureAwait(false);
         }
 
         await Dispatcher.InvokeAsync(executeCommand);

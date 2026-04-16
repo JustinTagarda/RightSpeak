@@ -4,7 +4,10 @@ public sealed class AppSettings
 {
     public int SpeechRate { get; set; } = 0;
     public string? VoiceName { get; set; }
-    public string ReadSelectedHotkeyKey { get; set; } = "R";
-    public string ReadTypedTextHotkeyKey { get; set; } = "T";
+    public string TypedTextDraft { get; set; } = string.Empty;
+    public string HotkeyModifierPreset { get; set; } = "AltShift";
+    public string ReadSelectedHotkeyKey { get; set; } = "S";
+    public string ReadParagraphHotkeyKey { get; set; } = "P";
+    public string ReadDocumentHotkeyKey { get; set; } = "D";
     public string StopHotkeyKey { get; set; } = "X";
 }
