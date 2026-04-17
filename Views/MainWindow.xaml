@@ -375,7 +375,7 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <TextBlock Text="© 2026 Justiniano Tagarda. All rights reserved."
+            <TextBlock Text="© 2026 JustinTagarda. All rights reserved."
                        Foreground="#6B7280"
                        FontSize="12"
                        VerticalAlignment="Bottom" />

@@ -10,12 +10,39 @@ using RightSpeak.Models;
 
 namespace RightSpeak.Services;
 
-internal sealed class SystemSpeechService : ISpeechService, IDisposable
+internal sealed class SystemSpeechService : ISpeechService, IPrefetchSpeechService, IDisposable
 {
+    public sealed class SystemPrefetchedSpeechClip : IPrefetchedSpeechClip
+    {
+        private bool _disposed;
+
+        internal SystemPrefetchedSpeechClip(byte[] waveBytes, int textLength)
+        {
+            WaveBytes = waveBytes;
+            TextLength = textLength;
+        }
+
+        public string Engine => "System.Speech";
+        public int TextLength { get; }
+        internal byte[] WaveBytes { get; private set; }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            WaveBytes = Array.Empty<byte>();
+            _disposed = true;
+        }
+    }
+
     private readonly SemaphoreSlim _gate;
     private readonly string[] _installedVoiceNames;
     private readonly string? _defaultVoiceName;
     private CancellationTokenSource? _playbackCancellationTokenSource;
+    private CancellationTokenSource? _prefetchCancellationTokenSource;
     private SoundPlayer? _currentSoundPlayer;
     private bool _disposed;
 
@@ -47,6 +74,152 @@ internal sealed class SystemSpeechService : ISpeechService, IDisposable
         }
 
         return _installedVoiceNames.Any(name => string.Equals(name, voiceName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public bool SupportsPrefetch(SpeechRequest request)
+    {
+        if (request is null)
+        {
+            return false;
+        }
+
+        var text = request.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        return string.IsNullOrWhiteSpace(request.Options.VoiceName) || SupportsVoice(request.Options.VoiceName);
+    }
+
+    public async Task<IPrefetchedSpeechClip?> PrefetchAsync(SpeechRequest request, CancellationToken cancellationToken = default)
+    {
+        if (!SupportsPrefetch(request))
+        {
+            return null;
+        }
+
+        CancellationTokenSource prefetchCancellationTokenSource;
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            CancelPrefetchUnsafe();
+            prefetchCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _prefetchCancellationTokenSource = prefetchCancellationTokenSource;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        try
+        {
+            var waveBytes = await Task.Run(
+                    () => RenderWaveBytes(request.Text, request.Options, prefetchCancellationTokenSource.Token),
+                    prefetchCancellationTokenSource.Token)
+                .ConfigureAwait(false);
+            return new SystemPrefetchedSpeechClip(waveBytes, request.Text.Length);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        finally
+        {
+            await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                if (ReferenceEquals(_prefetchCancellationTokenSource, prefetchCancellationTokenSource))
+                {
+                    _prefetchCancellationTokenSource?.Dispose();
+                    _prefetchCancellationTokenSource = null;
+                }
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+    }
+
+    public async Task CancelPrefetchAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            CancelPrefetchUnsafe();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<SpeechResult> SpeakPrefetchedAsync(
+        IPrefetchedSpeechClip prefetchedClip,
+        SpeechRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (prefetchedClip is not SystemPrefetchedSpeechClip systemClip)
+        {
+            return SpeechResult.Failed("Prefetched speech clip is not compatible with the active speech engine.");
+        }
+
+        CancellationTokenSource playbackCancellationTokenSource;
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            CancelPlaybackUnsafe();
+
+            playbackCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _playbackCancellationTokenSource = playbackCancellationTokenSource;
+            IsSpeaking = true;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        try
+        {
+            return await PlayWaveBytesAsync(systemClip.WaveBytes, request.Options, playbackCancellationTokenSource.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return SpeechResult.Stopped();
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Warn(
+                "system_speech_prefetched_playback_failed",
+                new Dictionary<string, string?>
+                {
+                    ["message"] = ex.Message
+                });
+            return SpeechResult.Failed("Couldn't continue reading.");
+        }
+        finally
+        {
+            await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                _currentSoundPlayer?.Stop();
+                _currentSoundPlayer?.Dispose();
+                _currentSoundPlayer = null;
+
+                _playbackCancellationTokenSource?.Dispose();
+                _playbackCancellationTokenSource = null;
+                IsSpeaking = false;
+            }
+            finally
+            {
+                _gate.Release();
+            }
+
+            systemClip.Dispose();
+        }
     }
 
     public async Task<SpeechResult> SpeakAsync(SpeechRequest request, CancellationToken cancellationToken = default)
@@ -122,6 +295,7 @@ internal sealed class SystemSpeechService : ISpeechService, IDisposable
         try
         {
             ThrowIfDisposed();
+            CancelPrefetchUnsafe();
 
             if (!IsSpeaking)
             {
@@ -156,6 +330,7 @@ internal sealed class SystemSpeechService : ISpeechService, IDisposable
         }
 
         _playbackCancellationTokenSource?.Cancel();
+        CancelPrefetchUnsafe();
         _currentSoundPlayer?.Stop();
         _currentSoundPlayer?.Dispose();
         _playbackCancellationTokenSource?.Dispose();
@@ -166,6 +341,11 @@ internal sealed class SystemSpeechService : ISpeechService, IDisposable
     private async Task<SpeechResult> PlayRenderedAudioAsync(string text, SpeechOptions options, CancellationToken cancellationToken)
     {
         var waveBytes = await Task.Run(() => RenderWaveBytes(text, options, cancellationToken), cancellationToken).ConfigureAwait(false);
+        return await PlayWaveBytesAsync(waveBytes, options, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<SpeechResult> PlayWaveBytesAsync(byte[] waveBytes, SpeechOptions options, CancellationToken cancellationToken)
+    {
         cancellationToken.ThrowIfCancellationRequested();
 
         var playbackDuration = SpeechAudioHelper.GetPlaybackDuration(waveBytes);
@@ -244,6 +424,13 @@ internal sealed class SystemSpeechService : ISpeechService, IDisposable
     {
         _playbackCancellationTokenSource?.Cancel();
         _currentSoundPlayer?.Stop();
+    }
+
+    private void CancelPrefetchUnsafe()
+    {
+        _prefetchCancellationTokenSource?.Cancel();
+        _prefetchCancellationTokenSource?.Dispose();
+        _prefetchCancellationTokenSource = null;
     }
 
     private void ThrowIfDisposed()

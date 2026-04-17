@@ -10,13 +10,40 @@ using Windows.Media.SpeechSynthesis;
 
 namespace RightSpeak.Services;
 
-internal sealed class WindowsNeuralSpeechService : ISpeechService, IDisposable
+internal sealed class WindowsNeuralSpeechService : ISpeechService, IPrefetchSpeechService, IDisposable
 {
+    public sealed class WindowsNeuralPrefetchedSpeechClip : IPrefetchedSpeechClip
+    {
+        private bool _disposed;
+
+        internal WindowsNeuralPrefetchedSpeechClip(byte[] waveBytes, int textLength)
+        {
+            WaveBytes = waveBytes;
+            TextLength = textLength;
+        }
+
+        public string Engine => "Windows OneCore";
+        public int TextLength { get; }
+        internal byte[] WaveBytes { get; private set; }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            WaveBytes = Array.Empty<byte>();
+            _disposed = true;
+        }
+    }
+
     private readonly SemaphoreSlim _gate;
     private readonly VoiceInformation[] _installedVoices;
     private readonly string[] _installedVoiceNames;
     private readonly string? _defaultVoiceName;
     private CancellationTokenSource? _playbackCancellationTokenSource;
+    private CancellationTokenSource? _prefetchCancellationTokenSource;
     private SoundPlayer? _currentSoundPlayer;
     private bool _disposed;
 
@@ -117,6 +144,7 @@ internal sealed class WindowsNeuralSpeechService : ISpeechService, IDisposable
         try
         {
             ThrowIfDisposed();
+            CancelPrefetchUnsafe();
 
             if (!IsSpeaking)
             {
@@ -151,6 +179,7 @@ internal sealed class WindowsNeuralSpeechService : ISpeechService, IDisposable
         }
 
         _playbackCancellationTokenSource?.Cancel();
+        CancelPrefetchUnsafe();
         _currentSoundPlayer?.Stop();
         _currentSoundPlayer?.Dispose();
         _playbackCancellationTokenSource?.Dispose();
@@ -168,9 +197,157 @@ internal sealed class WindowsNeuralSpeechService : ISpeechService, IDisposable
         return _installedVoiceNames.Any(name => string.Equals(name, voiceName, StringComparison.OrdinalIgnoreCase));
     }
 
+    public bool SupportsPrefetch(SpeechRequest request)
+    {
+        if (request is null)
+        {
+            return false;
+        }
+
+        var text = request.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        return string.IsNullOrWhiteSpace(request.Options.VoiceName) || SupportsVoice(request.Options.VoiceName);
+    }
+
+    public async Task<IPrefetchedSpeechClip?> PrefetchAsync(SpeechRequest request, CancellationToken cancellationToken = default)
+    {
+        if (!SupportsPrefetch(request))
+        {
+            return null;
+        }
+
+        CancellationTokenSource prefetchCancellationTokenSource;
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            CancelPrefetchUnsafe();
+            prefetchCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _prefetchCancellationTokenSource = prefetchCancellationTokenSource;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        try
+        {
+            var waveBytes = await RenderWaveBytesAsync(request.Text, request.Options, prefetchCancellationTokenSource.Token).ConfigureAwait(false);
+            return new WindowsNeuralPrefetchedSpeechClip(waveBytes, request.Text.Length);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        finally
+        {
+            await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                if (ReferenceEquals(_prefetchCancellationTokenSource, prefetchCancellationTokenSource))
+                {
+                    _prefetchCancellationTokenSource?.Dispose();
+                    _prefetchCancellationTokenSource = null;
+                }
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+    }
+
+    public async Task CancelPrefetchAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            CancelPrefetchUnsafe();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<SpeechResult> SpeakPrefetchedAsync(
+        IPrefetchedSpeechClip prefetchedClip,
+        SpeechRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (prefetchedClip is not WindowsNeuralPrefetchedSpeechClip neuralClip)
+        {
+            return SpeechResult.Failed("Prefetched speech clip is not compatible with the active speech engine.");
+        }
+
+        CancellationTokenSource playbackCancellationTokenSource;
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            CancelPlaybackUnsafe();
+
+            playbackCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _playbackCancellationTokenSource = playbackCancellationTokenSource;
+            IsSpeaking = true;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        try
+        {
+            return await PlayWaveBytesAsync(neuralClip.WaveBytes, request.Options, playbackCancellationTokenSource.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return SpeechResult.Stopped();
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Warn(
+                "windows_neural_prefetched_playback_failed",
+                new Dictionary<string, string?>
+                {
+                    ["message"] = ex.Message
+                });
+            return SpeechResult.Failed("Couldn't continue reading.");
+        }
+        finally
+        {
+            await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                _currentSoundPlayer?.Stop();
+                _currentSoundPlayer?.Dispose();
+                _currentSoundPlayer = null;
+
+                _playbackCancellationTokenSource?.Dispose();
+                _playbackCancellationTokenSource = null;
+                IsSpeaking = false;
+            }
+            finally
+            {
+                _gate.Release();
+            }
+
+            neuralClip.Dispose();
+        }
+    }
+
     private async Task<SpeechResult> PlayRenderedAudioAsync(string text, SpeechOptions options, CancellationToken cancellationToken)
     {
         var waveBytes = await RenderWaveBytesAsync(text, options, cancellationToken).ConfigureAwait(false);
+        return await PlayWaveBytesAsync(waveBytes, options, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<SpeechResult> PlayWaveBytesAsync(byte[] waveBytes, SpeechOptions options, CancellationToken cancellationToken)
+    {
         cancellationToken.ThrowIfCancellationRequested();
 
         var playbackDuration = SpeechAudioHelper.GetPlaybackDuration(waveBytes);
@@ -259,6 +436,13 @@ internal sealed class WindowsNeuralSpeechService : ISpeechService, IDisposable
     {
         _playbackCancellationTokenSource?.Cancel();
         _currentSoundPlayer?.Stop();
+    }
+
+    private void CancelPrefetchUnsafe()
+    {
+        _prefetchCancellationTokenSource?.Cancel();
+        _prefetchCancellationTokenSource?.Dispose();
+        _prefetchCancellationTokenSource = null;
     }
 
     private void ThrowIfDisposed()

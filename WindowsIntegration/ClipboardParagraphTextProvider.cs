@@ -27,6 +27,7 @@ public sealed class ClipboardParagraphTextProvider : IParagraphTextProvider
         var focusedElement = AutomationElement.FocusedElement;
         if (focusedElement is null)
         {
+            AppDiagnostics.Warn("paragraph_provider_clipboard_no_focused_element");
             return TextRetrievalResult.Failed("No focused control is available for clipboard paragraph fallback.", TextRetrievalSource.ClipboardFallback);
         }
 
@@ -35,6 +36,7 @@ public sealed class ClipboardParagraphTextProvider : IParagraphTextProvider
         // Keep password fields excluded.
         if (focusedElement.Current.IsPassword)
         {
+            AppDiagnostics.Warn("paragraph_provider_clipboard_password_field_blocked");
             return TextRetrievalResult.Failed(
                 "Clipboard paragraph fallback is not allowed on password fields.",
                 TextRetrievalSource.ClipboardFallback);
@@ -44,6 +46,7 @@ public sealed class ClipboardParagraphTextProvider : IParagraphTextProvider
         var originalSnapshotSucceeded = TryReadClipboardDataObject(out System.Windows.IDataObject? originalClipboard);
         if (!originalSnapshotSucceeded)
         {
+            AppDiagnostics.Warn("paragraph_provider_clipboard_snapshot_failed");
             return TextRetrievalResult.Failed(
                 "Clipboard paragraph fallback failed: unable to read current clipboard safely.",
                 TextRetrievalSource.ClipboardFallback);
@@ -104,12 +107,25 @@ public sealed class ClipboardParagraphTextProvider : IParagraphTextProvider
 
         if (!string.IsNullOrWhiteSpace(paragraphText))
         {
+            AppDiagnostics.Info(
+                "paragraph_provider_clipboard_success",
+                new System.Collections.Generic.Dictionary<string, string?>
+                {
+                    ["textLength"] = paragraphText.Length.ToString()
+                });
             return TextRetrievalResult.Retrieved(
                 paragraphText,
                 TextRetrievalSource.ClipboardFallback,
                 "Paragraph candidate retrieved via clipboard fallback.");
         }
 
+        AppDiagnostics.Warn(
+            "paragraph_provider_clipboard_timeout",
+            new System.Collections.Generic.Dictionary<string, string?>
+            {
+                ["pollTimeoutMs"] = PollTimeoutMilliseconds.ToString(),
+                ["pollIntervalMs"] = PollIntervalMilliseconds.ToString()
+            });
         return TextRetrievalResult.Failed(
             "Clipboard paragraph fallback timed out waiting for selected text copy.",
             TextRetrievalSource.ClipboardFallback);

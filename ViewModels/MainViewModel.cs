@@ -457,6 +457,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private async Task ReadParagraphAsync()
     {
+        var operationId = Guid.NewGuid().ToString("N");
+        var stopwatch = Stopwatch.StartNew();
+        AppDiagnostics.Info(
+            "paragraph_workflow_command_started",
+            new Dictionary<string, string?>
+            {
+                ["operationId"] = operationId,
+                ["trigger"] = "read_paragraph_command",
+                ["hasExternalFocusedWindow"] = _hasExternalFocusedWindow.ToString(),
+                ["focusedWindowText"] = _focusedWindowText,
+                ["isManualReadSpeaking"] = _isManualReadSpeaking.ToString(),
+                ["isSpeaking"] = _isSpeaking.ToString()
+            });
+
         SetExternalReadActive(true);
         SetSpeakingState(true);
         UpdateCommandStates();
@@ -466,6 +480,42 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             var result = await _readingService.ReadParagraphAsync().ConfigureAwait(true);
             StatusMessage = result.Message;
+            stopwatch.Stop();
+            AppDiagnostics.Info(
+                "paragraph_workflow_command_completed",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["success"] = result.Success.ToString(),
+                    ["cancelled"] = result.WasCancelled.ToString(),
+                    ["message"] = result.Message,
+                    ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
+                });
+        }
+        catch (OperationCanceledException)
+        {
+            stopwatch.Stop();
+            AppDiagnostics.Warn(
+                "paragraph_workflow_command_cancelled",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
+                });
+            throw;
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            AppDiagnostics.Error(
+                "paragraph_workflow_command_failed",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["message"] = ex.Message,
+                    ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
+                });
+            throw;
         }
         finally
         {

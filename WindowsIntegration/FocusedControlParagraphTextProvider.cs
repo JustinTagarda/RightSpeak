@@ -22,12 +22,20 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
             var focusedElement = AutomationElement.FocusedElement;
             if (focusedElement is null)
             {
+                AppDiagnostics.Warn("paragraph_provider_focused_no_focused_element");
                 return Task.FromResult(TextRetrievalResult.Failed("No focused control is available for paragraph retrieval.", TextRetrievalSource.FocusedControl));
             }
 
             if (TryReadParagraphFromElementOrAncestors(focusedElement, out var paragraphText, out var sourceMessage) &&
                 !string.IsNullOrWhiteSpace(paragraphText))
             {
+                AppDiagnostics.Info(
+                    "paragraph_provider_focused_success",
+                    new System.Collections.Generic.Dictionary<string, string?>
+                    {
+                        ["sourceMessage"] = sourceMessage,
+                        ["textLength"] = paragraphText.Length.ToString()
+                    });
                 return Task.FromResult(
                     TextRetrievalResult.Retrieved(
                         paragraphText,
@@ -35,6 +43,7 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
                         sourceMessage));
             }
 
+            AppDiagnostics.Warn("paragraph_provider_focused_unavailable_patterns");
             return Task.FromResult(
                 TextRetrievalResult.Failed(
                     "Focused control does not expose paragraph text through supported UI Automation patterns.",
@@ -46,6 +55,12 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
         }
         catch (Exception ex)
         {
+            AppDiagnostics.Error(
+                "paragraph_provider_focused_failed",
+                new System.Collections.Generic.Dictionary<string, string?>
+                {
+                    ["message"] = ex.Message
+                });
             return Task.FromResult(
                 TextRetrievalResult.Failed(
                     $"Focused-control paragraph retrieval failed: {ex.Message}",

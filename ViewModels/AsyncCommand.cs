@@ -25,6 +25,16 @@ public sealed class AsyncCommand : ICommand
 
     public async void Execute(object? parameter)
     {
+        await ExecuteCoreAsync(parameter).ConfigureAwait(true);
+    }
+
+    public Task ExecuteAsync(object? parameter = null)
+    {
+        return ExecuteCoreAsync(parameter);
+    }
+
+    private async Task ExecuteCoreAsync(object? parameter)
+    {
         if (!CanExecute(parameter))
         {
             return;

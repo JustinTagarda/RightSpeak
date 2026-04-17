@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Forms;
 using System.Windows.Interop;
+using System.Windows.Input;
 using RightSpeak.Services;
 using RightSpeak.ViewModels;
 
@@ -14,7 +15,7 @@ public partial class MainWindow : Window
     private static readonly string AppVersionTextValue = BuildVersionText();
     private readonly MainViewModel _viewModel;
     private readonly IGlobalHotkeyService _hotkeyService;
-    private readonly Func<Action, Task>? _executeFocusSensitiveReadAsync;
+    private readonly Func<string, string, Func<Task>, Task>? _executeFocusSensitiveReadAsync;
     private readonly uint _activateWindowMessageId;
     private readonly bool _placeOnStartup;
     private bool _hasPlacedOnStartup;
@@ -24,7 +25,7 @@ public partial class MainWindow : Window
         MainViewModel viewModel,
         IGlobalHotkeyService hotkeyService,
         uint activateWindowMessageId,
-        Func<Action, Task>? executeFocusSensitiveReadAsync = null,
+        Func<string, string, Func<Task>, Task>? executeFocusSensitiveReadAsync = null,
         bool placeOnStartup = false)
     {
         InitializeComponent();
@@ -86,12 +87,23 @@ public partial class MainWindow : Window
         _hasPlacedOnStartup = true;
     }
 
-    private void OnReadSelectedHotkeyPressed(object? sender, System.EventArgs e)
+    private async void OnReadSelectedHotkeyPressed(object? sender, System.EventArgs e)
     {
-        if (_viewModel.ReadSelectedTextCommand.CanExecute(null))
+        if (!_viewModel.ReadSelectedTextCommand.CanExecute(null))
         {
-            _viewModel.ReadSelectedTextCommand.Execute(null);
+            return;
         }
+
+        if (_executeFocusSensitiveReadAsync is not null)
+        {
+            await _executeFocusSensitiveReadAsync(
+                "read_selected_text_external",
+                "hotkey",
+                ExecuteReadSelectedTextAsync).ConfigureAwait(true);
+            return;
+        }
+
+        await ExecuteReadSelectedTextAsync().ConfigureAwait(true);
     }
 
     private void OnStopHotkeyPressed(object? sender, System.EventArgs e)
@@ -111,11 +123,14 @@ public partial class MainWindow : Window
 
         if (_executeFocusSensitiveReadAsync is not null)
         {
-            await _executeFocusSensitiveReadAsync(ExecuteReadParagraph).ConfigureAwait(true);
+            await _executeFocusSensitiveReadAsync(
+                "read_paragraph_external",
+                "hotkey",
+                ExecuteReadParagraphAsync).ConfigureAwait(true);
             return;
         }
 
-        ExecuteReadParagraph();
+        await ExecuteReadParagraphAsync().ConfigureAwait(true);
     }
 
     private async void OnReadDocumentHotkeyPressed(object? sender, System.EventArgs e)
@@ -127,11 +142,14 @@ public partial class MainWindow : Window
 
         if (_executeFocusSensitiveReadAsync is not null)
         {
-            await _executeFocusSensitiveReadAsync(ExecuteReadDocument).ConfigureAwait(true);
+            await _executeFocusSensitiveReadAsync(
+                "read_document_external",
+                "hotkey",
+                ExecuteReadDocumentAsync).ConfigureAwait(true);
             return;
         }
 
-        ExecuteReadDocument();
+        await ExecuteReadDocumentAsync().ConfigureAwait(true);
     }
 
     private async void OnReadParagraphButtonClick(object sender, RoutedEventArgs e)
@@ -143,11 +161,14 @@ public partial class MainWindow : Window
 
         if (_executeFocusSensitiveReadAsync is not null)
         {
-            await _executeFocusSensitiveReadAsync(ExecuteReadParagraph).ConfigureAwait(true);
+            await _executeFocusSensitiveReadAsync(
+                "read_paragraph_external",
+                "main_window_button",
+                ExecuteReadParagraphAsync).ConfigureAwait(true);
             return;
         }
 
-        ExecuteReadParagraph();
+        await ExecuteReadParagraphAsync().ConfigureAwait(true);
     }
 
     private async void OnReadSelectedTextButtonClick(object sender, RoutedEventArgs e)
@@ -159,11 +180,14 @@ public partial class MainWindow : Window
 
         if (_executeFocusSensitiveReadAsync is not null)
         {
-            await _executeFocusSensitiveReadAsync(ExecuteReadSelectedText).ConfigureAwait(true);
+            await _executeFocusSensitiveReadAsync(
+                "read_selected_text_external",
+                "main_window_button",
+                ExecuteReadSelectedTextAsync).ConfigureAwait(true);
             return;
         }
 
-        ExecuteReadSelectedText();
+        await ExecuteReadSelectedTextAsync().ConfigureAwait(true);
     }
 
     private async void OnReadDocumentButtonClick(object sender, RoutedEventArgs e)
@@ -175,11 +199,14 @@ public partial class MainWindow : Window
 
         if (_executeFocusSensitiveReadAsync is not null)
         {
-            await _executeFocusSensitiveReadAsync(ExecuteReadDocument).ConfigureAwait(true);
+            await _executeFocusSensitiveReadAsync(
+                "read_document_external",
+                "main_window_button",
+                ExecuteReadDocumentAsync).ConfigureAwait(true);
             return;
         }
 
-        ExecuteReadDocument();
+        await ExecuteReadDocumentAsync().ConfigureAwait(true);
     }
 
     private nint WndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
@@ -200,28 +227,45 @@ public partial class MainWindow : Window
         return nint.Zero;
     }
 
-    private void ExecuteReadParagraph()
+    private Task ExecuteReadParagraphAsync()
     {
         if (_viewModel.ReadParagraphCommand.CanExecute(null))
         {
-            _viewModel.ReadParagraphCommand.Execute(null);
+            return ExecuteCommandAsync(_viewModel.ReadParagraphCommand);
         }
+
+        return Task.CompletedTask;
     }
 
-    private void ExecuteReadSelectedText()
+    private Task ExecuteReadSelectedTextAsync()
     {
         if (_viewModel.ReadSelectedTextCommand.CanExecute(null))
         {
-            _viewModel.ReadSelectedTextCommand.Execute(null);
+            return ExecuteCommandAsync(_viewModel.ReadSelectedTextCommand);
         }
+
+        return Task.CompletedTask;
     }
 
-    private void ExecuteReadDocument()
+    private Task ExecuteReadDocumentAsync()
     {
         if (_viewModel.ReadDocumentCommand.CanExecute(null))
         {
-            _viewModel.ReadDocumentCommand.Execute(null);
+            return ExecuteCommandAsync(_viewModel.ReadDocumentCommand);
         }
+
+        return Task.CompletedTask;
+    }
+
+    private static Task ExecuteCommandAsync(ICommand command)
+    {
+        if (command is AsyncCommand asyncCommand)
+        {
+            return asyncCommand.ExecuteAsync();
+        }
+
+        command.Execute(null);
+        return Task.CompletedTask;
     }
 
     private void PositionBottomRightOnPrimaryWorkingArea()

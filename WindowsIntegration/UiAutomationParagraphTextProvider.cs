@@ -21,17 +21,28 @@ public sealed class UiAutomationParagraphTextProvider : IParagraphTextProvider
             var focusedElement = AutomationElement.FocusedElement;
             if (focusedElement is null)
             {
+                AppDiagnostics.Warn("paragraph_provider_uia_no_focused_element");
                 return Task.FromResult(TextRetrievalResult.Failed("No focused element is available for paragraph retrieval.", TextRetrievalSource.UiAutomationParagraph));
             }
 
             if (!focusedElement.TryGetCurrentPattern(TextPattern.Pattern, out var textPatternObject) || textPatternObject is not TextPattern textPattern)
             {
+                AppDiagnostics.Info(
+                    "paragraph_provider_uia_text_pattern_unavailable",
+                    new Dictionary<string, string?>
+                    {
+                        ["automationId"] = focusedElement.Current.AutomationId,
+                        ["className"] = focusedElement.Current.ClassName,
+                        ["controlType"] = focusedElement.Current.ControlType?.ProgrammaticName,
+                        ["name"] = focusedElement.Current.Name
+                    });
                 return Task.FromResult(TextRetrievalResult.Failed("Focused element does not expose text through UI Automation.", TextRetrievalSource.UiAutomationParagraph));
             }
 
             var selectedRanges = textPattern.GetSelection();
             if (selectedRanges is null || selectedRanges.Length == 0)
             {
+                AppDiagnostics.Warn("paragraph_provider_uia_no_selection_ranges");
                 return Task.FromResult(TextRetrievalResult.Failed("No insertion point or selection found for paragraph retrieval.", TextRetrievalSource.UiAutomationParagraph));
             }
 
@@ -39,9 +50,22 @@ public sealed class UiAutomationParagraphTextProvider : IParagraphTextProvider
 
             if (string.IsNullOrWhiteSpace(paragraphCandidates))
             {
+                AppDiagnostics.Warn(
+                    "paragraph_provider_uia_candidates_empty",
+                    new Dictionary<string, string?>
+                    {
+                        ["selectionRangeCount"] = selectedRanges.Length.ToString()
+                    });
                 return Task.FromResult(TextRetrievalResult.Failed("UI Automation returned an empty paragraph.", TextRetrievalSource.UiAutomationParagraph));
             }
 
+            AppDiagnostics.Info(
+                "paragraph_provider_uia_candidates_built",
+                new Dictionary<string, string?>
+                {
+                    ["selectionRangeCount"] = selectedRanges.Length.ToString(),
+                    ["textLength"] = paragraphCandidates.Length.ToString()
+                });
             return Task.FromResult(
                 TextRetrievalResult.Retrieved(
                     paragraphCandidates,
@@ -54,6 +78,12 @@ public sealed class UiAutomationParagraphTextProvider : IParagraphTextProvider
         }
         catch (Exception ex)
         {
+            AppDiagnostics.Error(
+                "paragraph_provider_uia_failed",
+                new Dictionary<string, string?>
+                {
+                    ["message"] = ex.Message
+                });
             return Task.FromResult(TextRetrievalResult.Failed($"Paragraph retrieval failed: {ex.Message}", TextRetrievalSource.UiAutomationParagraph));
         }
     }

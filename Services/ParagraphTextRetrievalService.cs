@@ -34,10 +34,12 @@ public sealed class ParagraphTextRetrievalService : IParagraphTextRetrievalServi
 
         TextRetrievalResult? lastFailure = null;
         var failureDetails = new List<string>();
+        var shouldRetry = false;
 
-        foreach (var provider in _providers)
+        for (var providerIndex = 0; providerIndex < _providers.Count; providerIndex++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var provider = _providers[providerIndex];
 
             var providerStopwatch = Stopwatch.StartNew();
             var result = await provider.TryGetParagraphTextAsync(cancellationToken).ConfigureAwait(false);
@@ -47,10 +49,12 @@ public sealed class ParagraphTextRetrievalService : IParagraphTextRetrievalServi
                 new Dictionary<string, string?>
                 {
                     ["provider"] = provider.GetType().Name,
+                    ["providerIndex"] = providerIndex.ToString(),
                     ["success"] = result.Success.ToString(),
                     ["source"] = result.Source?.ToString(),
                     ["message"] = result.Message,
                     ["textLength"] = result.Text?.Length.ToString(),
+                    ["textPreview"] = BuildPreview(result.Text),
                     ["elapsedMs"] = providerStopwatch.ElapsedMilliseconds.ToString()
                 });
 
@@ -62,14 +66,17 @@ public sealed class ParagraphTextRetrievalService : IParagraphTextRetrievalServi
                     new Dictionary<string, string?>
                     {
                         ["provider"] = provider.GetType().Name,
+                        ["providerIndex"] = providerIndex.ToString(),
                         ["source"] = result.Source?.ToString(),
                         ["textLength"] = result.Text?.Length.ToString(),
+                        ["textPreview"] = BuildPreview(result.Text),
                         ["elapsedMs"] = overallStopwatch.ElapsedMilliseconds.ToString()
                     });
                 return result;
             }
 
             lastFailure = result;
+            shouldRetry |= IsRetryableParagraphFailure(result);
             var source = result.Source?.ToString() ?? provider.GetType().Name;
             var message = string.IsNullOrWhiteSpace(result.Message) ? "No details." : result.Message;
             failureDetails.Add($"{source}: {message}");
@@ -83,6 +90,50 @@ public sealed class ParagraphTextRetrievalService : IParagraphTextRetrievalServi
                 ["summary"] = string.Join(" | ", failureDetails.Where(detail => !string.IsNullOrWhiteSpace(detail))),
                 ["elapsedMs"] = overallStopwatch.ElapsedMilliseconds.ToString()
             });
-        return lastFailure ?? TextRetrievalResult.Failed("Paragraph-text retrieval is unavailable.");
+        return (lastFailure ?? TextRetrievalResult.Failed("Paragraph-text retrieval is unavailable."))
+            .WithRetrySuggested(shouldRetry);
+    }
+
+    private static bool IsRetryableParagraphFailure(TextRetrievalResult result)
+    {
+        if (result.Success)
+        {
+            return false;
+        }
+
+        var message = result.Message ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return true;
+        }
+
+        return result.Source switch
+        {
+            TextRetrievalSource.UiAutomationParagraph =>
+                message.Equals("No focused element is available for paragraph retrieval.", StringComparison.OrdinalIgnoreCase) ||
+                message.Equals("No insertion point or selection found for paragraph retrieval.", StringComparison.OrdinalIgnoreCase) ||
+                message.Equals("UI Automation returned an empty paragraph.", StringComparison.OrdinalIgnoreCase),
+            TextRetrievalSource.FocusedControl =>
+                message.Equals("No focused control is available for paragraph retrieval.", StringComparison.OrdinalIgnoreCase),
+            TextRetrievalSource.ClipboardFallback =>
+                message.Equals("No focused control is available for clipboard paragraph fallback.", StringComparison.OrdinalIgnoreCase) ||
+                message.Equals("Clipboard paragraph fallback failed: unable to read current clipboard safely.", StringComparison.OrdinalIgnoreCase) ||
+                message.Equals("Clipboard paragraph fallback timed out waiting for selected text copy.", StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
+    }
+
+    private static string? BuildPreview(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        var normalized = text
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Trim();
+        return normalized.Length <= 180 ? normalized : normalized[..180];
     }
 }

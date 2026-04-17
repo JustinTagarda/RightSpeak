@@ -16,6 +16,34 @@ namespace RightSpeak.Services;
 
 internal sealed class PiperSpeechService : ISpeechService, IDisposable
 {
+    public sealed class PiperPrefetchedSpeechClip : IPrefetchedSpeechClip
+    {
+        private bool _disposed;
+
+        internal PiperPrefetchedSpeechClip(string voiceName, byte[] waveBytes, int textLength)
+        {
+            VoiceName = voiceName;
+            WaveBytes = waveBytes;
+            TextLength = textLength;
+        }
+
+        public string Engine => "Piper";
+        public int TextLength { get; }
+        internal string VoiceName { get; }
+        internal byte[] WaveBytes { get; private set; }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            WaveBytes = Array.Empty<byte>();
+            _disposed = true;
+        }
+    }
+
     private const string PiperVoicePrefix = "piper:";
     private const int ReusedPiperOutputPollMilliseconds = 25;
     private const int ReusedPiperOutputTimeoutMilliseconds = 30000;
@@ -25,7 +53,7 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
     private static readonly bool ForceFreshSessionAtReadBoundaries = false;
     private static readonly bool EnableLeadingTokenGuardWorkaround = true;
     private const int LeadingTokenGuardMaxTextLengthCharacters = 280;
-    private const string LeadingTokenGuardPrefix = "---";
+    private const string LeadingTokenGuardPrefix = "-----";
     private const double OutputDeviceWarmupCarrierSeconds = 0.30;
     private const double PiperPrimerColdStartSeconds = 0.62;
     private const double PiperPrimerWarmStartSeconds = 0.38;
@@ -56,6 +84,7 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
     private string? _warmPiperConfigPath;
     private double _warmPiperLengthScale;
     private DateTime _lastPlaybackCompletedUtc;
+    private CancellationTokenSource? _prefetchCancellationTokenSource;
     private bool _disposed;
 
     public PiperSpeechService()
@@ -218,6 +247,7 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
             }
 
             CancelActivePlaybackUnsafe();
+            CancelPrefetchUnsafe();
             if (ForceFreshSessionAtReadBoundaries)
             {
                 ResetSessionForFreshReadUnsafe("stop_reading");
@@ -241,6 +271,174 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
         }
     }
 
+    public bool SupportsPrefetch(SpeechRequest request)
+    {
+        if (request is null)
+        {
+            return false;
+        }
+
+        if (!_availability.IsAvailable)
+        {
+            return false;
+        }
+
+        var voice = ResolveVoice(request.Options.VoiceName);
+        return voice is not null;
+    }
+
+    public async Task CancelPrefetchAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            CancelPrefetchUnsafe();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<IPrefetchedSpeechClip?> PrefetchAsync(SpeechRequest request, CancellationToken cancellationToken = default)
+    {
+        if (request is null)
+        {
+            throw new ArgumentNullException(nameof(request));
+        }
+
+        if (!_availability.IsAvailable)
+        {
+            return null;
+        }
+
+        var text = request.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        var voice = ResolveVoice(request.Options.VoiceName);
+        if (voice is null)
+        {
+            return null;
+        }
+
+        CancellationTokenSource prefetchCts;
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            CancelPrefetchUnsafe();
+            prefetchCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _prefetchCancellationTokenSource = prefetchCts;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        try
+        {
+            var piperInputText = NormalizeForPiperLineInput(text, out _, out _);
+            piperInputText = PreparePiperInputText(piperInputText, out _);
+            var waveBytes = await RenderWaveBytesIsolatedAsync(piperInputText, request.Options, voice, prefetchCts.Token).ConfigureAwait(false);
+            return new PiperPrefetchedSpeechClip(voice.Name, waveBytes, text.Length);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        finally
+        {
+            await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                if (ReferenceEquals(_prefetchCancellationTokenSource, prefetchCts))
+                {
+                    _prefetchCancellationTokenSource?.Dispose();
+                    _prefetchCancellationTokenSource = null;
+                }
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+    }
+
+    public async Task<SpeechResult> SpeakPrefetchedAsync(
+        PiperPrefetchedSpeechClip prefetchedClip,
+        SpeechRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (prefetchedClip is null)
+        {
+            throw new ArgumentNullException(nameof(prefetchedClip));
+        }
+
+        if (request is null)
+        {
+            throw new ArgumentNullException(nameof(request));
+        }
+
+        if (!_availability.IsAvailable)
+        {
+            return SpeechResult.Failed(_availability.FailureReason ?? "Piper runtime isn't available.");
+        }
+
+        CancellationTokenSource playbackCancellationTokenSource;
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            CancelActivePlaybackUnsafe();
+
+            playbackCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _playbackCancellationTokenSource = playbackCancellationTokenSource;
+            IsSpeaking = true;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        try
+        {
+            return await PlayWaveBytesAsync(prefetchedClip.WaveBytes, request.Options, playbackCancellationTokenSource.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return SpeechResult.Stopped();
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Warn(
+                "piper_prefetched_playback_failed",
+                new Dictionary<string, string?>
+                {
+                    ["message"] = ex.Message,
+                    ["voice"] = prefetchedClip.VoiceName
+                });
+            return SpeechResult.Failed("Couldn't continue Piper reading.");
+        }
+        finally
+        {
+            await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                CleanupPlaybackStateUnsafe();
+                IsSpeaking = false;
+            }
+            finally
+            {
+                _gate.Release();
+            }
+
+            prefetchedClip.Dispose();
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -251,6 +449,7 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
         _playbackCancellationTokenSource?.Cancel();
         CleanupPlaybackStateUnsafe();
         _playbackCancellationTokenSource?.Dispose();
+        CancelPrefetchUnsafe();
         DisposeWarmPiperProcessUnsafe();
         _gate.Dispose();
         _disposed = true;
@@ -259,9 +458,23 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
     private async Task<SpeechResult> PlayRenderedAudioAsync(string text, SpeechOptions options, PiperVoiceDefinition voice, CancellationToken cancellationToken)
     {
         var waveBytes = await RenderWaveBytesAsync(text, options, voice, cancellationToken).ConfigureAwait(false);
+        return await PlayWaveBytesAsync(waveBytes, options, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<SpeechResult> PlayWaveBytesAsync(byte[] waveBytes, SpeechOptions options, CancellationToken cancellationToken)
+    {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var shouldWarmOutputDevice = ShouldWarmOutputDevice();
+        var shouldWarmOutputDevice = options.AllowOutputDeviceWarmup && ShouldWarmOutputDevice();
+        if (!options.AllowOutputDeviceWarmup)
+        {
+            AppDiagnostics.Info(
+                "piper_output_device_warmup_skipped",
+                new Dictionary<string, string?>
+                {
+                    ["reason"] = options.IsContinuationChunk ? "continuation_chunk" : "option_disabled"
+                });
+        }
         if (shouldWarmOutputDevice)
         {
             var warmupWaveBytes = SpeechAudioHelper.CreateWarmupCarrierWaveLike(waveBytes, OutputDeviceWarmupCarrierSeconds);
@@ -388,19 +601,20 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
             TryDeleteFile(outputFilePath);
 
             var primerSeconds = ResolvePiperPrimerSeconds(text, options);
+            var includeWarmupCarrier = options.UseFullPrimerWarmupCarrier;
             AppDiagnostics.Info(
                 "piper_primer_applied",
                 new Dictionary<string, string?>
                 {
                     ["primerSeconds"] = primerSeconds.ToString("0.00", CultureInfo.InvariantCulture),
-                    ["primerWarmupCarrier"] = "true",
-                    ["primerWarmupMode"] = "full_carrier",
+                    ["primerWarmupCarrier"] = includeWarmupCarrier.ToString(),
+                    ["primerWarmupMode"] = includeWarmupCarrier ? "full_carrier" : "silence_only",
                     ["textLength"] = text.Length.ToString(CultureInfo.InvariantCulture),
                     ["idleSinceLastPlaybackMs"] = _lastPlaybackCompletedUtc == DateTime.MinValue
                         ? "cold_start"
                         : Math.Max(0, (DateTime.UtcNow - _lastPlaybackCompletedUtc).TotalMilliseconds).ToString("0", CultureInfo.InvariantCulture)
                 });
-            return SpeechAudioHelper.PrependPrimerWave(waveBytes, primerSeconds, includeWarmupCarrier: true);
+            return SpeechAudioHelper.PrependPrimerWave(waveBytes, primerSeconds, includeWarmupCarrier);
         }
         catch
         {
@@ -436,6 +650,77 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
         }
     }
 
+    private async Task<byte[]> RenderWaveBytesIsolatedAsync(
+        string text,
+        SpeechOptions options,
+        PiperVoiceDefinition voice,
+        CancellationToken cancellationToken)
+    {
+        var outputFilePath = Path.Combine(Path.GetTempPath(), $"rightspeak-piper-prefetch-{Guid.NewGuid():N}.wav");
+        var arguments = BuildIsolatedRenderArguments(voice, MapLengthScale(options.Rate), outputFilePath);
+
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = _piperExecutablePath!,
+                Arguments = arguments,
+                RedirectStandardInput = true,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            }
+        };
+
+        try
+        {
+            if (!process.Start())
+            {
+                throw new InvalidOperationException("Piper prefetch process did not start.");
+            }
+
+            await process.StandardInput.WriteLineAsync(text).ConfigureAwait(false);
+            process.StandardInput.Close();
+
+            while (!process.HasExited)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await Task.Delay(25, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (process.ExitCode != 0)
+            {
+                var error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
+                throw new InvalidOperationException(string.IsNullOrWhiteSpace(error)
+                    ? $"Piper prefetch exited with code {process.ExitCode}."
+                    : error.Trim());
+            }
+
+            var waveBytes = await ReadWaveWithRetryAsync(outputFilePath, cancellationToken).ConfigureAwait(false);
+            var primerSeconds = ResolvePiperPrimerSeconds(text, options);
+            var includeWarmupCarrier = options.UseFullPrimerWarmupCarrier;
+            AppDiagnostics.Info(
+                "piper_prefetch_rendered",
+                new Dictionary<string, string?>
+                {
+                    ["textLength"] = text.Length.ToString(CultureInfo.InvariantCulture),
+                    ["primerSeconds"] = primerSeconds.ToString("0.00", CultureInfo.InvariantCulture),
+                    ["primerWarmupCarrier"] = includeWarmupCarrier.ToString()
+                });
+            return SpeechAudioHelper.PrependPrimerWave(waveBytes, primerSeconds, includeWarmupCarrier);
+        }
+        catch (OperationCanceledException)
+        {
+            TryKillProcess(process);
+            throw;
+        }
+        finally
+        {
+            TryDeleteFile(outputFilePath);
+        }
+    }
+
     private string BuildArguments(PiperVoiceDefinition voice, string outputDirectory, double lengthScale)
     {
         var arguments = new List<string>
@@ -444,6 +729,28 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
             QuoteArgument(voice.ModelPath),
             "--output_dir",
             QuoteArgument(outputDirectory),
+            "--length_scale",
+            lengthScale.ToString("0.00", CultureInfo.InvariantCulture),
+            "--quiet"
+        };
+
+        if (!string.IsNullOrWhiteSpace(voice.ConfigPath))
+        {
+            arguments.Add("--config");
+            arguments.Add(QuoteArgument(voice.ConfigPath));
+        }
+
+        return string.Join(" ", arguments);
+    }
+
+    private static string BuildIsolatedRenderArguments(PiperVoiceDefinition voice, double lengthScale, string outputFilePath)
+    {
+        var arguments = new List<string>
+        {
+            "--model",
+            QuoteArgument(voice.ModelPath),
+            "--output_file",
+            QuoteArgument(outputFilePath),
             "--length_scale",
             lengthScale.ToString("0.00", CultureInfo.InvariantCulture),
             "--quiet"
@@ -836,6 +1143,13 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
         _currentPiperProcess = null;
     }
 
+    private void CancelPrefetchUnsafe()
+    {
+        _prefetchCancellationTokenSource?.Cancel();
+        _prefetchCancellationTokenSource?.Dispose();
+        _prefetchCancellationTokenSource = null;
+    }
+
     private void CleanupPlaybackStateUnsafe()
     {
         _currentSoundPlayer?.Stop();
@@ -1005,8 +1319,7 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
             return text;
         }
 
-        var startsWithWordCharacter = char.IsLetterOrDigit(text[0]);
-        if (!startsWithWordCharacter)
+        if (text.StartsWith(LeadingTokenGuardPrefix, StringComparison.Ordinal))
         {
             return text;
         }

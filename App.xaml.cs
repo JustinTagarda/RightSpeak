@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Input;
 using RightSpeak.Interop;
 using RightSpeak.Services;
 using RightSpeak.ViewModels;
@@ -260,12 +261,14 @@ public partial class App : WpfApplication
             return;
         }
 
-        _ = ExecuteTrayFocusSensitiveReadAsync(() =>
+        _ = ExecuteTrayFocusSensitiveReadAsync("read_selected_text_external", "tray_menu", () =>
         {
             if (_mainViewModel?.ReadSelectedTextCommand.CanExecute(null) == true)
             {
-                _mainViewModel.ReadSelectedTextCommand.Execute(null);
+                return ExecuteCommandAsync(_mainViewModel.ReadSelectedTextCommand);
             }
+
+            return Task.CompletedTask;
         });
     }
 
@@ -276,12 +279,14 @@ public partial class App : WpfApplication
             return;
         }
 
-        _ = ExecuteTrayFocusSensitiveReadAsync(() =>
+        _ = ExecuteTrayFocusSensitiveReadAsync("read_paragraph_external", "tray_menu", () =>
         {
             if (_mainViewModel?.ReadParagraphCommand.CanExecute(null) == true)
             {
-                _mainViewModel.ReadParagraphCommand.Execute(null);
+                return ExecuteCommandAsync(_mainViewModel.ReadParagraphCommand);
             }
+
+            return Task.CompletedTask;
         });
     }
 
@@ -292,12 +297,14 @@ public partial class App : WpfApplication
             return;
         }
 
-        _ = ExecuteTrayFocusSensitiveReadAsync(() =>
+        _ = ExecuteTrayFocusSensitiveReadAsync("read_document_external", "tray_menu", () =>
         {
             if (_mainViewModel?.ReadDocumentCommand.CanExecute(null) == true)
             {
-                _mainViewModel.ReadDocumentCommand.Execute(null);
+                return ExecuteCommandAsync(_mainViewModel.ReadDocumentCommand);
             }
+
+            return Task.CompletedTask;
         });
     }
 
@@ -397,8 +404,16 @@ public partial class App : WpfApplication
             _trayService.HasExternalForegroundWindow);
     }
 
-    private async Task ExecuteTrayFocusSensitiveReadAsync(Action executeCommand)
+    private async Task ExecuteTrayFocusSensitiveReadAsync(string workflowName, string trigger, Func<Task> executeCommandAsync)
     {
+        var operationId = Guid.NewGuid().ToString("N");
+        using var scope = AppDiagnostics.BeginScope(new Dictionary<string, string?>
+        {
+            ["operationId"] = operationId,
+            ["workflow"] = workflowName,
+            ["trigger"] = trigger
+        });
+
         var stopwatch = Stopwatch.StartNew();
         AppDiagnostics.Info("focused_read_focus_restore_started");
 
@@ -428,6 +443,28 @@ public partial class App : WpfApplication
             {
                 ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
             });
-        await Dispatcher.InvokeAsync(executeCommand);
+
+        var commandStopwatch = Stopwatch.StartNew();
+        var commandOperation = Dispatcher.InvokeAsync(executeCommandAsync);
+        var commandTask = await commandOperation.Task.ConfigureAwait(false);
+        await commandTask.ConfigureAwait(false);
+        commandStopwatch.Stop();
+        AppDiagnostics.Info(
+            "focused_read_command_dispatched",
+            new Dictionary<string, string?>
+            {
+                ["elapsedMs"] = commandStopwatch.ElapsedMilliseconds.ToString()
+            });
+    }
+
+    private static Task ExecuteCommandAsync(ICommand command)
+    {
+        if (command is AsyncCommand asyncCommand)
+        {
+            return asyncCommand.ExecuteAsync();
+        }
+
+        command.Execute(null);
+        return Task.CompletedTask;
     }
 }

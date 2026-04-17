@@ -2,12 +2,13 @@ namespace RightSpeak.Models;
 
 public sealed class TextRetrievalResult
 {
-    private TextRetrievalResult(bool success, string? text, TextRetrievalSource? source, string message)
+    private TextRetrievalResult(bool success, string? text, TextRetrievalSource? source, string message, bool shouldRetry)
     {
         Success = success;
         Text = text;
         Source = source;
         Message = message;
+        ShouldRetry = shouldRetry;
     }
 
     public bool Success { get; }
@@ -18,13 +19,25 @@ public sealed class TextRetrievalResult
 
     public string Message { get; }
 
-    public static TextRetrievalResult Retrieved(string text, TextRetrievalSource source, string message)
+    public bool ShouldRetry { get; }
+
+    public static TextRetrievalResult Retrieved(string text, TextRetrievalSource source, string message, bool shouldRetry = false)
     {
-        return new TextRetrievalResult(true, text, source, message);
+        return new TextRetrievalResult(true, text, source, message, shouldRetry);
     }
 
-    public static TextRetrievalResult Failed(string message, TextRetrievalSource? source = null)
+    public static TextRetrievalResult Failed(string message, TextRetrievalSource? source = null, bool shouldRetry = false)
     {
-        return new TextRetrievalResult(false, null, source, message);
+        return new TextRetrievalResult(false, null, source, message, shouldRetry);
+    }
+
+    public TextRetrievalResult WithRetrySuggested(bool shouldRetry)
+    {
+        if (ShouldRetry == shouldRetry)
+        {
+            return this;
+        }
+
+        return new TextRetrievalResult(Success, Text, Source, Message, shouldRetry);
     }
 }
