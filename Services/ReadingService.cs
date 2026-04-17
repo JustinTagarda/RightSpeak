@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -96,14 +97,64 @@ public sealed class ReadingService : IReadingService
 
     public async Task<SpeechResult> ReadSelectedTextAsync(CancellationToken cancellationToken = default)
     {
+        var operationId = Guid.NewGuid().ToString("N");
+        var readStopwatch = Stopwatch.StartNew();
+        AppDiagnostics.Info(
+            "focused_read_selected_started",
+            new Dictionary<string, string?>
+            {
+                ["operationId"] = operationId,
+                ["voice"] = _settingsService.Current.VoiceName,
+                ["rate"] = _settingsService.Current.SpeechRate.ToString()
+            });
+
+        var retrievalStopwatch = Stopwatch.StartNew();
         var retrieval = await _selectedTextRetrievalService.RetrieveSelectedTextAsync(cancellationToken).ConfigureAwait(false);
+        retrievalStopwatch.Stop();
+        AppDiagnostics.Info(
+            "focused_read_selected_retrieval_result",
+            new Dictionary<string, string?>
+            {
+                ["operationId"] = operationId,
+                ["success"] = retrieval.Success.ToString(),
+                ["source"] = retrieval.Source?.ToString(),
+                ["message"] = retrieval.Message,
+                ["textLength"] = retrieval.Text?.Length.ToString(),
+                ["textPreview"] = BuildPreview(retrieval.Text),
+                ["elapsedMs"] = retrievalStopwatch.ElapsedMilliseconds.ToString()
+            });
+
         if (!retrieval.Success || string.IsNullOrWhiteSpace(retrieval.Text))
         {
+            readStopwatch.Stop();
+            AppDiagnostics.Warn(
+                "focused_read_selected_failed_before_speech",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["reason"] = retrieval.Message,
+                    ["totalElapsedMs"] = readStopwatch.ElapsedMilliseconds.ToString()
+                });
             return SpeechResult.Failed(BuildSelectedTextFailureMessage());
         }
 
         var request = BuildRequest(retrieval.Text);
+        var speechStopwatch = Stopwatch.StartNew();
         var speechResult = await _speechService.SpeakAsync(request, cancellationToken).ConfigureAwait(false);
+        speechStopwatch.Stop();
+        readStopwatch.Stop();
+        AppDiagnostics.Info(
+            "focused_read_selected_speech_result",
+            new Dictionary<string, string?>
+            {
+                ["operationId"] = operationId,
+                ["success"] = speechResult.Success.ToString(),
+                ["cancelled"] = speechResult.WasCancelled.ToString(),
+                ["message"] = speechResult.Message,
+                ["speechElapsedMs"] = speechStopwatch.ElapsedMilliseconds.ToString(),
+                ["totalElapsedMs"] = readStopwatch.ElapsedMilliseconds.ToString()
+            });
+
         if (!speechResult.Success || speechResult.WasCancelled)
         {
             return speechResult;
@@ -119,19 +170,66 @@ public sealed class ReadingService : IReadingService
 
     public async Task<SpeechResult> ReadParagraphAsync(CancellationToken cancellationToken = default)
     {
+        var readStopwatch = Stopwatch.StartNew();
+        AppDiagnostics.Info(
+            "focused_read_paragraph_started",
+            new Dictionary<string, string?>
+            {
+                ["voice"] = _settingsService.Current.VoiceName,
+                ["rate"] = _settingsService.Current.SpeechRate.ToString()
+            });
+
+        var retrievalStopwatch = Stopwatch.StartNew();
         var retrieval = await _paragraphTextRetrievalService.RetrieveParagraphTextAsync(cancellationToken).ConfigureAwait(false);
+        var retried = false;
         if ((!retrieval.Success || string.IsNullOrWhiteSpace(retrieval.Text)) && ShouldRetryParagraphRetrieval(retrieval))
         {
+            retried = true;
             await Task.Delay(220, cancellationToken).ConfigureAwait(false);
             retrieval = await _paragraphTextRetrievalService.RetrieveParagraphTextAsync(cancellationToken).ConfigureAwait(false);
         }
+        retrievalStopwatch.Stop();
+        AppDiagnostics.Info(
+            "focused_read_paragraph_retrieval_result",
+            new Dictionary<string, string?>
+            {
+                ["success"] = retrieval.Success.ToString(),
+                ["source"] = retrieval.Source?.ToString(),
+                ["message"] = retrieval.Message,
+                ["textLength"] = retrieval.Text?.Length.ToString(),
+                ["retried"] = retried.ToString(),
+                ["elapsedMs"] = retrievalStopwatch.ElapsedMilliseconds.ToString()
+            });
 
         if (!retrieval.Success || string.IsNullOrWhiteSpace(retrieval.Text))
         {
+            readStopwatch.Stop();
+            AppDiagnostics.Warn(
+                "focused_read_paragraph_failed_before_speech",
+                new Dictionary<string, string?>
+                {
+                    ["reason"] = retrieval.Message,
+                    ["retried"] = retried.ToString(),
+                    ["totalElapsedMs"] = readStopwatch.ElapsedMilliseconds.ToString()
+                });
             return SpeechResult.Failed(BuildParagraphFailureMessage());
         }
 
+        var speechStopwatch = Stopwatch.StartNew();
         var speechResult = await SpeakTextWithChunkingAsync(retrieval.Text, cancellationToken).ConfigureAwait(false);
+        speechStopwatch.Stop();
+        readStopwatch.Stop();
+        AppDiagnostics.Info(
+            "focused_read_paragraph_speech_result",
+            new Dictionary<string, string?>
+            {
+                ["success"] = speechResult.Success.ToString(),
+                ["cancelled"] = speechResult.WasCancelled.ToString(),
+                ["message"] = speechResult.Message,
+                ["speechElapsedMs"] = speechStopwatch.ElapsedMilliseconds.ToString(),
+                ["totalElapsedMs"] = readStopwatch.ElapsedMilliseconds.ToString()
+            });
+
         if (!speechResult.Success || speechResult.WasCancelled)
         {
             return speechResult;
@@ -142,13 +240,57 @@ public sealed class ReadingService : IReadingService
 
     public async Task<SpeechResult> ReadDocumentAsync(CancellationToken cancellationToken = default)
     {
+        var readStopwatch = Stopwatch.StartNew();
+        AppDiagnostics.Info(
+            "focused_read_document_started",
+            new Dictionary<string, string?>
+            {
+                ["voice"] = _settingsService.Current.VoiceName,
+                ["rate"] = _settingsService.Current.SpeechRate.ToString()
+            });
+
+        var retrievalStopwatch = Stopwatch.StartNew();
         var retrieval = await _documentTextRetrievalService.RetrieveDocumentTextAsync(cancellationToken).ConfigureAwait(false);
+        retrievalStopwatch.Stop();
+        AppDiagnostics.Info(
+            "focused_read_document_retrieval_result",
+            new Dictionary<string, string?>
+            {
+                ["success"] = retrieval.Success.ToString(),
+                ["source"] = retrieval.Source?.ToString(),
+                ["message"] = retrieval.Message,
+                ["textLength"] = retrieval.Text?.Length.ToString(),
+                ["elapsedMs"] = retrievalStopwatch.ElapsedMilliseconds.ToString()
+            });
+
         if (!retrieval.Success || string.IsNullOrWhiteSpace(retrieval.Text))
         {
+            readStopwatch.Stop();
+            AppDiagnostics.Warn(
+                "focused_read_document_failed_before_speech",
+                new Dictionary<string, string?>
+                {
+                    ["reason"] = retrieval.Message,
+                    ["totalElapsedMs"] = readStopwatch.ElapsedMilliseconds.ToString()
+                });
             return SpeechResult.Failed(BuildDocumentFailureMessage());
         }
 
+        var speechStopwatch = Stopwatch.StartNew();
         var speechResult = await SpeakTextWithChunkingAsync(retrieval.Text, cancellationToken).ConfigureAwait(false);
+        speechStopwatch.Stop();
+        readStopwatch.Stop();
+        AppDiagnostics.Info(
+            "focused_read_document_speech_result",
+            new Dictionary<string, string?>
+            {
+                ["success"] = speechResult.Success.ToString(),
+                ["cancelled"] = speechResult.WasCancelled.ToString(),
+                ["message"] = speechResult.Message,
+                ["speechElapsedMs"] = speechStopwatch.ElapsedMilliseconds.ToString(),
+                ["totalElapsedMs"] = readStopwatch.ElapsedMilliseconds.ToString()
+            });
+
         if (!speechResult.Success || speechResult.WasCancelled)
         {
             return speechResult;
@@ -395,6 +537,20 @@ public sealed class ReadingService : IReadingService
     private static string BuildSelectedTextFailureMessage()
     {
         return "Couldn't read the selected text. Select the text in the other app, then try again.";
+    }
+
+    private static string? BuildPreview(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        var normalized = text
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Trim();
+        return normalized.Length <= 180 ? normalized : normalized[..180];
     }
 
     private static string BuildParagraphFailureMessage()

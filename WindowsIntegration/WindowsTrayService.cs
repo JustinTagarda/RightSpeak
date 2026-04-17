@@ -33,7 +33,9 @@ public sealed class WindowsTrayService : ITrayService
     private WindowFocusInterop.WinEventProc? _foregroundChangedCallback;
     private nint _foregroundChangedHook;
     private nint _lastExternalForegroundWindow;
+    private nint _lastObservedForegroundWindow;
     private string _currentForegroundWindowTitle = "Current app";
+    private bool _hasExternalForegroundWindow;
     private bool _isContextMenuOpen;
     private bool _disposed;
 
@@ -46,6 +48,7 @@ public sealed class WindowsTrayService : ITrayService
     public event EventHandler? ForegroundWindowChanged;
 
     public string CurrentForegroundWindowTitle => _currentForegroundWindowTitle;
+    public bool HasExternalForegroundWindow => _hasExternalForegroundWindow;
 
     public void Initialize()
     {
@@ -168,6 +171,15 @@ public sealed class WindowsTrayService : ITrayService
             return false;
         }
 
+        if (!TryValidateRememberedExternalWindow(_lastExternalForegroundWindow, out var validationReason))
+        {
+            ClearRememberedExternalTarget(validationReason ?? "validation_failed_before_restore");
+            AppDiagnostics.Warn("tray_restore_skipped_invalid_target");
+            return false;
+        }
+
+        var stopwatch = Stopwatch.StartNew();
+        var activationAttempts = 0;
         var deadlineUtc = DateTime.UtcNow.AddMilliseconds(FocusRestoreTimeoutMilliseconds);
         var nextActivationUtc = DateTime.UtcNow;
         while (DateTime.UtcNow < deadlineUtc)
@@ -175,6 +187,11 @@ public sealed class WindowsTrayService : ITrayService
             var currentForeground = WindowFocusInterop.GetForegroundWindow();
             if (currentForeground == _lastExternalForegroundWindow)
             {
+                stopwatch.Stop();
+                var successData = BuildWindowDiagnostics("target", _lastExternalForegroundWindow);
+                successData["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString();
+                successData["activationAttempts"] = activationAttempts.ToString();
+                AppDiagnostics.Info("tray_restore_succeeded", successData);
                 return true;
             }
 
@@ -182,6 +199,7 @@ public sealed class WindowsTrayService : ITrayService
             if (nowUtc >= nextActivationUtc)
             {
                 WindowFocusInterop.TryActivateWindow(_lastExternalForegroundWindow);
+                activationAttempts++;
                 nextActivationUtc = nowUtc.AddMilliseconds(FocusRestoreReactivationIntervalMilliseconds);
             }
 
@@ -195,6 +213,9 @@ public sealed class WindowsTrayService : ITrayService
             failureData[pair.Key] = pair.Value;
         }
 
+        stopwatch.Stop();
+        failureData["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString();
+        failureData["activationAttempts"] = activationAttempts.ToString();
         AppDiagnostics.Warn("tray_restore_failed", failureData);
         return finalForeground == _lastExternalForegroundWindow;
     }
@@ -230,19 +251,47 @@ public sealed class WindowsTrayService : ITrayService
 
     private void CaptureExternalForegroundWindow(nint foregroundWindow)
     {
+        var shouldLogProbe = foregroundWindow != _lastObservedForegroundWindow;
+        _lastObservedForegroundWindow = foregroundWindow;
+
         if (foregroundWindow == nint.Zero)
         {
+            if (shouldLogProbe)
+            {
+                AppDiagnostics.Info(
+                    "foreground_probe",
+                    new Dictionary<string, string?>
+                    {
+                        ["classification"] = "none",
+                        ["reason"] = "foreground_window_zero",
+                        ["hwnd"] = "0x0"
+                    });
+            }
             return;
         }
 
         WindowFocusInterop.GetWindowThreadProcessId(foregroundWindow, out var processId);
         if (processId == 0 || processId == Environment.ProcessId)
         {
+            if (shouldLogProbe)
+            {
+                var probeData = BuildWindowDiagnostics("window", foregroundWindow);
+                probeData["classification"] = "self_or_invalid";
+                probeData["reason"] = processId == 0 ? "process_id_zero" : "same_process";
+                AppDiagnostics.Info("foreground_probe", probeData);
+            }
             return;
         }
 
         if (IsIgnoredForegroundWindowClass(foregroundWindow))
         {
+            if (shouldLogProbe)
+            {
+                var probeData = BuildWindowDiagnostics("window", foregroundWindow);
+                probeData["classification"] = "ignored_shell_window";
+                probeData["reason"] = "ignored_foreground_class";
+                AppDiagnostics.Info("foreground_probe", probeData);
+            }
             return;
         }
 
@@ -252,14 +301,93 @@ public sealed class WindowsTrayService : ITrayService
             title = "Current app";
         }
 
-        var titleChanged = !string.Equals(title, _currentForegroundWindowTitle, StringComparison.Ordinal);
-        if (titleChanged)
+        if (shouldLogProbe)
         {
-            _currentForegroundWindowTitle = title;
-            ForegroundWindowChanged?.Invoke(this, EventArgs.Empty);
+            var probeData = BuildWindowDiagnostics("window", foregroundWindow);
+            probeData["classification"] = "external";
+            probeData["reason"] = "accepted_external_window";
+            AppDiagnostics.Info("foreground_probe", probeData);
         }
 
+        SetForegroundWindowState(title, hasExternalForegroundWindow: true);
         _lastExternalForegroundWindow = foregroundWindow;
+    }
+
+    private bool TryValidateRememberedExternalWindow(nint windowHandle, out string? reason)
+    {
+        reason = null;
+        if (windowHandle == nint.Zero)
+        {
+            reason = "target_hwnd_zero";
+            return false;
+        }
+
+        WindowFocusInterop.GetWindowThreadProcessId(windowHandle, out var processId);
+        if (processId == 0)
+        {
+            reason = "target_process_id_zero";
+            return false;
+        }
+
+        if (processId == Environment.ProcessId)
+        {
+            reason = "target_same_process";
+            return false;
+        }
+
+        if (IsIgnoredForegroundWindowClass(windowHandle))
+        {
+            reason = "target_ignored_window_class";
+            return false;
+        }
+
+        return true;
+    }
+
+    private void ClearRememberedExternalTarget(string reason)
+    {
+        var previousTarget = _lastExternalForegroundWindow;
+        if (previousTarget != nint.Zero)
+        {
+            var validationData = BuildWindowDiagnostics("target", previousTarget);
+            validationData["reason"] = reason;
+            AppDiagnostics.Warn("target_validation_failed", validationData);
+        }
+
+        _lastExternalForegroundWindow = nint.Zero;
+        SetForegroundWindowState("Current app", hasExternalForegroundWindow: false);
+
+        var clearedData = previousTarget == nint.Zero
+            ? new Dictionary<string, string?>()
+            : BuildWindowDiagnostics("target", previousTarget);
+        clearedData["reason"] = reason;
+        AppDiagnostics.Warn("target_cleared_stale", clearedData);
+    }
+
+    private void SetForegroundWindowState(string title, bool hasExternalForegroundWindow)
+    {
+        var normalizedTitle = string.IsNullOrWhiteSpace(title) ? "Current app" : title;
+        var previousTitle = _currentForegroundWindowTitle;
+        var previousHasExternalForegroundWindow = _hasExternalForegroundWindow;
+        var titleChanged = !string.Equals(normalizedTitle, _currentForegroundWindowTitle, StringComparison.Ordinal);
+        var availabilityChanged = _hasExternalForegroundWindow != hasExternalForegroundWindow;
+        if (!titleChanged && !availabilityChanged)
+        {
+            return;
+        }
+
+        _currentForegroundWindowTitle = normalizedTitle;
+        _hasExternalForegroundWindow = hasExternalForegroundWindow;
+        AppDiagnostics.Info(
+            "foreground_state_changed",
+            new Dictionary<string, string?>
+            {
+                ["previousTitle"] = previousTitle,
+                ["newTitle"] = _currentForegroundWindowTitle,
+                ["previousHasExternalForegroundWindow"] = previousHasExternalForegroundWindow.ToString(),
+                ["hasExternalForegroundWindow"] = _hasExternalForegroundWindow.ToString()
+            });
+        ForegroundWindowChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void OnForegroundWindowChanged(

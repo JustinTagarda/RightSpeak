@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -31,8 +32,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _inputText = string.Empty;
     private string _statusMessage = "Select text in another app, then choose a read action.";
     private bool _isSpeaking;
-    private bool _isFocusedReadActive;
-    private bool _isTypedTextSpeaking;
+    private bool _isExternalReadActive;
+    private bool _isManualReadSpeaking;
+    private bool _hasExternalFocusedWindow;
     private bool _suppressHotkeyAutoApply;
     private string _focusedWindowText = "Current app";
     private string _hotkeyModifierWarningMessage = string.Empty;
@@ -76,7 +78,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         ReadCommand = new AsyncCommand(ReadAsync, CanRead);
         ClearCommand = new AsyncCommand(ClearAsync, CanClear);
-        PreviewVoiceCommand = new AsyncCommand(PreviewVoiceAsync, CanReadSelectedText);
+        PreviewVoiceCommand = new AsyncCommand(PreviewVoiceAsync, CanPreviewVoice);
         ReadSelectedTextCommand = new AsyncCommand(ReadSelectedTextAsync, CanReadSelectedText);
         ReadParagraphCommand = new AsyncCommand(ReadParagraphAsync, CanReadSelectedText);
         ReadDocumentCommand = new AsyncCommand(ReadDocumentAsync, CanReadSelectedText);
@@ -240,9 +242,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    public bool IsTypedTextSpeaking => _isTypedTextSpeaking;
-    public bool IsTypedTextEnabled => !_isFocusedReadActive;
-    public bool IsFocusedReadsEnabled => !_isTypedTextSpeaking;
+    public bool IsManualReadSpeaking => _isManualReadSpeaking;
+    public bool IsManualReadEnabled => !_isExternalReadActive;
+    public bool IsExternalReadsEnabled => !_isManualReadSpeaking && !_isSpeaking && _hasExternalFocusedWindow;
 
     public ICommand ReadCommand { get; }
     public ICommand ClearCommand { get; }
@@ -265,13 +267,24 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public void SetFocusedWindowText(string? text)
     {
-        if (string.IsNullOrWhiteSpace(text))
+        SetFocusedWindowContext(text, hasExternalFocusedWindow: !string.IsNullOrWhiteSpace(text));
+    }
+
+    public void SetFocusedWindowContext(string? text, bool hasExternalFocusedWindow)
+    {
+        var formatted = string.IsNullOrWhiteSpace(text)
+            ? "Current app"
+            : FormatFocusedWindowTitle(text.Trim());
+        FocusedWindowText = formatted;
+
+        if (_hasExternalFocusedWindow == hasExternalFocusedWindow)
         {
-            FocusedWindowText = "Current app";
             return;
         }
 
-        FocusedWindowText = FormatFocusedWindowTitle(text.Trim());
+        _hasExternalFocusedWindow = hasExternalFocusedWindow;
+        OnPropertyChanged(nameof(IsExternalReadsEnabled));
+        UpdateCommandStates();
     }
 
     private static string FormatFocusedWindowTitle(string title)
@@ -318,6 +331,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private bool CanReadSelectedText()
     {
+        return IsExternalReadsEnabled;
+    }
+
+    private bool CanPreviewVoice()
+    {
         return !_isSpeaking;
     }
 
@@ -335,8 +353,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
-        SetTypedTextSpeaking(true);
-        _isSpeaking = true;
+        SetManualReadSpeaking(true);
+        SetSpeakingState(true);
         UpdateCommandStates();
         StatusMessage = "Reading text...";
 
@@ -347,8 +365,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
         finally
         {
-            _isSpeaking = false;
-            SetTypedTextSpeaking(false);
+            SetSpeakingState(false);
+            SetManualReadSpeaking(false);
             UpdateCommandStates();
         }
     }
@@ -356,7 +374,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private Task ClearAsync()
     {
         InputText = string.Empty;
-        StatusMessage = "Typed text cleared.";
+        StatusMessage = "Manual text cleared.";
         return Task.CompletedTask;
     }
 
@@ -369,8 +387,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private async Task ReadSelectedTextAsync()
     {
-        SetFocusedReadActive(true);
-        _isSpeaking = true;
+        var operationId = Guid.NewGuid().ToString("N");
+        var stopwatch = Stopwatch.StartNew();
+        AppDiagnostics.Info(
+            "selected_workflow_command_started",
+            new Dictionary<string, string?>
+            {
+                ["operationId"] = operationId,
+                ["trigger"] = "read_selected_text_command",
+                ["hasExternalFocusedWindow"] = _hasExternalFocusedWindow.ToString(),
+                ["focusedWindowText"] = _focusedWindowText,
+                ["isManualReadSpeaking"] = _isManualReadSpeaking.ToString(),
+                ["isSpeaking"] = _isSpeaking.ToString()
+            });
+
+        SetExternalReadActive(true);
+        SetSpeakingState(true);
         UpdateCommandStates();
         StatusMessage = "Retrieving selected text...";
 
@@ -378,19 +410,55 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             var result = await _readingService.ReadSelectedTextAsync().ConfigureAwait(true);
             StatusMessage = result.Message;
+            stopwatch.Stop();
+            AppDiagnostics.Info(
+                "selected_workflow_command_completed",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["success"] = result.Success.ToString(),
+                    ["cancelled"] = result.WasCancelled.ToString(),
+                    ["message"] = result.Message,
+                    ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
+                });
+        }
+        catch (OperationCanceledException)
+        {
+            stopwatch.Stop();
+            AppDiagnostics.Warn(
+                "selected_workflow_command_cancelled",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
+                });
+            throw;
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            AppDiagnostics.Error(
+                "selected_workflow_command_failed",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["message"] = ex.Message,
+                    ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
+                });
+            throw;
         }
         finally
         {
-            _isSpeaking = false;
-            SetFocusedReadActive(false);
+            SetSpeakingState(false);
+            SetExternalReadActive(false);
             UpdateCommandStates();
         }
     }
 
     private async Task ReadParagraphAsync()
     {
-        SetFocusedReadActive(true);
-        _isSpeaking = true;
+        SetExternalReadActive(true);
+        SetSpeakingState(true);
         UpdateCommandStates();
         StatusMessage = "Retrieving paragraph...";
 
@@ -401,35 +469,28 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
         finally
         {
-            _isSpeaking = false;
-            SetFocusedReadActive(false);
+            SetSpeakingState(false);
+            SetExternalReadActive(false);
             UpdateCommandStates();
         }
     }
 
-    private async Task ReadDocumentAsync()
+    private Task ReadDocumentAsync()
     {
-        SetFocusedReadActive(true);
-        _isSpeaking = true;
-        UpdateCommandStates();
-        StatusMessage = "Retrieving document text...";
-
-        try
-        {
-            var result = await _readingService.ReadDocumentAsync().ConfigureAwait(true);
-            StatusMessage = result.Message;
-        }
-        finally
-        {
-            _isSpeaking = false;
-            SetFocusedReadActive(false);
-            UpdateCommandStates();
-        }
+        AppDiagnostics.Warn(
+            "focused_read_document_temporarily_disabled_pending_fix",
+            new Dictionary<string, string?>
+            {
+                ["focusedWindowText"] = _focusedWindowText,
+                ["reason"] = "external_read_document_unstable_pending_final_fix"
+            });
+        StatusMessage = "Read Document (external app) is temporarily disabled pending final fix.";
+        return Task.CompletedTask;
     }
 
     private async Task PreviewVoiceAsync()
     {
-        _isSpeaking = true;
+        SetSpeakingState(true);
         UpdateCommandStates();
         StatusMessage = "Previewing voice...";
 
@@ -440,7 +501,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
         finally
         {
-            _isSpeaking = false;
+            SetSpeakingState(false);
             UpdateCommandStates();
         }
     }
@@ -753,27 +814,38 @@ public sealed class MainViewModel : INotifyPropertyChanged
         };
     }
 
-    private void SetTypedTextSpeaking(bool isSpeaking)
+    private void SetManualReadSpeaking(bool isSpeaking)
     {
-        if (_isTypedTextSpeaking == isSpeaking)
+        if (_isManualReadSpeaking == isSpeaking)
         {
             return;
         }
 
-        _isTypedTextSpeaking = isSpeaking;
-        OnPropertyChanged(nameof(IsTypedTextSpeaking));
-        OnPropertyChanged(nameof(IsFocusedReadsEnabled));
+        _isManualReadSpeaking = isSpeaking;
+        OnPropertyChanged(nameof(IsManualReadSpeaking));
+        OnPropertyChanged(nameof(IsExternalReadsEnabled));
     }
 
-    private void SetFocusedReadActive(bool isActive)
+    private void SetSpeakingState(bool isSpeaking)
     {
-        if (_isFocusedReadActive == isActive)
+        if (_isSpeaking == isSpeaking)
         {
             return;
         }
 
-        _isFocusedReadActive = isActive;
-        OnPropertyChanged(nameof(IsTypedTextEnabled));
+        _isSpeaking = isSpeaking;
+        OnPropertyChanged(nameof(IsExternalReadsEnabled));
+    }
+
+    private void SetExternalReadActive(bool isActive)
+    {
+        if (_isExternalReadActive == isActive)
+        {
+            return;
+        }
+
+        _isExternalReadActive = isActive;
+        OnPropertyChanged(nameof(IsManualReadEnabled));
     }
 
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null)

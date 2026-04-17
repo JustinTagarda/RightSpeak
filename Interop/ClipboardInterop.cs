@@ -5,6 +5,7 @@ namespace RightSpeak.Interop;
 internal static class ClipboardInterop
 {
     public const byte VkControl = 0x11;
+    public const byte VkA = 0x41;
     public const byte VkC = 0x43;
     private const uint KeyEventfKeyUp = 0x0002;
 
@@ -22,6 +23,14 @@ internal static class ClipboardInterop
         keybd_event(VkControl, 0, 0, 0);
         keybd_event(VkC, 0, 0, 0);
         keybd_event(VkC, 0, KeyEventfKeyUp, 0);
+        keybd_event(VkControl, 0, KeyEventfKeyUp, 0);
+    }
+
+    public static void SendSelectAllShortcut()
+    {
+        keybd_event(VkControl, 0, 0, 0);
+        keybd_event(VkA, 0, 0, 0);
+        keybd_event(VkA, 0, KeyEventfKeyUp, 0);
         keybd_event(VkControl, 0, KeyEventfKeyUp, 0);
     }
 

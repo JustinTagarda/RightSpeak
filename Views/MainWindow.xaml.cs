@@ -104,6 +104,11 @@ public partial class MainWindow : Window
 
     private async void OnReadParagraphHotkeyPressed(object? sender, System.EventArgs e)
     {
+        if (!_viewModel.ReadParagraphCommand.CanExecute(null))
+        {
+            return;
+        }
+
         if (_executeFocusSensitiveReadAsync is not null)
         {
             await _executeFocusSensitiveReadAsync(ExecuteReadParagraph).ConfigureAwait(true);
@@ -115,6 +120,11 @@ public partial class MainWindow : Window
 
     private async void OnReadDocumentHotkeyPressed(object? sender, System.EventArgs e)
     {
+        if (!_viewModel.ReadDocumentCommand.CanExecute(null))
+        {
+            return;
+        }
+
         if (_executeFocusSensitiveReadAsync is not null)
         {
             await _executeFocusSensitiveReadAsync(ExecuteReadDocument).ConfigureAwait(true);
@@ -126,6 +136,11 @@ public partial class MainWindow : Window
 
     private async void OnReadParagraphButtonClick(object sender, RoutedEventArgs e)
     {
+        if (!_viewModel.ReadParagraphCommand.CanExecute(null))
+        {
+            return;
+        }
+
         if (_executeFocusSensitiveReadAsync is not null)
         {
             await _executeFocusSensitiveReadAsync(ExecuteReadParagraph).ConfigureAwait(true);
@@ -137,6 +152,11 @@ public partial class MainWindow : Window
 
     private async void OnReadSelectedTextButtonClick(object sender, RoutedEventArgs e)
     {
+        if (!_viewModel.ReadSelectedTextCommand.CanExecute(null))
+        {
+            return;
+        }
+
         if (_executeFocusSensitiveReadAsync is not null)
         {
             await _executeFocusSensitiveReadAsync(ExecuteReadSelectedText).ConfigureAwait(true);
@@ -148,6 +168,11 @@ public partial class MainWindow : Window
 
     private async void OnReadDocumentButtonClick(object sender, RoutedEventArgs e)
     {
+        if (!_viewModel.ReadDocumentCommand.CanExecute(null))
+        {
+            return;
+        }
+
         if (_executeFocusSensitiveReadAsync is not null)
         {
             await _executeFocusSensitiveReadAsync(ExecuteReadDocument).ConfigureAwait(true);

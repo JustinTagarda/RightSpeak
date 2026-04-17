@@ -16,4 +16,5 @@ public interface ITrayService : IDisposable
     void UpdateHotkeyHints(string modifierLabel, string readSelectedKey, string readParagraphKey, string readDocumentKey, string stopKey);
     bool TryRestoreLastExternalForegroundWindow();
     string CurrentForegroundWindowTitle { get; }
+    bool HasExternalForegroundWindow { get; }
 }

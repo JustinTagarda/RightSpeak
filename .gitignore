@@ -12,3 +12,7 @@ obj/
 
 # Logs
 *.log
+
+# Generated QA run outputs
+Resources/QA/Results/*.json
+Resources/QA/Results/*.md

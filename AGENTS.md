@@ -1,5 +1,11 @@
 # AGENTS.md
 
+## Inheritance Rule
+
+- Always read and follow [D:\Projects\AGENTS.md](D:\Projects\AGENTS.md) first.
+- Treat the global file as mandatory unless this file explicitly overrides it for RightSpeak-specific behavior.
+- If any instruction conflicts, the more specific RightSpeak rule wins, but the global file still applies everywhere else.
+
 ## Project Purpose
 RightSpeak is a Windows desktop utility built with WPF and .NET 10.
 Its core job is simple:
@@ -97,6 +103,11 @@ Validated reliability note:
 - The current local speech path includes a leading-silence mitigation in the Windows speech service because some Windows systems clip the beginning of each utterance.
 - Do not remove or reduce that mitigation without rerunning manual typed-text playback validation against repeated reads and confirming the opening words remain audible.
 
+Validated Piper manual-read start stability note:
+- A confirmed issue caused manual reads with Piper to start inconsistently and often skip the first word.
+- The fix depends on keeping the current Piper start-stability path (including warm-session handling and the leading-token guard workaround for susceptible short manual utterances).
+- Treat this behavior as fixed baseline and do not revise or simplify the underlying code path unless explicitly instructed.
+
 Validated voice-default semantics rule:
 - In the voice selector, the `System default` option must always mean the Windows OS/engine default voice (for example OneCore/System.Speech defaults), not an app-preferred voice and not Piper.
 - Do not route `System default` to Piper when Windows engine defaults are available.
@@ -142,6 +153,15 @@ Validated selected-text scope reliability notes:
 - For selected-text commands, do not use full control/document value as a success path.
 - If selection is unavailable through focused-control UI Automation patterns, the provider must fail so later fallback strategies (including clipboard) can run.
 - Do not restore document-wide fallback inside selected-text providers without rerunning VS Code selected-text tests for both hotkey and tray paths.
+
+Validated selected-text cross-app reliability note (fixed baseline):
+- A confirmed issue occurred in browser PDF selected-text reads where long highlighted selections were spoken as only the first line/fragment.
+- The fixed behavior depends on the following combined path:
+  - browser-PDF UI Automation/focused-control selected-text providers must defer to clipboard fallback because browser PDF text-pattern selection is frequently partial;
+  - clipboard selected-text capture for browser-PDF context must keep the PDF-specific stabilization/retry path (multi-cycle copy attempts plus settle-window upgrade);
+  - Piper selected-text input must be normalized to a single-line payload before synthesis so multiline clipboard text is not truncated by line-based stdin handling.
+- Treat this selected-text behavior as fixed baseline for "Read Selected Text from other apps."
+- Do not revise, simplify, or bypass this path (provider deferral rules, clipboard PDF stabilization, or Piper single-line normalization) unless explicitly instructed.
 
 ### Global Hotkeys
 Global hotkeys are a first-class feature.
@@ -242,129 +262,6 @@ As the codebase grows, it should be easy to split into:
 - `RightSpeak.Tests`
 
 Do not split into separate projects until the boundaries are real and useful.
-
----
-
-## Engineering Rules
-1. Do not guess. Inspect the actual codebase first.
-2. Preserve working behavior.
-3. Keep changes scoped.
-4. Do not do broad cosmetic rewrites unless requested.
-5. Ship complete runnable code, not pseudo-code.
-6. Prefer explicit names and simple flow.
-7. Avoid premature abstraction.
-8. Add comments only when behavior is non-obvious, Windows-specific, or error-prone.
-
-Code style defaults:
-- prefer readability over cleverness
-- use small focused methods
-- keep nullable reference types enabled
-- use `async` and `await` correctly
-- do not block the UI thread
-- avoid `async void` except real event handlers
-- do not swallow exceptions silently
-
----
-
-## Dependency Rules
-Keep the app lean.
-
-Before adding a package, ask:
-1. is it truly needed
-2. can built-in .NET or Windows functionality do the job
-3. does it create long-term maintenance cost
-
-Do not add heavy frameworks for MVVM, DI, messaging, or logging unless there is a clear project need.
-
----
-
-## Logging and Diagnostics
-Use minimal structured logging where it helps diagnose:
-- selection retrieval failures
-- missing UI Automation patterns
-- clipboard fallback usage
-- speech engine initialization failures
-- hotkey registration failures
-
-Do not spam logs during normal interaction.
-If logging is added, prefer a clear abstraction over scattered debug output.
-
-Current stabilization rule:
-- Keep the current reduced JSON diagnostics in place while non-production bug fixing is ongoing.
-- Do not fully remove diagnostics until all known bugs are fixed and the build is explicitly being prepared for production shipment.
-
----
-
-## Testing Guidance
-Unit test what is practical.
-
-Good candidates:
-- speech request composition
-- settings validation
-- orchestration logic
-- fallback decision flow
-- queue or history logic if added
-
-Do not over-promise unit coverage for deep Windows integration.
-Keep Windows-specific code isolated enough for manual testing and targeted integration testing.
-
----
-
-## Task Guidance For Agents
-
-### When starting work
-1. read the relevant files first
-2. understand the current behavior
-3. choose the smallest correct change
-4. implement the full solution
-5. verify side effects
-
-### When fixing a bug
-1. identify the real cause
-2. avoid speculative fixes
-3. explain the actual issue briefly
-4. apply the smallest complete correction
-5. watch for regressions
-
-### When adding a feature
-1. fit it into the current architecture
-2. avoid shortcuts that block future growth
-3. keep Windows-specific behavior isolated
-4. preserve MVP simplicity
-5. add extension points only when justified
-
-### When improving UI
-- preserve the existing control set by default
-- do not remove, merge, hide, repurpose, or significantly downgrade existing controls during UI improvements or optimizations unless the user clearly requested that outcome
-- if a control must be removed or materially changed to complete the task, stop first, explain exactly what would be removed or changed, why it is necessary, what behavior or access would be lost or replaced, and wait for explicit user confirmation before making that edit
-- keep the interface lightweight
-- prefer utility over visual flourish
-- keep keyboard accessibility where practical
-- do not redesign the entire application unless asked
-
----
-
-## What To Avoid
-- do not migrate away from WPF without request
-- do not hardwire Windows interop into view models
-- do not assume right-click integration works everywhere
-- do not overwrite the clipboard carelessly
-- do not add cloud AI dependencies for core speech
-- do not introduce broad architectural churn
-- do not silently remove or downgrade UI controls during UI cleanup, redesign, or optimization work
-- do not rewrite unrelated files
-- do not remove code or comments unless you are confident they are obsolete
-
----
-
-## Definition Of Done
-A task is not done unless:
-- the code builds
-- the change fits the project structure
-- there is no obvious dead code left behind
-- user-facing behavior is sensible
-- failure cases are handled reasonably
-- the implementation remains maintainable
 
 ---
 

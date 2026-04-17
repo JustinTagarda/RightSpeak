@@ -9,6 +9,8 @@ internal static class SpeechAudioHelper
     // each utterance. This leading silence is intentional and must not be removed
     // without repeated manual playback regression testing.
     private const double DefaultLeadingSilenceSeconds = 0.85;
+    private const double WarmupCarrierFrequencyHz = 220.0;
+    private const double WarmupCarrierAmplitudeNormalized = 0.0080;
 
     public static byte[] PrependPrimerWave(byte[] speechWaveBytes)
     {
@@ -17,20 +19,25 @@ internal static class SpeechAudioHelper
 
     public static byte[] PrependPrimerWave(byte[] speechWaveBytes, double leadingSilenceSeconds)
     {
+        return PrependPrimerWave(speechWaveBytes, leadingSilenceSeconds, includeWarmupCarrier: false);
+    }
+
+    public static byte[] PrependPrimerWave(byte[] speechWaveBytes, double leadingSilenceSeconds, bool includeWarmupCarrier)
+    {
         if (!TryReadWave(speechWaveBytes, out var format, out var speechPcmBytes))
         {
             return speechWaveBytes;
         }
 
-        var leadingSilencePcmBytes = BuildLeadingSilencePcm(format, leadingSilenceSeconds);
-        if (leadingSilencePcmBytes.Length == 0)
+        var leadingPrimerPcmBytes = BuildLeadingPrimerPcm(format, leadingSilenceSeconds, includeWarmupCarrier);
+        if (leadingPrimerPcmBytes.Length == 0)
         {
             return speechWaveBytes;
         }
 
-        var combinedPcmBytes = new byte[leadingSilencePcmBytes.Length + speechPcmBytes.Length];
-        Buffer.BlockCopy(leadingSilencePcmBytes, 0, combinedPcmBytes, 0, leadingSilencePcmBytes.Length);
-        Buffer.BlockCopy(speechPcmBytes, 0, combinedPcmBytes, leadingSilencePcmBytes.Length, speechPcmBytes.Length);
+        var combinedPcmBytes = new byte[leadingPrimerPcmBytes.Length + speechPcmBytes.Length];
+        Buffer.BlockCopy(leadingPrimerPcmBytes, 0, combinedPcmBytes, 0, leadingPrimerPcmBytes.Length);
+        Buffer.BlockCopy(speechPcmBytes, 0, combinedPcmBytes, leadingPrimerPcmBytes.Length, speechPcmBytes.Length);
         return BuildWave(format, combinedPcmBytes);
     }
 
@@ -45,6 +52,38 @@ internal static class SpeechAudioHelper
         }
 
         return TimeSpan.FromSeconds(2);
+    }
+
+    public static byte[] CreateSilenceWaveLike(byte[] referenceWaveBytes, double silenceSeconds)
+    {
+        if (!TryReadWave(referenceWaveBytes, out var format, out _))
+        {
+            return Array.Empty<byte>();
+        }
+
+        var silencePcm = BuildLeadingSilencePcm(format, silenceSeconds);
+        if (silencePcm.Length == 0)
+        {
+            return Array.Empty<byte>();
+        }
+
+        return BuildWave(format, silencePcm);
+    }
+
+    public static byte[] CreateWarmupCarrierWaveLike(byte[] referenceWaveBytes, double carrierSeconds)
+    {
+        if (!TryReadWave(referenceWaveBytes, out var format, out _))
+        {
+            return Array.Empty<byte>();
+        }
+
+        var carrierPcm = BuildWarmupCarrierPcm(format, carrierSeconds);
+        if (carrierPcm.Length == 0)
+        {
+            return Array.Empty<byte>();
+        }
+
+        return BuildWave(format, carrierPcm);
     }
 
     private static bool TryReadWave(byte[] waveBytes, out WaveFormat format, out byte[] pcmBytes)
@@ -115,6 +154,18 @@ internal static class SpeechAudioHelper
         }
     }
 
+    private static byte[] BuildLeadingPrimerPcm(WaveFormat format, double leadingSilenceSeconds, bool includeWarmupCarrier)
+    {
+        if (!includeWarmupCarrier)
+        {
+            return BuildLeadingSilencePcm(format, leadingSilenceSeconds);
+        }
+
+        // Keep a low-level non-silent carrier across the entire primer window to
+        // avoid endpoint/silence trimming paths that can still consume first words.
+        return BuildWarmupCarrierPcm(format, leadingSilenceSeconds);
+    }
+
     private static byte[] BuildLeadingSilencePcm(WaveFormat format, double leadingSilenceSeconds)
     {
         if (leadingSilenceSeconds <= 0 ||
@@ -127,6 +178,86 @@ internal static class SpeechAudioHelper
 
         var sampleCount = (int)Math.Ceiling(format.SampleRate * leadingSilenceSeconds);
         return new byte[sampleCount * format.BlockAlign];
+    }
+
+    private static byte[] BuildWarmupCarrierPcm(WaveFormat format, double warmupSeconds)
+    {
+        if (warmupSeconds <= 0 ||
+            format.AudioFormat != 1 ||
+            format.BlockAlign <= 0 ||
+            format.SampleRate <= 0 ||
+            format.ChannelCount <= 0)
+        {
+            return Array.Empty<byte>();
+        }
+
+        var sampleCount = (int)Math.Ceiling(format.SampleRate * warmupSeconds);
+        if (sampleCount <= 0)
+        {
+            return Array.Empty<byte>();
+        }
+
+        var bytes = new byte[sampleCount * format.BlockAlign];
+        var bytesPerSample = format.BitsPerSample / 8;
+        if (bytesPerSample <= 0)
+        {
+            return Array.Empty<byte>();
+        }
+
+        for (var sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++)
+        {
+            var progress = sampleCount == 1 ? 1.0 : (double)sampleIndex / (sampleCount - 1);
+            var envelope = Math.Pow(1.0 - progress, 0.75);
+            var waveform = Math.Sin((2 * Math.PI * WarmupCarrierFrequencyHz * sampleIndex / format.SampleRate) + (Math.PI / 2.0));
+            var normalized = waveform * WarmupCarrierAmplitudeNormalized * envelope;
+
+            for (var channel = 0; channel < format.ChannelCount; channel++)
+            {
+                var baseOffset = (sampleIndex * format.BlockAlign) + (channel * bytesPerSample);
+                WritePcmSample(bytes, baseOffset, format.BitsPerSample, normalized);
+            }
+        }
+
+        return bytes;
+    }
+
+    private static void WritePcmSample(byte[] destination, int offset, short bitsPerSample, double normalized)
+    {
+        normalized = Math.Clamp(normalized, -1.0, 1.0);
+
+        switch (bitsPerSample)
+        {
+            case 8:
+            {
+                var value = 128 + (int)Math.Round(normalized * 127.0);
+                destination[offset] = (byte)Math.Clamp(value, 0, 255);
+                return;
+            }
+            case 16:
+            {
+                var value = (short)Math.Round(normalized * short.MaxValue);
+                destination[offset] = (byte)(value & 0xFF);
+                destination[offset + 1] = (byte)((value >> 8) & 0xFF);
+                return;
+            }
+            case 24:
+            {
+                var value = (int)Math.Round(normalized * 8388607.0);
+                destination[offset] = (byte)(value & 0xFF);
+                destination[offset + 1] = (byte)((value >> 8) & 0xFF);
+                destination[offset + 2] = (byte)((value >> 16) & 0xFF);
+                return;
+            }
+            case 32:
+            {
+                var value = (int)Math.Round(normalized * int.MaxValue);
+                destination[offset] = (byte)(value & 0xFF);
+                destination[offset + 1] = (byte)((value >> 8) & 0xFF);
+                destination[offset + 2] = (byte)((value >> 16) & 0xFF);
+                destination[offset + 3] = (byte)((value >> 24) & 0xFF);
+                return;
+            }
+        }
     }
 
     private static byte[] BuildWave(WaveFormat format, byte[] pcmBytes)

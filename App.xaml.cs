@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -70,7 +71,8 @@ public partial class App : WpfApplication
         var documentTextRetrievalService = new DocumentTextRetrievalService(
             new List<IDocumentTextProvider>
             {
-                new FocusedControlDocumentTextProvider()
+                new FocusedControlDocumentTextProvider(),
+                new ClipboardDocumentTextProvider()
             });
         _readingService = new ReadingService(
             _speechService,
@@ -253,6 +255,11 @@ public partial class App : WpfApplication
 
     private void OnTrayReadSelectedRequested(object? sender, EventArgs e)
     {
+        if (_mainViewModel?.ReadSelectedTextCommand.CanExecute(null) != true)
+        {
+            return;
+        }
+
         _ = ExecuteTrayFocusSensitiveReadAsync(() =>
         {
             if (_mainViewModel?.ReadSelectedTextCommand.CanExecute(null) == true)
@@ -264,6 +271,11 @@ public partial class App : WpfApplication
 
     private void OnTrayReadParagraphRequested(object? sender, EventArgs e)
     {
+        if (_mainViewModel?.ReadParagraphCommand.CanExecute(null) != true)
+        {
+            return;
+        }
+
         _ = ExecuteTrayFocusSensitiveReadAsync(() =>
         {
             if (_mainViewModel?.ReadParagraphCommand.CanExecute(null) == true)
@@ -275,6 +287,11 @@ public partial class App : WpfApplication
 
     private void OnTrayReadDocumentRequested(object? sender, EventArgs e)
     {
+        if (_mainViewModel?.ReadDocumentCommand.CanExecute(null) != true)
+        {
+            return;
+        }
+
         _ = ExecuteTrayFocusSensitiveReadAsync(() =>
         {
             if (_mainViewModel?.ReadDocumentCommand.CanExecute(null) == true)
@@ -375,16 +392,28 @@ public partial class App : WpfApplication
             return;
         }
 
-        _mainViewModel.SetFocusedWindowText(_trayService.CurrentForegroundWindowTitle);
+        _mainViewModel.SetFocusedWindowContext(
+            _trayService.CurrentForegroundWindowTitle,
+            _trayService.HasExternalForegroundWindow);
     }
 
     private async Task ExecuteTrayFocusSensitiveReadAsync(Action executeCommand)
     {
+        var stopwatch = Stopwatch.StartNew();
+        AppDiagnostics.Info("focused_read_focus_restore_started");
+
         if (_trayService is not null)
         {
             var restored = _trayService.TryRestoreLastExternalForegroundWindow();
             if (!restored)
             {
+                stopwatch.Stop();
+                AppDiagnostics.Warn(
+                    "focused_read_focus_restore_failed",
+                    new Dictionary<string, string?>
+                    {
+                        ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
+                    });
                 await Dispatcher.InvokeAsync(() =>
                     _mainViewModel?.SetStatusMessage("Couldn't switch back to the other app. Click that app first, then try again."));
                 AppDiagnostics.Warn("tray_focus_read_aborted_restore_failed");
@@ -392,6 +421,13 @@ public partial class App : WpfApplication
             }
         }
 
+        stopwatch.Stop();
+        AppDiagnostics.Info(
+            "focused_read_focus_restore_succeeded",
+            new Dictionary<string, string?>
+            {
+                ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
+            });
         await Dispatcher.InvokeAsync(executeCommand);
     }
 }

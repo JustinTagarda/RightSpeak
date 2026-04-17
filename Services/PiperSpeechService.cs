@@ -6,6 +6,8 @@ using System.IO;
 using System.Linq;
 using System.Media;
 using System.Runtime.InteropServices;
+using System.Buffers.Binary;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using RightSpeak.Models;
@@ -17,13 +19,20 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
     private const string PiperVoicePrefix = "piper:";
     private const int ReusedPiperOutputPollMilliseconds = 25;
     private const int ReusedPiperOutputTimeoutMilliseconds = 30000;
-    private const int ReusedPiperReadRetryMilliseconds = 25;
-    private const int ReusedPiperReadRetries = 60;
+    private const int ReusedPiperReadRetryMilliseconds = 50;
+    private const int ReusedPiperReadRetries = 240;
     private const int WarmSessionIdleResetSeconds = 6;
-    private const double PiperPrimerColdStartSeconds = 1.00;
-    private const double PiperPrimerWarmStartSeconds = 0.55;
-    private const double PiperPrimerLongTextSeconds = 0.30;
-    private const double PiperPrimerMinSeconds = 0.05;
+    private static readonly bool ForceFreshSessionAtReadBoundaries = false;
+    private static readonly bool EnableLeadingTokenGuardWorkaround = true;
+    private const int LeadingTokenGuardMaxTextLengthCharacters = 280;
+    private const string LeadingTokenGuardPrefix = "---";
+    private const double OutputDeviceWarmupCarrierSeconds = 0.30;
+    private const double PiperPrimerColdStartSeconds = 0.62;
+    private const double PiperPrimerWarmStartSeconds = 0.38;
+    private const double PiperPrimerLongTextSeconds = 0.22;
+    private const int ShortTextPrimerBoostThresholdCharacters = 140;
+    private const double ShortTextPrimerBoostSeconds = 0.18;
+    private const double PiperPrimerMinSeconds = 0.00;
     private const double PiperPrimerMaxSeconds = 1.25;
     private static readonly string[] PreferredDefaultVoices =
     {
@@ -32,6 +41,8 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
     };
 
     private readonly SemaphoreSlim _gate;
+    private readonly object _warmPiperOutputLinesSync;
+    private readonly Queue<string> _warmPiperOutputLines;
     private readonly string? _piperExecutablePath;
     private readonly PiperVoiceDefinition[] _voices;
     private readonly PiperAvailability _availability;
@@ -50,6 +61,8 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
     public PiperSpeechService()
     {
         _gate = new SemaphoreSlim(1, 1);
+        _warmPiperOutputLinesSync = new object();
+        _warmPiperOutputLines = new Queue<string>();
         _piperExecutablePath = LocatePiperExecutable();
         _voices = DiscoverVoices().ToArray();
         _availability = ProbeAvailability(_piperExecutablePath, _voices);
@@ -101,6 +114,33 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
             return SpeechResult.Failed("Nothing to read. Enter text first.");
         }
 
+        var piperInputText = NormalizeForPiperLineInput(text, out var normalizationApplied, out var normalizedOriginalLineBreakCount);
+        if (normalizationApplied)
+        {
+            AppDiagnostics.Info(
+                "piper_input_normalized_for_single_line",
+                new Dictionary<string, string?>
+                {
+                    ["sourceTextLength"] = text.Length.ToString(CultureInfo.InvariantCulture),
+                    ["normalizedTextLength"] = piperInputText.Length.ToString(CultureInfo.InvariantCulture),
+                    ["normalizedLineBreakCount"] = normalizedOriginalLineBreakCount.ToString(CultureInfo.InvariantCulture)
+                });
+        }
+
+        var piperInputTextBeforeLeadingGuard = piperInputText;
+        piperInputText = PreparePiperInputText(piperInputText, out var leadingTokenGuardApplied);
+        if (leadingTokenGuardApplied)
+        {
+            AppDiagnostics.Info(
+                "piper_leading_token_guard_applied",
+                new Dictionary<string, string?>
+                {
+                    ["prefix"] = LeadingTokenGuardPrefix,
+                    ["sourceTextLength"] = piperInputTextBeforeLeadingGuard.Length.ToString(CultureInfo.InvariantCulture),
+                    ["piperInputLength"] = piperInputText.Length.ToString(CultureInfo.InvariantCulture)
+                });
+        }
+
         var voice = ResolveVoice(request.Options.VoiceName);
         if (voice is null)
         {
@@ -113,6 +153,10 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
         {
             ThrowIfDisposed();
             CancelActivePlaybackUnsafe();
+            if (ForceFreshSessionAtReadBoundaries)
+            {
+                ResetSessionForFreshReadUnsafe("read_start");
+            }
 
             playbackCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             _playbackCancellationTokenSource = playbackCancellationTokenSource;
@@ -125,7 +169,7 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
 
         try
         {
-            return await PlayRenderedAudioAsync(text, request.Options, voice, playbackCancellationTokenSource.Token).ConfigureAwait(false);
+            return await PlayRenderedAudioAsync(piperInputText, request.Options, voice, playbackCancellationTokenSource.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -148,6 +192,10 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
             try
             {
                 CleanupPlaybackStateUnsafe();
+                if (ForceFreshSessionAtReadBoundaries)
+                {
+                    ResetSessionForFreshReadUnsafe("read_end");
+                }
                 IsSpeaking = false;
             }
             finally
@@ -170,6 +218,10 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
             }
 
             CancelActivePlaybackUnsafe();
+            if (ForceFreshSessionAtReadBoundaries)
+            {
+                ResetSessionForFreshReadUnsafe("stop_reading");
+            }
             IsSpeaking = false;
             return SpeechResult.Stopped();
         }
@@ -209,6 +261,43 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
         var waveBytes = await RenderWaveBytesAsync(text, options, voice, cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
 
+        var shouldWarmOutputDevice = ShouldWarmOutputDevice();
+        if (shouldWarmOutputDevice)
+        {
+            var warmupWaveBytes = SpeechAudioHelper.CreateWarmupCarrierWaveLike(waveBytes, OutputDeviceWarmupCarrierSeconds);
+            if (warmupWaveBytes.Length > 0)
+            {
+                AppDiagnostics.Info(
+                    "piper_output_device_warmup_applied",
+                    new Dictionary<string, string?>
+                    {
+                        ["warmupSeconds"] = OutputDeviceWarmupCarrierSeconds.ToString("0.00", CultureInfo.InvariantCulture),
+                        ["warmupMode"] = "carrier",
+                        ["reason"] = "cold_or_idle_session"
+                    });
+
+                var warmupDuration = SpeechAudioHelper.GetPlaybackDuration(warmupWaveBytes);
+                using var warmupStream = new MemoryStream(warmupWaveBytes, writable: false);
+                using var warmupPlayer = new SoundPlayer(warmupStream);
+                warmupPlayer.Load();
+
+                await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    ThrowIfDisposed();
+                    _currentSoundPlayer = warmupPlayer;
+                }
+                finally
+                {
+                    _gate.Release();
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                warmupPlayer.Play();
+                await Task.Delay(warmupDuration, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
         var playbackDuration = SpeechAudioHelper.GetPlaybackDuration(waveBytes);
         using var waveStream = new MemoryStream(waveBytes, writable: false);
         using var soundPlayer = new SoundPlayer(waveStream);
@@ -242,12 +331,35 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
         return SpeechResult.Completed();
     }
 
+    private bool ShouldWarmOutputDevice()
+    {
+        if (_lastPlaybackCompletedUtc == DateTime.MinValue)
+        {
+            return true;
+        }
+
+        return (DateTime.UtcNow - _lastPlaybackCompletedUtc).TotalSeconds >= WarmSessionIdleResetSeconds;
+    }
+
+    private void ResetSessionForFreshReadUnsafe(string reason)
+    {
+        DisposeWarmPiperProcessUnsafe();
+        _currentPiperProcess = null;
+        _lastPlaybackCompletedUtc = DateTime.MinValue;
+        AppDiagnostics.Info(
+            "piper_session_reset",
+            new Dictionary<string, string?>
+            {
+                ["reason"] = reason
+            });
+    }
+
     private async Task<byte[]> RenderWaveBytesAsync(string text, SpeechOptions options, PiperVoiceDefinition voice, CancellationToken cancellationToken)
     {
         Process process;
         StreamWriter inputWriter;
         string outputDirectory;
-        HashSet<string> existingFiles;
+        Dictionary<string, FileFingerprint> existingFiles;
         var requestedLengthScale = MapLengthScale(options.Rate);
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -259,10 +371,7 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
             inputWriter = _warmPiperInputWriter!;
             outputDirectory = _warmPiperOutputDirectory!;
             _currentPiperProcess = process;
-            existingFiles = Directory.EnumerateFiles(outputDirectory, "*.wav", SearchOption.TopDirectoryOnly)
-                .Select(Path.GetFileName)
-                .Where(name => !string.IsNullOrWhiteSpace(name))
-                .ToHashSet(StringComparer.OrdinalIgnoreCase)!;
+            existingFiles = SnapshotOutputDirectory(outputDirectory);
         }
         finally
         {
@@ -279,7 +388,19 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
             TryDeleteFile(outputFilePath);
 
             var primerSeconds = ResolvePiperPrimerSeconds(text, options);
-            return SpeechAudioHelper.PrependPrimerWave(waveBytes, primerSeconds);
+            AppDiagnostics.Info(
+                "piper_primer_applied",
+                new Dictionary<string, string?>
+                {
+                    ["primerSeconds"] = primerSeconds.ToString("0.00", CultureInfo.InvariantCulture),
+                    ["primerWarmupCarrier"] = "true",
+                    ["primerWarmupMode"] = "full_carrier",
+                    ["textLength"] = text.Length.ToString(CultureInfo.InvariantCulture),
+                    ["idleSinceLastPlaybackMs"] = _lastPlaybackCompletedUtc == DateTime.MinValue
+                        ? "cold_start"
+                        : Math.Max(0, (DateTime.UtcNow - _lastPlaybackCompletedUtc).TotalMilliseconds).ToString("0", CultureInfo.InvariantCulture)
+                });
+            return SpeechAudioHelper.PrependPrimerWave(waveBytes, primerSeconds, includeWarmupCarrier: true);
         }
         catch
         {
@@ -339,10 +460,11 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
 
     private async Task<string> WaitForNextOutputFileAsync(
         string outputDirectory,
-        HashSet<string> existingFiles,
+        Dictionary<string, FileFingerprint> existingFiles,
         Process process,
         CancellationToken cancellationToken)
     {
+        var pendingStdoutPaths = new List<string>();
         var deadlineUtc = DateTime.UtcNow.AddMilliseconds(ReusedPiperOutputTimeoutMilliseconds);
         while (DateTime.UtcNow < deadlineUtc)
         {
@@ -353,15 +475,78 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
                 throw new InvalidOperationException($"Piper exited unexpectedly with code {process.ExitCode}.");
             }
 
-            foreach (var filePath in Directory.EnumerateFiles(outputDirectory, "*.wav", SearchOption.TopDirectoryOnly))
+            DrainWarmPiperOutputPaths(pendingStdoutPaths);
+            for (var index = pendingStdoutPaths.Count - 1; index >= 0; index--)
             {
-                var fileName = Path.GetFileName(filePath);
-                if (string.IsNullOrWhiteSpace(fileName) || existingFiles.Contains(fileName))
+                var resolvedPath = ResolvePiperOutputPath(outputDirectory, pendingStdoutPaths[index]);
+                if (string.IsNullOrWhiteSpace(resolvedPath))
+                {
+                    pendingStdoutPaths.RemoveAt(index);
+                    continue;
+                }
+
+                if (!TryGetFileFingerprint(resolvedPath, out var currentFingerprint))
                 {
                     continue;
                 }
 
-                return filePath;
+                var fileName = Path.GetFileName(resolvedPath);
+                if (!string.IsNullOrWhiteSpace(fileName) &&
+                    existingFiles.TryGetValue(fileName, out var previousFingerprint) &&
+                    previousFingerprint.Equals(currentFingerprint))
+                {
+                    pendingStdoutPaths.RemoveAt(index);
+                    continue;
+                }
+
+                AppDiagnostics.Info(
+                    "piper_output_path_resolved",
+                    new Dictionary<string, string?>
+                    {
+                        ["mode"] = "stdout",
+                        ["path"] = resolvedPath
+                    });
+                return resolvedPath;
+            }
+
+            string? candidatePath = null;
+            DateTime candidateWriteTimeUtc = DateTime.MinValue;
+            foreach (var filePath in Directory.EnumerateFiles(outputDirectory, "*.wav", SearchOption.TopDirectoryOnly))
+            {
+                var fileName = Path.GetFileName(filePath);
+                if (string.IsNullOrWhiteSpace(fileName))
+                {
+                    continue;
+                }
+
+                if (!TryGetFileFingerprint(filePath, out var currentFingerprint))
+                {
+                    continue;
+                }
+
+                if (existingFiles.TryGetValue(fileName, out var previousFingerprint) &&
+                    previousFingerprint.Equals(currentFingerprint))
+                {
+                    continue;
+                }
+
+                if (currentFingerprint.LastWriteTimeUtc >= candidateWriteTimeUtc)
+                {
+                    candidatePath = filePath;
+                    candidateWriteTimeUtc = currentFingerprint.LastWriteTimeUtc;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(candidatePath))
+            {
+                AppDiagnostics.Info(
+                    "piper_output_path_resolved",
+                    new Dictionary<string, string?>
+                    {
+                        ["mode"] = "directory_scan",
+                        ["path"] = candidatePath
+                    });
+                return candidatePath;
             }
 
             await Task.Delay(ReusedPiperOutputPollMilliseconds, cancellationToken).ConfigureAwait(false);
@@ -378,12 +563,23 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
 
             try
             {
-                using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
                 if (stream.Length > 0)
                 {
                     var bytes = new byte[stream.Length];
-                    var read = await stream.ReadAsync(bytes, cancellationToken).ConfigureAwait(false);
-                    if (read == bytes.Length)
+                    var offset = 0;
+                    while (offset < bytes.Length)
+                    {
+                        var read = await stream.ReadAsync(bytes.AsMemory(offset), cancellationToken).ConfigureAwait(false);
+                        if (read <= 0)
+                        {
+                            break;
+                        }
+
+                        offset += read;
+                    }
+
+                    if (offset == bytes.Length && IsCompleteWaveFile(bytes))
                     {
                         return bytes;
                     }
@@ -393,11 +589,109 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
             {
                 // File may still be finishing writes.
             }
+            catch (UnauthorizedAccessException)
+            {
+                // File may still be finishing writes.
+            }
 
             await Task.Delay(ReusedPiperReadRetryMilliseconds, cancellationToken).ConfigureAwait(false);
         }
 
         throw new InvalidOperationException("Piper output wave file wasn't readable.");
+    }
+
+    private static Dictionary<string, FileFingerprint> SnapshotOutputDirectory(string outputDirectory)
+    {
+        var result = new Dictionary<string, FileFingerprint>(StringComparer.OrdinalIgnoreCase);
+        foreach (var filePath in Directory.EnumerateFiles(outputDirectory, "*.wav", SearchOption.TopDirectoryOnly))
+        {
+            var fileName = Path.GetFileName(filePath);
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                continue;
+            }
+
+            var fileInfo = new FileInfo(filePath);
+            result[fileName] = new FileFingerprint(fileInfo.Length, fileInfo.LastWriteTimeUtc);
+        }
+
+        return result;
+    }
+
+    private void DrainWarmPiperOutputPaths(ICollection<string> pending)
+    {
+        lock (_warmPiperOutputLinesSync)
+        {
+            while (_warmPiperOutputLines.Count > 0)
+            {
+                pending.Add(_warmPiperOutputLines.Dequeue());
+            }
+        }
+    }
+
+    private static string? ResolvePiperOutputPath(string outputDirectory, string? line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return null;
+        }
+
+        var trimmed = line.Trim();
+        if (!trimmed.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return Path.IsPathRooted(trimmed)
+            ? trimmed
+            : Path.Combine(outputDirectory, trimmed);
+    }
+
+    private static bool TryGetFileFingerprint(string filePath, out FileFingerprint fingerprint)
+    {
+        fingerprint = default;
+        try
+        {
+            if (!File.Exists(filePath))
+            {
+                return false;
+            }
+
+            var fileInfo = new FileInfo(filePath);
+            fingerprint = new FileFingerprint(fileInfo.Length, fileInfo.LastWriteTimeUtc);
+            return fileInfo.Length > 0;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsCompleteWaveFile(byte[] bytes)
+    {
+        if (bytes.Length < 12)
+        {
+            return false;
+        }
+
+        if (bytes[0] != (byte)'R' ||
+            bytes[1] != (byte)'I' ||
+            bytes[2] != (byte)'F' ||
+            bytes[3] != (byte)'F' ||
+            bytes[8] != (byte)'W' ||
+            bytes[9] != (byte)'A' ||
+            bytes[10] != (byte)'V' ||
+            bytes[11] != (byte)'E')
+        {
+            return false;
+        }
+
+        var declaredFileLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(4, 4)) + 8UL;
+        return declaredFileLength <= (ulong)bytes.Length;
     }
 
     private PiperVoiceDefinition? ResolveVoice(string? voiceName)
@@ -587,11 +881,21 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
                 CreateNoWindow = true
             }
         };
+        process.OutputDataReceived += OnWarmPiperOutputDataReceived;
+        process.ErrorDataReceived += OnWarmPiperErrorDataReceived;
 
         if (!process.Start())
         {
+            process.OutputDataReceived -= OnWarmPiperOutputDataReceived;
+            process.ErrorDataReceived -= OnWarmPiperErrorDataReceived;
             process.Dispose();
             throw new InvalidOperationException("Piper process did not start.");
+        }
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        lock (_warmPiperOutputLinesSync)
+        {
+            _warmPiperOutputLines.Clear();
         }
 
         _warmPiperProcess = process;
@@ -604,6 +908,11 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
 
     private void DisposeWarmPiperProcessUnsafe()
     {
+        if (_warmPiperProcess is not null)
+        {
+            _warmPiperProcess.OutputDataReceived -= OnWarmPiperOutputDataReceived;
+            _warmPiperProcess.ErrorDataReceived -= OnWarmPiperErrorDataReceived;
+        }
         TryKillProcess(_warmPiperProcess);
         _warmPiperInputWriter?.Dispose();
         _warmPiperProcess?.Dispose();
@@ -618,6 +927,30 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
             TryDeleteDirectory(_warmPiperOutputDirectory);
             _warmPiperOutputDirectory = null;
         }
+
+        lock (_warmPiperOutputLinesSync)
+        {
+            _warmPiperOutputLines.Clear();
+        }
+    }
+
+    private void OnWarmPiperOutputDataReceived(object sender, DataReceivedEventArgs args)
+    {
+        var line = args.Data?.Trim();
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return;
+        }
+
+        lock (_warmPiperOutputLinesSync)
+        {
+            _warmPiperOutputLines.Enqueue(line);
+        }
+    }
+
+    private static void OnWarmPiperErrorDataReceived(object sender, DataReceivedEventArgs args)
+    {
+        // Consume stderr to prevent blocked pipes on long-running warm sessions.
     }
 
     private double ResolvePiperPrimerSeconds(string text, SpeechOptions options)
@@ -627,18 +960,112 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
             return Math.Clamp(overrideSeconds, PiperPrimerMinSeconds, PiperPrimerMaxSeconds);
         }
 
+        double primerSeconds;
         if (text.Length >= 800)
         {
-            return PiperPrimerLongTextSeconds;
+            primerSeconds = PiperPrimerLongTextSeconds;
         }
-
-        var idleDuration = DateTime.UtcNow - _lastPlaybackCompletedUtc;
-        if (_lastPlaybackCompletedUtc == DateTime.MinValue || idleDuration.TotalSeconds >= WarmSessionIdleResetSeconds)
+        else
         {
-            return PiperPrimerColdStartSeconds;
+            var idleDuration = DateTime.UtcNow - _lastPlaybackCompletedUtc;
+            if (_lastPlaybackCompletedUtc == DateTime.MinValue || idleDuration.TotalSeconds >= WarmSessionIdleResetSeconds)
+            {
+                primerSeconds = PiperPrimerColdStartSeconds;
+            }
+            else
+            {
+                primerSeconds = PiperPrimerWarmStartSeconds;
+            }
         }
 
-        return PiperPrimerWarmStartSeconds;
+        // Short utterances are the most susceptible to perceived first-word clipping.
+        if (text.Length <= ShortTextPrimerBoostThresholdCharacters)
+        {
+            primerSeconds += ShortTextPrimerBoostSeconds;
+        }
+
+        return Math.Clamp(primerSeconds, PiperPrimerMinSeconds, PiperPrimerMaxSeconds);
+    }
+
+    private static string PreparePiperInputText(string text, out bool guardApplied)
+    {
+        guardApplied = false;
+        if (!EnableLeadingTokenGuardWorkaround)
+        {
+            return text;
+        }
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return text;
+        }
+
+        if (text.Length > LeadingTokenGuardMaxTextLengthCharacters)
+        {
+            return text;
+        }
+
+        var startsWithWordCharacter = char.IsLetterOrDigit(text[0]);
+        if (!startsWithWordCharacter)
+        {
+            return text;
+        }
+
+        guardApplied = true;
+        return string.Concat(LeadingTokenGuardPrefix, text);
+    }
+
+    private static string NormalizeForPiperLineInput(string text, out bool normalizationApplied, out int originalLineBreakCount)
+    {
+        normalizationApplied = false;
+        originalLineBreakCount = 0;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return text;
+        }
+
+        var builder = new StringBuilder(text.Length);
+        var previousWasWhitespace = false;
+        foreach (var ch in text)
+        {
+            if (ch == '\r' || ch == '\n')
+            {
+                originalLineBreakCount++;
+            }
+
+            var shouldTreatAsWhitespace =
+                ch == '\r' ||
+                ch == '\n' ||
+                ch == '\t' ||
+                ch == '\0' ||
+                (char.IsControl(ch) && ch != '\r' && ch != '\n' && ch != '\t');
+
+            if (shouldTreatAsWhitespace || char.IsWhiteSpace(ch))
+            {
+                if (!previousWasWhitespace)
+                {
+                    builder.Append(' ');
+                    previousWasWhitespace = true;
+                }
+
+                if (shouldTreatAsWhitespace)
+                {
+                    normalizationApplied = true;
+                }
+                continue;
+            }
+
+            builder.Append(ch);
+            previousWasWhitespace = false;
+        }
+
+        var normalized = builder.ToString().Trim();
+        if (!normalizationApplied && !string.Equals(normalized, text.Trim(), StringComparison.Ordinal))
+        {
+            normalizationApplied = true;
+        }
+
+        return normalized;
     }
 
     private static void TryKillProcess(Process? process)
@@ -776,6 +1203,8 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
         string DisplayName,
         string ModelPath,
         string? ConfigPath);
+
+    private readonly record struct FileFingerprint(long Length, DateTime LastWriteTimeUtc);
 
     private static PiperAvailability ProbeAvailability(string? executablePath, IReadOnlyList<PiperVoiceDefinition> voices)
     {

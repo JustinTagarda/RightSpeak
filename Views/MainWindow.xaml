@@ -69,7 +69,7 @@
         <Border Grid.Row="1"
                 Style="{StaticResource CardStyle}"
                 Margin="0,0,0,6"
-                IsEnabled="{Binding IsTypedTextEnabled}">
+                IsEnabled="{Binding IsManualReadEnabled}">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -79,7 +79,7 @@
                 </Grid.RowDefinitions>
 
                 <TextBlock Grid.Row="0"
-                           Text="Typed text"
+                           Text="Manual Read"
                            Style="{StaticResource SectionHeaderStyle}" />
                 <TextBlock Grid.Row="1"
                            Text="Type or paste text below, then start reading."
@@ -98,7 +98,7 @@
                             Orientation="Horizontal"
                             HorizontalAlignment="Left">
                     <Button Width="146"
-                            Content="Read Typed Text"
+                            Content="Read Manual Text"
                             Command="{Binding ReadCommand}"
                             Style="{StaticResource PrimaryButtonStyle}" />
                     <Button Width="78"
@@ -115,15 +115,14 @@
 
         <Border Grid.Row="2"
                 Style="{StaticResource CardStyle}"
-                Margin="0,0,0,6"
-                IsEnabled="{Binding IsFocusedReadsEnabled}">
+                Margin="0,0,0,6">
             <StackPanel>
                 <Grid Margin="0,0,0,2">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <TextBlock Text="Focused reads"
+                    <TextBlock Text="Read From Other App"
                                Style="{StaticResource SectionHeaderStyle}" />
                     <TextBlock Grid.Column="1"
                                Margin="12,0,0,0"
@@ -143,16 +142,19 @@
                     <Button Width="154"
                             Margin="0,0,8,0"
                             Content="Read Selected Text"
+                            IsEnabled="{Binding IsExternalReadsEnabled}"
                             Click="OnReadSelectedTextButtonClick"
                             Style="{StaticResource SecondaryButtonStyle}" />
                     <Button Width="128"
                             Margin="0,0,8,0"
                             Content="Read Paragraph"
+                            IsEnabled="{Binding IsExternalReadsEnabled}"
                             Click="OnReadParagraphButtonClick"
                             Style="{StaticResource SecondaryButtonStyle}" />
                     <Button Width="128"
                             Margin="0,0,8,0"
                             Content="Read Document"
+                            IsEnabled="{Binding IsExternalReadsEnabled}"
                             Click="OnReadDocumentButtonClick"
                             Style="{StaticResource SecondaryButtonStyle}" />
                     <Button Width="128"
