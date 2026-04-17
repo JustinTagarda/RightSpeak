@@ -10,43 +10,13 @@ namespace RightSpeak.Services;
 
 public sealed class ReadingService : IReadingService
 {
-    private sealed class PendingChunkPrefetch
-    {
-        private int _faultObserved;
-
-        public PendingChunkPrefetch(
-            int chunkIndex,
-            SpeechRequest request,
-            string? preferredEngineName,
-            CancellationTokenSource cancellationTokenSource,
-            Task<IPrefetchedSpeechClip?> task)
-        {
-            ChunkIndex = chunkIndex;
-            Request = request;
-            PreferredEngineName = preferredEngineName;
-            CancellationTokenSource = cancellationTokenSource;
-            Task = task;
-        }
-
-        public int ChunkIndex { get; }
-        public SpeechRequest Request { get; }
-        public string? PreferredEngineName { get; }
-        public CancellationTokenSource CancellationTokenSource { get; }
-        public Task<IPrefetchedSpeechClip?> Task { get; }
-
-        public bool TryMarkFaultObserved()
-        {
-            return Interlocked.Exchange(ref _faultObserved, 1) == 0;
-        }
-    }
-
-    private const int ChunkMinCharacters = 160;
-    private const int ChunkTargetCharacters = 220;
-    private const int ChunkMaxCharacters = 300;
-    private const double ContinuationPrimerWindowsOneCoreSeconds = 0.0;
-    private const double ContinuationPrimerSystemSpeechSeconds = 0.0;
-    private const double ContinuationPrimerPiperSeconds = 1.0;
-    private const double ContinuationPrimerUnknownEngineSeconds = 1.0;
+    private const int FirstChunkMinCharacters = 100;
+    private const int FirstChunkTargetCharacters = 150;
+    private const int FirstChunkMaxCharacters = 200;
+    private const int ContinuationChunkMinCharacters = 200;
+    private const int ContinuationChunkTargetCharacters = 280;
+    private const int ContinuationChunkMaxCharacters = 380;
+    private const int TextRetrievalRetryDelayMilliseconds = 220;
     private const string PiperEngineName = "Piper";
     private const string PreferredPiperLjspeechVoiceName = "piper:en_US-ljspeech-high";
 
@@ -141,7 +111,13 @@ public sealed class ReadingService : IReadingService
             });
 
         var retrievalStopwatch = Stopwatch.StartNew();
-        var retrieval = await _selectedTextRetrievalService.RetrieveSelectedTextAsync(cancellationToken).ConfigureAwait(false);
+        var retrievalAttempt = await RetrieveTextWithRetryAsync(
+                "selected",
+                operationId,
+                _selectedTextRetrievalService.RetrieveSelectedTextAsync,
+                cancellationToken)
+            .ConfigureAwait(false);
+        var retrieval = retrievalAttempt.Result;
         retrievalStopwatch.Stop();
         AppDiagnostics.Info(
             "focused_read_selected_retrieval_result",
@@ -153,6 +129,7 @@ public sealed class ReadingService : IReadingService
                 ["message"] = retrieval.Message,
                 ["textLength"] = retrieval.Text?.Length.ToString(),
                 ["textPreview"] = BuildPreview(retrieval.Text),
+                ["retried"] = retrievalAttempt.Retried.ToString(),
                 ["elapsedMs"] = retrievalStopwatch.ElapsedMilliseconds.ToString()
             });
 
@@ -165,6 +142,7 @@ public sealed class ReadingService : IReadingService
                 {
                     ["operationId"] = operationId,
                     ["reason"] = retrieval.Message,
+                    ["retried"] = retrievalAttempt.Retried.ToString(),
                     ["totalElapsedMs"] = readStopwatch.ElapsedMilliseconds.ToString()
                 });
             return SpeechResult.Failed(BuildSelectedTextFailureMessage());
@@ -215,22 +193,13 @@ public sealed class ReadingService : IReadingService
             });
 
         var retrievalStopwatch = Stopwatch.StartNew();
-        var retrieval = await _paragraphTextRetrievalService.RetrieveParagraphTextAsync(cancellationToken).ConfigureAwait(false);
-        var retried = false;
-        if ((!retrieval.Success || string.IsNullOrWhiteSpace(retrieval.Text)) && ShouldRetryParagraphRetrieval(retrieval))
-        {
-            retried = true;
-            AppDiagnostics.Info(
-                "focused_read_paragraph_retry_scheduled",
-                new Dictionary<string, string?>
-                {
-                    ["operationId"] = operationId,
-                    ["firstAttemptSource"] = retrieval.Source?.ToString(),
-                    ["firstAttemptMessage"] = retrieval.Message
-                });
-            await Task.Delay(220, cancellationToken).ConfigureAwait(false);
-            retrieval = await _paragraphTextRetrievalService.RetrieveParagraphTextAsync(cancellationToken).ConfigureAwait(false);
-        }
+        var retrievalAttempt = await RetrieveTextWithRetryAsync(
+                "paragraph",
+                operationId,
+                _paragraphTextRetrievalService.RetrieveParagraphTextAsync,
+                cancellationToken)
+            .ConfigureAwait(false);
+        var retrieval = retrievalAttempt.Result;
         retrievalStopwatch.Stop();
         AppDiagnostics.Info(
             "focused_read_paragraph_retrieval_result",
@@ -242,7 +211,7 @@ public sealed class ReadingService : IReadingService
                 ["message"] = retrieval.Message,
                 ["textLength"] = retrieval.Text?.Length.ToString(),
                 ["textPreview"] = BuildPreview(retrieval.Text),
-                ["retried"] = retried.ToString(),
+                ["retried"] = retrievalAttempt.Retried.ToString(),
                 ["elapsedMs"] = retrievalStopwatch.ElapsedMilliseconds.ToString()
             });
 
@@ -255,7 +224,7 @@ public sealed class ReadingService : IReadingService
                 {
                     ["operationId"] = operationId,
                     ["reason"] = retrieval.Message,
-                    ["retried"] = retried.ToString(),
+                    ["retried"] = retrievalAttempt.Retried.ToString(),
                     ["totalElapsedMs"] = readStopwatch.ElapsedMilliseconds.ToString()
                 });
             return SpeechResult.Failed(BuildParagraphFailureMessage());
@@ -289,26 +258,36 @@ public sealed class ReadingService : IReadingService
 
     public async Task<SpeechResult> ReadDocumentAsync(CancellationToken cancellationToken = default)
     {
+        var operationId = Guid.NewGuid().ToString("N");
         var readStopwatch = Stopwatch.StartNew();
         AppDiagnostics.Info(
             "focused_read_document_started",
             new Dictionary<string, string?>
             {
+                ["operationId"] = operationId,
                 ["voice"] = _settingsService.Current.VoiceName,
                 ["rate"] = _settingsService.Current.SpeechRate.ToString()
             });
 
         var retrievalStopwatch = Stopwatch.StartNew();
-        var retrieval = await _documentTextRetrievalService.RetrieveDocumentTextAsync(cancellationToken).ConfigureAwait(false);
+        var retrievalAttempt = await RetrieveTextWithRetryAsync(
+                "document",
+                operationId,
+                _documentTextRetrievalService.RetrieveDocumentTextAsync,
+                cancellationToken)
+            .ConfigureAwait(false);
+        var retrieval = retrievalAttempt.Result;
         retrievalStopwatch.Stop();
         AppDiagnostics.Info(
             "focused_read_document_retrieval_result",
             new Dictionary<string, string?>
             {
+                ["operationId"] = operationId,
                 ["success"] = retrieval.Success.ToString(),
                 ["source"] = retrieval.Source?.ToString(),
                 ["message"] = retrieval.Message,
                 ["textLength"] = retrieval.Text?.Length.ToString(),
+                ["retried"] = retrievalAttempt.Retried.ToString(),
                 ["elapsedMs"] = retrievalStopwatch.ElapsedMilliseconds.ToString()
             });
 
@@ -319,7 +298,9 @@ public sealed class ReadingService : IReadingService
                 "focused_read_document_failed_before_speech",
                 new Dictionary<string, string?>
                 {
+                    ["operationId"] = operationId,
                     ["reason"] = retrieval.Message,
+                    ["retried"] = retrievalAttempt.Retried.ToString(),
                     ["totalElapsedMs"] = readStopwatch.ElapsedMilliseconds.ToString()
                 });
             return SpeechResult.Failed(BuildDocumentFailureMessage());
@@ -334,6 +315,7 @@ public sealed class ReadingService : IReadingService
             "focused_read_document_speech_result",
             new Dictionary<string, string?>
             {
+                ["operationId"] = operationId,
                 ["success"] = speechResult.Success.ToString(),
                 ["cancelled"] = speechResult.WasCancelled.ToString(),
                 ["message"] = speechResult.Message,
@@ -348,6 +330,34 @@ public sealed class ReadingService : IReadingService
         }
 
         return SpeechResult.Completed(retrieval.Message);
+    }
+
+    private static async Task<(TextRetrievalResult Result, bool Retried)> RetrieveTextWithRetryAsync(
+        string workflowName,
+        string operationId,
+        Func<CancellationToken, Task<TextRetrievalResult>> retrieveAsync,
+        CancellationToken cancellationToken)
+    {
+        var result = await retrieveAsync(cancellationToken).ConfigureAwait(false);
+        if (!ShouldRetryTextRetrieval(result))
+        {
+            return (result, false);
+        }
+
+        AppDiagnostics.Info(
+            "focused_read_retrieval_retry_scheduled",
+            new Dictionary<string, string?>
+            {
+                ["operationId"] = operationId,
+                ["workflow"] = workflowName,
+                ["delayMs"] = TextRetrievalRetryDelayMilliseconds.ToString(),
+                ["firstAttemptSource"] = result.Source?.ToString(),
+                ["firstAttemptMessage"] = result.Message,
+                ["firstAttemptTextLength"] = result.Text?.Length.ToString()
+            });
+
+        await Task.Delay(TextRetrievalRetryDelayMilliseconds, cancellationToken).ConfigureAwait(false);
+        return (await retrieveAsync(cancellationToken).ConfigureAwait(false), true);
     }
 
     private SpeechRequest BuildRequest(string text)
@@ -385,7 +395,10 @@ public sealed class ReadingService : IReadingService
         return new SpeechRequest(text, options);
     }
 
-    private async Task<SpeechResult> SpeakWithChunkingIfNeededAsync(string text, CancellationToken cancellationToken)
+    private async Task<SpeechResult> SpeakWithChunkingIfNeededAsync(
+        string text,
+        CancellationToken cancellationToken,
+        double? firstChunkPrimerOverride = null)
     {
         var normalizedText = text?.Trim();
         if (string.IsNullOrWhiteSpace(normalizedText))
@@ -393,371 +406,111 @@ public sealed class ReadingService : IReadingService
             return SpeechResult.Failed("Nothing to read. Enter text first.");
         }
 
-        if (normalizedText.Length <= ChunkMaxCharacters)
+        if (normalizedText.Length <= FirstChunkMaxCharacters)
         {
-            return await _speechService.SpeakAsync(BuildRequest(normalizedText), cancellationToken).ConfigureAwait(false);
+            return await _speechService
+                .SpeakAsync(BuildRequest(normalizedText, firstChunkPrimerOverride), cancellationToken)
+                .ConfigureAwait(false);
         }
 
-        var chunks = SplitIntoSpeechChunks(normalizedText, ChunkMinCharacters, ChunkTargetCharacters, ChunkMaxCharacters);
+        var chunks = SplitIntoSpeechChunks(normalizedText);
         if (chunks.Count <= 1)
         {
-            return await _speechService.SpeakAsync(BuildRequest(normalizedText), cancellationToken).ConfigureAwait(false);
+            return await _speechService
+                .SpeakAsync(BuildRequest(normalizedText, firstChunkPrimerOverride), cancellationToken)
+                .ConfigureAwait(false);
         }
 
-        var prefetchSpeechService = _speechService as IPrefetchSpeechService;
-        var windowsSpeechService = _speechService as WindowsSpeechService;
-        PendingChunkPrefetch? pendingPrefetch = null;
-        string? pinnedChunkEngineName = null;
-
-        try
+        var chunkRequests = BuildChunkRequests(chunks, firstChunkPrimerOverride);
+        if (_speechService is WindowsSpeechService windowsSpeechService)
         {
-            for (var index = 0; index < chunks.Count; index++)
+            return await windowsSpeechService.SpeakChunkSequenceAsync(chunkRequests, cancellationToken).ConfigureAwait(false);
+        }
+
+        foreach (var request in chunkRequests)
+        {
+            var result = await _speechService.SpeakAsync(request, cancellationToken).ConfigureAwait(false);
+            if (!result.Success || result.WasCancelled)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var chunk = chunks[index];
-                var isContinuationChunk = index > 0;
-                double? primerOverride = isContinuationChunk
-                    ? ResolveContinuationPrimerSeconds(pinnedChunkEngineName)
-                    : null;
-                var request = BuildRequest(
-                    chunk,
-                    primerOverride,
-                    isContinuationChunk: isContinuationChunk,
-                    allowOutputDeviceWarmup: !isContinuationChunk,
-                    useFullPrimerWarmupCarrier: !isContinuationChunk);
-
-                IPrefetchedSpeechClip? prefetchedClip = null;
-                var usingPrefetchedClip = false;
-
-                if (pendingPrefetch is not null && pendingPrefetch.ChunkIndex == index)
-                {
-                    var prefetchGraceWindowMilliseconds = GetPrefetchGraceWindowMilliseconds(
-                        pendingPrefetch.Request,
-                        pendingPrefetch.PreferredEngineName);
-                    prefetchedClip = await TryTakeReadyPrefetchedClipAsync(
-                            pendingPrefetch,
-                            prefetchGraceWindowMilliseconds,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    pendingPrefetch = null;
-
-                    if (prefetchedClip is not null &&
-                        windowsSpeechService is not null &&
-                        !string.IsNullOrWhiteSpace(pinnedChunkEngineName))
-                    {
-                        var prefetchedClipEngineName = windowsSpeechService.GetPrefetchedClipEngineName(prefetchedClip);
-                        if (!string.IsNullOrWhiteSpace(prefetchedClipEngineName) &&
-                            !string.Equals(prefetchedClipEngineName, pinnedChunkEngineName, StringComparison.OrdinalIgnoreCase))
-                        {
-                            AppDiagnostics.Info(
-                                "speech_chunk_prefetch_discarded_for_engine_continuity",
-                                new Dictionary<string, string?>
-                                {
-                                    ["chunkIndex"] = index.ToString(),
-                                    ["pinnedEngine"] = pinnedChunkEngineName,
-                                    ["prefetchedEngine"] = prefetchedClipEngineName,
-                                    ["voice"] = request.Options.VoiceName
-                                });
-                            prefetchedClip.Dispose();
-                            prefetchedClip = null;
-                        }
-                    }
-
-                    usingPrefetchedClip = prefetchedClip is not null;
-                }
-
-                if (prefetchSpeechService is not null && index + 1 < chunks.Count)
-                {
-                    var nextChunk = chunks[index + 1];
-                    var nextRequest = BuildRequest(
-                        nextChunk,
-                        ResolveContinuationPrimerSeconds(pinnedChunkEngineName),
-                        isContinuationChunk: true,
-                        allowOutputDeviceWarmup: false,
-                        useFullPrimerWarmupCarrier: false);
-
-                    pendingPrefetch = TryStartChunkPrefetch(
-                        prefetchSpeechService,
-                        windowsSpeechService,
-                        index + 1,
-                        nextRequest,
-                        pinnedChunkEngineName,
-                        cancellationToken);
-                }
-
-                AppDiagnostics.Info(
-                    "speech_chunk_dispatch",
-                    new Dictionary<string, string?>
-                    {
-                        ["chunkIndex"] = index.ToString(),
-                        ["chunkCount"] = chunks.Count.ToString(),
-                        ["chunkLength"] = chunk.Length.ToString(),
-                        ["isContinuationChunk"] = isContinuationChunk.ToString(),
-                        ["primerOverrideSeconds"] = primerOverride?.ToString("0.00") ?? "default",
-                        ["usingPrefetchedClip"] = usingPrefetchedClip.ToString(),
-                        ["pinnedEngine"] = pinnedChunkEngineName
-                    });
-
-                SpeechResult result;
-                string? resolvedChunkEngineName = pinnedChunkEngineName;
-
-                if (windowsSpeechService is not null)
-                {
-                    var chunkResult = await windowsSpeechService
-                        .SpeakChunkAsync(request, prefetchedClip, pinnedChunkEngineName, cancellationToken)
-                        .ConfigureAwait(false);
-                    result = chunkResult.SpeechResult;
-                    if (result.Success && !result.WasCancelled && !string.IsNullOrWhiteSpace(chunkResult.EngineName))
-                    {
-                        resolvedChunkEngineName = chunkResult.EngineName;
-                    }
-                }
-                else if (usingPrefetchedClip)
-                {
-                    result = await prefetchSpeechService!
-                        .SpeakPrefetchedAsync(prefetchedClip!, request, cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                else
-                {
-                    result = await _speechService
-                        .SpeakAsync(request, cancellationToken)
-                        .ConfigureAwait(false);
-                }
-
-                if (!result.Success || result.WasCancelled)
-                {
-                    return result;
-                }
-
-                pinnedChunkEngineName = resolvedChunkEngineName;
-
-                if (pendingPrefetch is not null &&
-                    prefetchSpeechService is not null &&
-                    ShouldRealignPendingPrefetch(pendingPrefetch, pinnedChunkEngineName))
-                {
-                    var replacementChunkIndex = pendingPrefetch.ChunkIndex;
-                    var replacementRequest = pendingPrefetch.Request;
-                    CancelPendingPrefetch(pendingPrefetch, "engine_realigned");
-                    pendingPrefetch = TryStartChunkPrefetch(
-                        prefetchSpeechService,
-                        windowsSpeechService,
-                        replacementChunkIndex,
-                        replacementRequest,
-                        pinnedChunkEngineName,
-                        cancellationToken);
-                }
+                return result;
             }
-        }
-        finally
-        {
-            CancelPendingPrefetch(pendingPrefetch, "read_cleanup");
         }
 
         return SpeechResult.Completed();
     }
 
-    private PendingChunkPrefetch? TryStartChunkPrefetch(
-        IPrefetchSpeechService prefetchSpeechService,
-        WindowsSpeechService? windowsSpeechService,
-        int chunkIndex,
-        SpeechRequest request,
-        string? preferredEngineName,
-        CancellationToken cancellationToken)
+    private IReadOnlyList<SpeechRequest> BuildChunkRequests(IReadOnlyList<string> chunks, double? firstChunkPrimerOverride)
     {
-        var supportsPrefetch = windowsSpeechService is not null
-            ? windowsSpeechService.SupportsPrefetch(request, preferredEngineName)
-            : prefetchSpeechService.SupportsPrefetch(request);
-        if (!supportsPrefetch)
+        if (chunks.Count == 0)
         {
-            return null;
+            return Array.Empty<SpeechRequest>();
         }
 
-        return StartChunkPrefetch(
-            prefetchSpeechService,
-            windowsSpeechService,
-            chunkIndex,
-            request,
-            preferredEngineName,
-            cancellationToken);
+        var requests = new List<SpeechRequest>(chunks.Count);
+        for (var index = 0; index < chunks.Count; index++)
+        {
+            var isContinuationChunk = index > 0;
+            var request = isContinuationChunk
+                ? BuildRequest(
+                    chunks[index],
+                    leadingPrimerSecondsOverride: 0.0,
+                    isContinuationChunk: true,
+                    allowOutputDeviceWarmup: false,
+                    useFullPrimerWarmupCarrier: false)
+                : BuildRequest(chunks[index], firstChunkPrimerOverride);
+            requests.Add(request);
+        }
+
+        return requests;
     }
 
-    private static PendingChunkPrefetch StartChunkPrefetch(
-        IPrefetchSpeechService prefetchSpeechService,
-        WindowsSpeechService? windowsSpeechService,
-        int chunkIndex,
-        SpeechRequest request,
-        string? preferredEngineName,
-        CancellationToken cancellationToken)
+    private static IReadOnlyList<string> SplitIntoSpeechChunks(string text)
     {
-        var prefetchCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var prefetchTask = windowsSpeechService is not null
-            ? windowsSpeechService.PrefetchAsync(request, preferredEngineName, prefetchCancellationTokenSource.Token)
-            : prefetchSpeechService.PrefetchAsync(request, prefetchCancellationTokenSource.Token);
-        var pendingPrefetch = new PendingChunkPrefetch(
-            chunkIndex,
-            request,
-            preferredEngineName,
-            prefetchCancellationTokenSource,
-            prefetchTask);
-        _ = prefetchTask.ContinueWith(
-            static (_, state) => ObserveFaultedPrefetch((PendingChunkPrefetch)state!, "background"),
-            pendingPrefetch,
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously | TaskContinuationOptions.OnlyOnFaulted,
-            TaskScheduler.Default);
-        return pendingPrefetch;
+        var normalized = text?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return Array.Empty<string>();
+        }
+
+        if (normalized.Length <= FirstChunkMaxCharacters)
+        {
+            return new[] { normalized };
+        }
+
+        var chunks = new List<string>();
+        var firstSplitIndex = FindFirstChunkSplitIndex(normalized);
+        var firstChunk = normalized[..firstSplitIndex].Trim();
+        if (!string.IsNullOrWhiteSpace(firstChunk))
+        {
+            chunks.Add(firstChunk);
+        }
+
+        var cursor = firstSplitIndex;
+        while (cursor < normalized.Length && char.IsWhiteSpace(normalized[cursor]))
+        {
+            cursor++;
+        }
+
+        if (cursor < normalized.Length)
+        {
+            var continuationText = normalized[cursor..].Trim();
+            chunks.AddRange(SplitIntoSpeechChunks(
+                continuationText,
+                ContinuationChunkMinCharacters,
+                ContinuationChunkTargetCharacters,
+                ContinuationChunkMaxCharacters));
+        }
+
+        return chunks;
     }
 
-    private static async Task<IPrefetchedSpeechClip?> TryTakeReadyPrefetchedClipAsync(
-        PendingChunkPrefetch pendingPrefetch,
-        int prefetchGraceWindowMilliseconds,
-        CancellationToken cancellationToken)
+    private static int FindFirstChunkSplitIndex(string text)
     {
-        try
-        {
-            if (pendingPrefetch.Task.IsCompleted)
-            {
-                if (pendingPrefetch.Task.IsCompletedSuccessfully)
-                {
-                    var readyClip = pendingPrefetch.Task.Result;
-                    pendingPrefetch.CancellationTokenSource.Dispose();
-                    return readyClip;
-                }
-
-                ObserveFaultedPrefetch(pendingPrefetch, "ready_check");
-                CancelPendingPrefetch(pendingPrefetch, "ready_check");
-                return null;
-            }
-
-            var completedTask = await Task.WhenAny(
-                pendingPrefetch.Task,
-                    Task.Delay(prefetchGraceWindowMilliseconds, cancellationToken))
-                .ConfigureAwait(false);
-
-            if (completedTask == pendingPrefetch.Task)
-            {
-                if (pendingPrefetch.Task.IsCompletedSuccessfully)
-                {
-                    var prefetchedClip = pendingPrefetch.Task.Result;
-                    pendingPrefetch.CancellationTokenSource.Dispose();
-                    return prefetchedClip;
-                }
-
-                ObserveFaultedPrefetch(pendingPrefetch, "grace_window");
-                CancelPendingPrefetch(pendingPrefetch, "grace_window");
-                return null;
-            }
-
-            CancelPendingPrefetch(pendingPrefetch, "grace_window_expired");
-            return null;
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch
-        {
-            ObserveFaultedPrefetch(pendingPrefetch, "harness_exception");
-            CancelPendingPrefetch(pendingPrefetch, "harness_exception");
-            return null;
-        }
-    }
-
-    private int GetPrefetchGraceWindowMilliseconds(SpeechRequest request, string? preferredEngineName)
-    {
-        if (_speechService is WindowsSpeechService windowsSpeechService)
-        {
-            return windowsSpeechService.GetChunkPrefetchGraceWindowMilliseconds(request, preferredEngineName);
-        }
-
-        return 30;
-    }
-
-    private static bool ShouldRealignPendingPrefetch(PendingChunkPrefetch pendingPrefetch, string? pinnedChunkEngineName)
-    {
-        if (string.IsNullOrWhiteSpace(pinnedChunkEngineName))
-        {
-            return false;
-        }
-
-        if (!string.IsNullOrWhiteSpace(pendingPrefetch.Request.Options.VoiceName))
-        {
-            return false;
-        }
-
-        return !string.Equals(
-            pendingPrefetch.PreferredEngineName,
-            pinnedChunkEngineName,
-            StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static double ResolveContinuationPrimerSeconds(string? engineName)
-    {
-        return engineName switch
-        {
-            "windows_onecore" => ContinuationPrimerWindowsOneCoreSeconds,
-            "system_speech" => ContinuationPrimerSystemSpeechSeconds,
-            "piper" => ContinuationPrimerPiperSeconds,
-            _ => ContinuationPrimerUnknownEngineSeconds
-        };
-    }
-
-    private static void ObserveFaultedPrefetch(PendingChunkPrefetch pendingPrefetch, string stage)
-    {
-        if (!pendingPrefetch.Task.IsFaulted || !pendingPrefetch.TryMarkFaultObserved())
-        {
-            return;
-        }
-
-        var exception = pendingPrefetch.Task.Exception?.Flatten().InnerExceptions.FirstOrDefault() ??
-                        pendingPrefetch.Task.Exception;
-        AppDiagnostics.Warn(
-            "speech_chunk_prefetch_faulted",
-            new Dictionary<string, string?>
-            {
-                ["chunkIndex"] = pendingPrefetch.ChunkIndex.ToString(),
-                ["preferredEngine"] = pendingPrefetch.PreferredEngineName,
-                ["voice"] = pendingPrefetch.Request.Options.VoiceName,
-                ["stage"] = stage,
-                ["message"] = exception?.Message,
-                ["textLength"] = pendingPrefetch.Request.Text?.Length.ToString()
-            });
-    }
-
-    private static void CancelPendingPrefetch(PendingChunkPrefetch? pendingPrefetch, string stage)
-    {
-        if (pendingPrefetch is null)
-        {
-            return;
-        }
-
-        ObserveFaultedPrefetch(pendingPrefetch, stage);
-
-        try
-        {
-            pendingPrefetch.CancellationTokenSource.Cancel();
-        }
-        catch
-        {
-            // Best effort cancellation only.
-        }
-
-        try
-        {
-            if (pendingPrefetch.Task.IsCompletedSuccessfully)
-            {
-                pendingPrefetch.Task.Result?.Dispose();
-            }
-        }
-        catch
-        {
-            // Ignore cleanup failures when discarding unused prefetched audio.
-        }
-        finally
-        {
-            pendingPrefetch.CancellationTokenSource.Dispose();
-        }
+        var minimumEndExclusive = Math.Min(text.Length, FirstChunkMinCharacters);
+        var targetEndExclusive = Math.Min(text.Length, FirstChunkTargetCharacters);
+        var maximumEndExclusive = Math.Min(text.Length, FirstChunkMaxCharacters);
+        var splitIndex = FindChunkSplitIndex(text, 0, minimumEndExclusive, targetEndExclusive, maximumEndExclusive);
+        return splitIndex <= 0 ? maximumEndExclusive : splitIndex;
     }
 
     private static IReadOnlyList<string> SplitIntoSpeechChunks(string text, int minChunkCharacters, int targetChunkCharacters, int maxChunkCharacters)
@@ -948,12 +701,12 @@ public sealed class ReadingService : IReadingService
             return 0;
         }
 
-        if (normalizedText.Length <= ChunkMaxCharacters)
+        if (normalizedText.Length <= FirstChunkMaxCharacters)
         {
             return 1;
         }
 
-        return SplitIntoSpeechChunks(normalizedText, ChunkMinCharacters, ChunkTargetCharacters, ChunkMaxCharacters).Count;
+        return SplitIntoSpeechChunks(normalizedText).Count;
     }
 
     private void NormalizeSavedVoiceSetting()
@@ -1056,9 +809,9 @@ public sealed class ReadingService : IReadingService
         return null;
     }
 
-    private static bool ShouldRetryParagraphRetrieval(TextRetrievalResult retrieval)
+    private static bool ShouldRetryTextRetrieval(TextRetrievalResult retrieval)
     {
-        return retrieval.ShouldRetry;
+        return (!retrieval.Success || string.IsNullOrWhiteSpace(retrieval.Text)) && retrieval.ShouldRetry;
     }
 
     private static string BuildSelectedTextFailureMessage()

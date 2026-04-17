@@ -24,30 +24,30 @@ internal static class SpeechAudioHelper
 
     public static byte[] PrependPrimerWave(byte[] speechWaveBytes, double leadingSilenceSeconds, bool includeWarmupCarrier)
     {
-        if (!TryReadWave(speechWaveBytes, out var format, out var speechPcmBytes))
+        if (!TryReadWaveData(speechWaveBytes, out var waveData))
         {
             return speechWaveBytes;
         }
 
-        var leadingPrimerPcmBytes = BuildLeadingPrimerPcm(format, leadingSilenceSeconds, includeWarmupCarrier);
+        var leadingPrimerPcmBytes = BuildLeadingPrimerPcm(waveData.Format, leadingSilenceSeconds, includeWarmupCarrier);
         if (leadingPrimerPcmBytes.Length == 0)
         {
             return speechWaveBytes;
         }
 
-        var combinedPcmBytes = new byte[leadingPrimerPcmBytes.Length + speechPcmBytes.Length];
+        var combinedPcmBytes = new byte[leadingPrimerPcmBytes.Length + waveData.PcmBytes.Length];
         Buffer.BlockCopy(leadingPrimerPcmBytes, 0, combinedPcmBytes, 0, leadingPrimerPcmBytes.Length);
-        Buffer.BlockCopy(speechPcmBytes, 0, combinedPcmBytes, leadingPrimerPcmBytes.Length, speechPcmBytes.Length);
-        return BuildWave(format, combinedPcmBytes);
+        Buffer.BlockCopy(waveData.PcmBytes, 0, combinedPcmBytes, leadingPrimerPcmBytes.Length, waveData.PcmBytes.Length);
+        return BuildWave(waveData.Format, combinedPcmBytes);
     }
 
     public static TimeSpan GetPlaybackDuration(byte[] waveBytes)
     {
-        if (TryReadWave(waveBytes, out var format, out var pcmBytes) &&
-            format.ByteRate > 0 &&
-            pcmBytes.Length > 0)
+        if (TryReadWaveData(waveBytes, out var waveData) &&
+            waveData.Format.ByteRate > 0 &&
+            waveData.PcmBytes.Length > 0)
         {
-            var seconds = (double)pcmBytes.Length / format.ByteRate;
+            var seconds = (double)waveData.PcmBytes.Length / waveData.Format.ByteRate;
             return TimeSpan.FromMilliseconds(Math.Ceiling((seconds * 1000) + 150));
         }
 
@@ -56,40 +56,39 @@ internal static class SpeechAudioHelper
 
     public static byte[] CreateSilenceWaveLike(byte[] referenceWaveBytes, double silenceSeconds)
     {
-        if (!TryReadWave(referenceWaveBytes, out var format, out _))
+        if (!TryReadWaveData(referenceWaveBytes, out var waveData))
         {
             return Array.Empty<byte>();
         }
 
-        var silencePcm = BuildLeadingSilencePcm(format, silenceSeconds);
+        var silencePcm = BuildLeadingSilencePcm(waveData.Format, silenceSeconds);
         if (silencePcm.Length == 0)
         {
             return Array.Empty<byte>();
         }
 
-        return BuildWave(format, silencePcm);
+        return BuildWave(waveData.Format, silencePcm);
     }
 
     public static byte[] CreateWarmupCarrierWaveLike(byte[] referenceWaveBytes, double carrierSeconds)
     {
-        if (!TryReadWave(referenceWaveBytes, out var format, out _))
+        if (!TryReadWaveData(referenceWaveBytes, out var waveData))
         {
             return Array.Empty<byte>();
         }
 
-        var carrierPcm = BuildWarmupCarrierPcm(format, carrierSeconds);
+        var carrierPcm = BuildWarmupCarrierPcm(waveData.Format, carrierSeconds);
         if (carrierPcm.Length == 0)
         {
             return Array.Empty<byte>();
         }
 
-        return BuildWave(format, carrierPcm);
+        return BuildWave(waveData.Format, carrierPcm);
     }
 
-    private static bool TryReadWave(byte[] waveBytes, out WaveFormat format, out byte[] pcmBytes)
+    internal static bool TryReadWaveData(byte[] waveBytes, out WaveData waveData)
     {
-        format = default;
-        pcmBytes = Array.Empty<byte>();
+        waveData = default;
 
         try
         {
@@ -138,14 +137,14 @@ internal static class SpeechAudioHelper
 
             using var fmtStream = new MemoryStream(fmtChunk, writable: false);
             using var fmtReader = new BinaryReader(fmtStream);
-            format = new WaveFormat(
+            var format = new WaveFormat(
                 AudioFormat: fmtReader.ReadInt16(),
                 ChannelCount: fmtReader.ReadInt16(),
                 SampleRate: fmtReader.ReadInt32(),
                 ByteRate: fmtReader.ReadInt32(),
                 BlockAlign: fmtReader.ReadInt16(),
                 BitsPerSample: fmtReader.ReadInt16());
-            pcmBytes = dataChunk;
+            waveData = new WaveData(format, dataChunk);
             return true;
         }
         catch
@@ -283,7 +282,9 @@ internal static class SpeechAudioHelper
         return stream.ToArray();
     }
 
-    private readonly record struct WaveFormat(
+    internal readonly record struct WaveData(WaveFormat Format, byte[] PcmBytes);
+
+    internal readonly record struct WaveFormat(
         short AudioFormat,
         short ChannelCount,
         int SampleRate,

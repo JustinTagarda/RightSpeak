@@ -34,6 +34,7 @@ public sealed class DocumentTextRetrievalService : IDocumentTextRetrievalService
 
         TextRetrievalResult? lastFailure = null;
         var failureDetails = new List<string>();
+        var shouldRetry = false;
 
         foreach (var provider in _providers)
         {
@@ -72,6 +73,7 @@ public sealed class DocumentTextRetrievalService : IDocumentTextRetrievalService
             }
 
             lastFailure = result;
+            shouldRetry |= result.ShouldRetry;
             var source = result.Source?.ToString() ?? provider.GetType().Name;
             var message = string.IsNullOrWhiteSpace(result.Message) ? "No details." : result.Message;
             failureDetails.Add($"{source}: {message}");
@@ -85,7 +87,8 @@ public sealed class DocumentTextRetrievalService : IDocumentTextRetrievalService
                 ["summary"] = string.Join(" | ", failureDetails.Where(detail => !string.IsNullOrWhiteSpace(detail))),
                 ["elapsedMs"] = overallStopwatch.ElapsedMilliseconds.ToString()
             });
-        return lastFailure ?? TextRetrievalResult.Failed("Document-text retrieval is unavailable.");
+        return (lastFailure ?? TextRetrievalResult.Failed("Document-text retrieval is unavailable."))
+            .WithRetrySuggested(shouldRetry);
     }
 
     private static string? BuildPreview(string? text)

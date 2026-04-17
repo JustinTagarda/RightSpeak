@@ -10,7 +10,7 @@ This repository is in early development.
 Current state:
 - WPF app scaffold exists
 - project targets `.NET 10` on Windows
-- core reading workflow is not implemented yet
+- core reading workflows are implemented and being hardened for reliability
 
 The current focus is getting the MVP path working reliably:
 1. local text-to-speech
@@ -93,11 +93,17 @@ dotnet run --project .\RightSpeak.csproj
 ```
 
 ## Current Implementation
-- local Windows text-to-speech via `System.Speech`
+- local speech engine abstraction with Windows OneCore, `System.Speech`, and Piper support
 - manual text input with `Read` and `Stop`
 - selected-text reading pipeline with UI Automation, focused-control, and clipboard fallback stages
 - paragraph reading (first path via UI Automation paragraph expansion from focused selection/caret)
 - document reading (first path via focused-control UI Automation document or value patterns)
+- chunked/continuous speech stream orchestration for longer reads
+- Piper startup-clipping mitigation baseline:
+  - short and long Piper reads both use continuous stream playback
+  - single-chunk Piper reads are routed through the same stream path as multi-chunk reads
+  - direct Piper `SoundPlayer` playback is not the normal read path
+- speech diagnostics include stream and engine routing events (for example `speech_single_chunk_stream_routed`, `speech_chunk_stream_*`, `piper_continuous_playback_*`)
 - global hotkeys:
   - `Ctrl+Shift+R` read selected text
   - `Ctrl+Shift+T` read typed text from the app input box

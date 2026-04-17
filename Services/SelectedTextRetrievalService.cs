@@ -37,6 +37,7 @@ public sealed class SelectedTextRetrievalService : ISelectedTextRetrievalService
 
         TextRetrievalResult? lastFailure = null;
         var failureDetails = new List<string>();
+        var shouldRetry = false;
 
         foreach (var provider in _providers)
         {
@@ -77,6 +78,7 @@ public sealed class SelectedTextRetrievalService : ISelectedTextRetrievalService
             }
 
             lastFailure = result;
+            shouldRetry |= result.ShouldRetry;
             var source = result.Source?.ToString() ?? provider.GetType().Name;
             var message = string.IsNullOrWhiteSpace(result.Message) ? "No details." : result.Message;
             failureDetails.Add($"{source}: {message}");
@@ -103,10 +105,13 @@ public sealed class SelectedTextRetrievalService : ISelectedTextRetrievalService
                     ["summary"] = summary,
                     ["elapsedMs"] = overallStopwatch.ElapsedMilliseconds.ToString()
                 });
-            return TextRetrievalResult.Failed($"Selected-text retrieval failed across all strategies. {summary}");
+            return TextRetrievalResult.Failed(
+                $"Selected-text retrieval failed across all strategies. {summary}",
+                shouldRetry: shouldRetry);
         }
 
-        return lastFailure ?? TextRetrievalResult.Failed("Selected-text retrieval is unavailable.");
+        return (lastFailure ?? TextRetrievalResult.Failed("Selected-text retrieval is unavailable."))
+            .WithRetrySuggested(shouldRetry);
     }
 
     private static string? BuildPreview(string? text)

@@ -4,7 +4,6 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Media;
 using System.Runtime.InteropServices;
 using System.Buffers.Binary;
 using System.Text;
@@ -54,6 +53,7 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
     private static readonly bool EnableLeadingTokenGuardWorkaround = true;
     private const int LeadingTokenGuardMaxTextLengthCharacters = 280;
     private const string LeadingTokenGuardPrefix = "-----";
+    private const string PiperPlaybackModeContinuousWaveOut = "continuous_waveout";
     private const double OutputDeviceWarmupCarrierSeconds = 0.30;
     private const double PiperPrimerColdStartSeconds = 0.62;
     private const double PiperPrimerWarmStartSeconds = 0.38;
@@ -75,7 +75,7 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
     private readonly PiperVoiceDefinition[] _voices;
     private readonly PiperAvailability _availability;
     private CancellationTokenSource? _playbackCancellationTokenSource;
-    private SoundPlayer? _currentSoundPlayer;
+    private ContinuousWaveOutPlayer? _currentContinuousPlaybackPlayer;
     private Process? _currentPiperProcess;
     private Process? _warmPiperProcess;
     private StreamWriter? _warmPiperInputWriter;
@@ -465,83 +465,103 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var shouldWarmOutputDevice = options.AllowOutputDeviceWarmup && ShouldWarmOutputDevice();
-        if (!options.AllowOutputDeviceWarmup)
-        {
-            AppDiagnostics.Info(
-                "piper_output_device_warmup_skipped",
-                new Dictionary<string, string?>
-                {
-                    ["reason"] = options.IsContinuationChunk ? "continuation_chunk" : "option_disabled"
-                });
-        }
-        if (shouldWarmOutputDevice)
-        {
-            var warmupWaveBytes = SpeechAudioHelper.CreateWarmupCarrierWaveLike(waveBytes, OutputDeviceWarmupCarrierSeconds);
-            if (warmupWaveBytes.Length > 0)
-            {
-                AppDiagnostics.Info(
-                    "piper_output_device_warmup_applied",
-                    new Dictionary<string, string?>
-                    {
-                        ["warmupSeconds"] = OutputDeviceWarmupCarrierSeconds.ToString("0.00", CultureInfo.InvariantCulture),
-                        ["warmupMode"] = "carrier",
-                        ["reason"] = "cold_or_idle_session"
-                    });
-
-                var warmupDuration = SpeechAudioHelper.GetPlaybackDuration(warmupWaveBytes);
-                using var warmupStream = new MemoryStream(warmupWaveBytes, writable: false);
-                using var warmupPlayer = new SoundPlayer(warmupStream);
-                warmupPlayer.Load();
-
-                await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-                try
-                {
-                    ThrowIfDisposed();
-                    _currentSoundPlayer = warmupPlayer;
-                }
-                finally
-                {
-                    _gate.Release();
-                }
-
-                cancellationToken.ThrowIfCancellationRequested();
-                warmupPlayer.Play();
-                await Task.Delay(warmupDuration, cancellationToken).ConfigureAwait(false);
-            }
-        }
-
-        var playbackDuration = SpeechAudioHelper.GetPlaybackDuration(waveBytes);
-        using var waveStream = new MemoryStream(waveBytes, writable: false);
-        using var soundPlayer = new SoundPlayer(waveStream);
-        soundPlayer.Load();
-
+        var playbackId = Guid.NewGuid().ToString("N");
+        using var playbackPlayer = new ContinuousWaveOutPlayer(playbackId);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             ThrowIfDisposed();
-            _currentSoundPlayer = soundPlayer;
+            _currentContinuousPlaybackPlayer = playbackPlayer;
         }
         finally
         {
             _gate.Release();
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
-        soundPlayer.Play();
-        await Task.Delay(playbackDuration, cancellationToken).ConfigureAwait(false);
-
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var shouldWarmOutputDevice = options.AllowOutputDeviceWarmup && ShouldWarmOutputDevice();
         try
         {
-            _lastPlaybackCompletedUtc = DateTime.UtcNow;
+            AppDiagnostics.Info(
+                "piper_continuous_playback_started",
+                new Dictionary<string, string?>
+                {
+                    ["playbackId"] = playbackId,
+                    ["playbackMode"] = PiperPlaybackModeContinuousWaveOut,
+                    ["waveBytes"] = waveBytes.Length.ToString(CultureInfo.InvariantCulture),
+                    ["allowOutputDeviceWarmup"] = options.AllowOutputDeviceWarmup.ToString(),
+                    ["willWarmOutputDevice"] = shouldWarmOutputDevice.ToString()
+                });
+
+            if (!options.AllowOutputDeviceWarmup)
+            {
+                AppDiagnostics.Info(
+                    "piper_output_device_warmup_skipped",
+                    new Dictionary<string, string?>
+                    {
+                        ["playbackId"] = playbackId,
+                        ["playbackMode"] = PiperPlaybackModeContinuousWaveOut,
+                        ["reason"] = options.IsContinuationChunk ? "continuation_chunk" : "option_disabled"
+                    });
+            }
+
+            if (shouldWarmOutputDevice)
+            {
+                var warmupWaveBytes = SpeechAudioHelper.CreateWarmupCarrierWaveLike(waveBytes, OutputDeviceWarmupCarrierSeconds);
+                if (warmupWaveBytes.Length > 0)
+                {
+                    AppDiagnostics.Info(
+                        "piper_output_device_warmup_applied",
+                        new Dictionary<string, string?>
+                        {
+                            ["playbackId"] = playbackId,
+                            ["playbackMode"] = PiperPlaybackModeContinuousWaveOut,
+                            ["warmupSeconds"] = OutputDeviceWarmupCarrierSeconds.ToString("0.00", CultureInfo.InvariantCulture),
+                            ["warmupMode"] = "carrier",
+                            ["reason"] = "cold_or_idle_session"
+                        });
+
+                    await playbackPlayer.EnqueueWaveAsync(warmupWaveBytes, cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            await playbackPlayer.EnqueueWaveAsync(waveBytes, cancellationToken).ConfigureAwait(false);
+            await playbackPlayer.DrainAsync(cancellationToken).ConfigureAwait(false);
+
+            await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                _lastPlaybackCompletedUtc = DateTime.UtcNow;
+            }
+            finally
+            {
+                _gate.Release();
+            }
+
+            AppDiagnostics.Info(
+                "piper_continuous_playback_completed",
+                new Dictionary<string, string?>
+                {
+                    ["playbackId"] = playbackId,
+                    ["playbackMode"] = PiperPlaybackModeContinuousWaveOut
+                });
+
+            return SpeechResult.Completed();
         }
         finally
         {
-            _gate.Release();
+            await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                if (ReferenceEquals(_currentContinuousPlaybackPlayer, playbackPlayer))
+                {
+                    _currentContinuousPlaybackPlayer = null;
+                }
+            }
+            finally
+            {
+                _gate.Release();
+            }
         }
-
-        return SpeechResult.Completed();
     }
 
     private bool ShouldWarmOutputDevice()
@@ -552,6 +572,89 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
         }
 
         return (DateTime.UtcNow - _lastPlaybackCompletedUtc).TotalSeconds >= WarmSessionIdleResetSeconds;
+    }
+
+    internal async Task<byte[]> CreateExternalOutputDeviceWarmupWaveAsync(
+        byte[] referenceWaveBytes,
+        SpeechOptions options,
+        string? streamId = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (referenceWaveBytes is null)
+        {
+            throw new ArgumentNullException(nameof(referenceWaveBytes));
+        }
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+
+            if (!options.AllowOutputDeviceWarmup)
+            {
+                AppDiagnostics.Info(
+                    "piper_output_device_warmup_skipped",
+                    new Dictionary<string, string?>
+                    {
+                        ["streamId"] = streamId,
+                        ["playbackMode"] = PiperPlaybackModeContinuousWaveOut,
+                        ["reason"] = options.IsContinuationChunk ? "continuation_chunk" : "option_disabled"
+                    });
+                return Array.Empty<byte>();
+            }
+
+            if (!ShouldWarmOutputDevice())
+            {
+                AppDiagnostics.Info(
+                    "piper_output_device_warmup_not_needed",
+                    new Dictionary<string, string?>
+                    {
+                        ["streamId"] = streamId,
+                        ["playbackMode"] = PiperPlaybackModeContinuousWaveOut,
+                        ["reason"] = "session_is_warm"
+                    });
+                return Array.Empty<byte>();
+            }
+
+            var warmupWaveBytes = SpeechAudioHelper.CreateWarmupCarrierWaveLike(referenceWaveBytes, OutputDeviceWarmupCarrierSeconds);
+            if (warmupWaveBytes.Length > 0)
+            {
+                AppDiagnostics.Info(
+                    "piper_output_device_warmup_applied",
+                    new Dictionary<string, string?>
+                    {
+                        ["streamId"] = streamId,
+                        ["playbackMode"] = PiperPlaybackModeContinuousWaveOut,
+                        ["warmupSeconds"] = OutputDeviceWarmupCarrierSeconds.ToString("0.00", CultureInfo.InvariantCulture),
+                        ["warmupMode"] = "carrier",
+                        ["reason"] = "cold_or_idle_session"
+                    });
+            }
+
+            return warmupWaveBytes;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    internal async Task NotifyExternalPlaybackCompletedAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _lastPlaybackCompletedUtc = DateTime.UtcNow;
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     private void ResetSessionForFreshReadUnsafe(string reason)
@@ -1124,7 +1227,7 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
     private void CancelActivePlaybackUnsafe()
     {
         _playbackCancellationTokenSource?.Cancel();
-        _currentSoundPlayer?.Stop();
+        _currentContinuousPlaybackPlayer?.Stop();
 
         if (_currentPiperProcess is null)
         {
@@ -1152,9 +1255,9 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
 
     private void CleanupPlaybackStateUnsafe()
     {
-        _currentSoundPlayer?.Stop();
-        _currentSoundPlayer?.Dispose();
-        _currentSoundPlayer = null;
+        _currentContinuousPlaybackPlayer?.Stop();
+        _currentContinuousPlaybackPlayer?.Dispose();
+        _currentContinuousPlaybackPlayer = null;
         CancelActivePlaybackUnsafe();
 
         _playbackCancellationTokenSource?.Dispose();

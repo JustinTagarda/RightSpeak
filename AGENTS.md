@@ -108,6 +108,13 @@ Validated Piper manual-read start stability note:
 - The fix depends on keeping the current Piper start-stability path (including warm-session handling and the leading-token guard workaround for susceptible short manual utterances).
 - Treat this behavior as fixed baseline and do not revise or simplify the underlying code path unless explicitly instructed.
 
+Validated Piper playback-path reliability note (fixed baseline):
+- A confirmed issue pattern showed startup clipping on short reads when Piper used a direct playback path, while continuous-stream reads were stable.
+- The fixed baseline is: Piper reads must use the continuous stream playback path for both short and long inputs, including manual read and external-app reads.
+- Single-chunk Piper requests are intentionally routed through the same chunk stream path (continuous waveOut) used by multi-chunk reads.
+- Do not reintroduce or prefer direct Piper `SoundPlayer` playback for normal read flows unless explicitly instructed and revalidated.
+- Keep continuous-stream diagnostics in place (for example `speech_single_chunk_stream_routed`, `speech_chunk_stream_*`, `piper_continuous_playback_*`) so startup regressions can be diagnosed quickly.
+
 Validated voice-default semantics rule:
 - In the voice selector, the `System default` option must always mean the Windows OS/engine default voice (for example OneCore/System.Speech defaults), not an app-preferred voice and not Piper.
 - Do not route `System default` to Piper when Windows engine defaults are available.

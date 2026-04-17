@@ -381,8 +381,21 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private async Task StopAsync()
     {
         StatusMessage = "Stopping...";
-        var result = await _readingService.StopAsync().ConfigureAwait(true);
-        StatusMessage = result.Message;
+        try
+        {
+            var result = await _readingService.StopAsync().ConfigureAwait(true);
+            StatusMessage = result.Message;
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "stop_command_failed",
+                new Dictionary<string, string?>
+                {
+                    ["message"] = ex.Message
+                });
+            StatusMessage = "Couldn't stop reading. Please try again.";
+        }
     }
 
     private async Task ReadSelectedTextAsync()

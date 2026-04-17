@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -21,20 +22,52 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
         public string? EngineName { get; }
     }
 
+    private sealed class RenderedChunkClip : IDisposable
+    {
+        private bool _disposed;
+
+        public RenderedChunkClip(IPrefetchedSpeechClip prefetchedClip, byte[] waveBytes, string engineName)
+        {
+            PrefetchedClip = prefetchedClip;
+            WaveBytes = waveBytes;
+            EngineName = engineName;
+        }
+
+        public string EngineName { get; }
+        public byte[] WaveBytes { get; }
+        private IPrefetchedSpeechClip PrefetchedClip { get; }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            PrefetchedClip.Dispose();
+            _disposed = true;
+        }
+    }
+
     private const int PiperPrefetchGraceWindowMilliseconds = 40;
     private const int WindowsOneCorePrefetchGraceWindowMilliseconds = 15;
     private const int SystemSpeechPrefetchGraceWindowMilliseconds = 15;
     private const int DefaultPrefetchGraceWindowMilliseconds = 15;
     private const int ShortChunkThresholdCharacters = 120;
 
+    private readonly SemaphoreSlim _gate;
     private readonly PiperSpeechService _piperSpeechService;
     private readonly WindowsNeuralSpeechService _preferredSpeechService;
     private readonly SystemSpeechService _fallbackSpeechService;
     private readonly SpeechVoice[] _installedVoices;
+    private CancellationTokenSource? _continuousChunkPlaybackCancellationTokenSource;
+    private ContinuousWaveOutPlayer? _continuousChunkPlaybackPlayer;
+    private bool _isContinuousChunkPlaybackActive;
     private bool _disposed;
 
     public WindowsSpeechService()
     {
+        _gate = new SemaphoreSlim(1, 1);
         _piperSpeechService = new PiperSpeechService();
         _preferredSpeechService = new WindowsNeuralSpeechService();
         _fallbackSpeechService = new SystemSpeechService();
@@ -50,6 +83,7 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
     }
 
     public bool IsSpeaking =>
+        _isContinuousChunkPlaybackActive ||
         _piperSpeechService.IsSpeaking ||
         _preferredSpeechService.IsSpeaking ||
         _fallbackSpeechService.IsSpeaking;
@@ -59,12 +93,27 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
     public async Task<SpeechResult> SpeakAsync(SpeechRequest request, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
+        await StopActiveContinuousChunkPlaybackAsync(cancellationToken).ConfigureAwait(false);
 
         var explicitVoiceName = request.Options.VoiceName;
         var engineOrder = BuildEngineOrder(explicitVoiceName);
         if (!string.IsNullOrWhiteSpace(explicitVoiceName) && engineOrder.Count == 0)
         {
             return SpeechResult.Failed($"Selected voice '{explicitVoiceName}' is not installed.");
+        }
+
+        if (engineOrder.Count > 0 && ReferenceEquals(engineOrder[0], _piperSpeechService))
+        {
+            AppDiagnostics.Info(
+                "speech_single_chunk_stream_routed",
+                new Dictionary<string, string?>
+                {
+                    ["engine"] = GetEngineName(_piperSpeechService),
+                    ["voice"] = request.Options.VoiceName,
+                    ["textLength"] = GetTextLength(request.Text).ToString(CultureInfo.InvariantCulture),
+                    ["reason"] = "piper_uses_continuous_stream"
+                });
+            return await SpeakChunkSequenceAsync(new[] { request }, cancellationToken).ConfigureAwait(false);
         }
 
         SpeechResult? firstFailure = null;
@@ -90,29 +139,260 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
         return firstFailure ?? SpeechResult.Failed("Couldn't start reading.");
     }
 
+    internal async Task<SpeechResult> SpeakChunkSequenceAsync(
+        IReadOnlyList<SpeechRequest> requests,
+        CancellationToken cancellationToken = default)
+    {
+        if (requests is null)
+        {
+            throw new ArgumentNullException(nameof(requests));
+        }
+
+        if (requests.Count == 0)
+        {
+            return SpeechResult.Failed("Nothing to read. Enter text first.");
+        }
+
+        await StopAsync(cancellationToken).ConfigureAwait(false);
+        ThrowIfDisposed();
+
+        var streamId = Guid.NewGuid().ToString("N");
+        var playbackCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var playbackPlayer = new ContinuousWaveOutPlayer(streamId);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            _continuousChunkPlaybackCancellationTokenSource = playbackCancellationTokenSource;
+            _continuousChunkPlaybackPlayer = playbackPlayer;
+            _isContinuousChunkPlaybackActive = true;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        string? pinnedChunkEngineName = null;
+
+        try
+        {
+            AppDiagnostics.Info(
+                "speech_chunk_stream_initializing",
+                new Dictionary<string, string?>
+                {
+                    ["streamId"] = streamId,
+                    ["chunkCount"] = requests.Count.ToString(CultureInfo.InvariantCulture),
+                    ["firstChunkLength"] = GetTextLength(requests[0].Text).ToString(CultureInfo.InvariantCulture),
+                    ["voice"] = requests[0].Options.VoiceName,
+                    ["rate"] = requests[0].Options.Rate.ToString(CultureInfo.InvariantCulture)
+                });
+
+            using var firstChunk = await RenderChunkAsync(
+                    requests[0],
+                    0,
+                    streamId,
+                    preferredEngineName: null,
+                    allowEngineFallback: true,
+                    playbackCancellationTokenSource.Token)
+                .ConfigureAwait(false);
+            pinnedChunkEngineName = firstChunk.EngineName;
+
+            AppDiagnostics.Info(
+                "speech_chunk_stream_started",
+                new Dictionary<string, string?>
+                {
+                    ["streamId"] = streamId,
+                    ["chunkCount"] = requests.Count.ToString(CultureInfo.InvariantCulture),
+                    ["engine"] = pinnedChunkEngineName,
+                    ["voice"] = requests[0].Options.VoiceName,
+                    ["rate"] = requests[0].Options.Rate.ToString(CultureInfo.InvariantCulture),
+                    ["firstChunkLength"] = GetTextLength(requests[0].Text).ToString(CultureInfo.InvariantCulture),
+                    ["firstChunkWaveBytes"] = firstChunk.WaveBytes.Length.ToString(CultureInfo.InvariantCulture),
+                    ["pinned"] = (pinnedChunkEngineName is not null).ToString()
+                });
+
+            if (string.Equals(pinnedChunkEngineName, GetEngineName(_piperSpeechService), StringComparison.OrdinalIgnoreCase))
+            {
+                var warmupWaveBytes = await _piperSpeechService
+                    .CreateExternalOutputDeviceWarmupWaveAsync(
+                        firstChunk.WaveBytes,
+                        requests[0].Options,
+                        streamId,
+                        playbackCancellationTokenSource.Token)
+                    .ConfigureAwait(false);
+                if (warmupWaveBytes.Length > 0)
+                {
+                    await playbackPlayer.EnqueueWaveAsync(warmupWaveBytes, playbackCancellationTokenSource.Token).ConfigureAwait(false);
+                }
+            }
+
+            Task<RenderedChunkClip>? nextChunkRenderTask = null;
+            if (requests.Count > 1)
+            {
+                nextChunkRenderTask = StartPinnedChunkRenderTask(
+                    requests[1],
+                    1,
+                    streamId,
+                    pinnedChunkEngineName,
+                    playbackCancellationTokenSource.Token);
+            }
+
+            await EnqueueRenderedChunkAsync(
+                    playbackPlayer,
+                    firstChunk,
+                    requests[0],
+                    0,
+                    requests.Count,
+                    streamId,
+                    playbackCancellationTokenSource.Token)
+                .ConfigureAwait(false);
+
+            for (var index = 1; index < requests.Count; index++)
+            {
+                if (nextChunkRenderTask is null)
+                {
+                    return SpeechResult.Failed("Couldn't continue reading.");
+                }
+
+                using var renderedChunk = await nextChunkRenderTask.ConfigureAwait(false);
+                if (index + 1 < requests.Count)
+                {
+                    nextChunkRenderTask = StartPinnedChunkRenderTask(
+                        requests[index + 1],
+                        index + 1,
+                        streamId,
+                        pinnedChunkEngineName,
+                        playbackCancellationTokenSource.Token);
+                }
+                else
+                {
+                    nextChunkRenderTask = null;
+                }
+
+                await EnqueueRenderedChunkAsync(
+                        playbackPlayer,
+                        renderedChunk,
+                        requests[index],
+                        index,
+                        requests.Count,
+                        streamId,
+                        playbackCancellationTokenSource.Token)
+                    .ConfigureAwait(false);
+            }
+
+            await playbackPlayer.DrainAsync(playbackCancellationTokenSource.Token).ConfigureAwait(false);
+
+            if (string.Equals(pinnedChunkEngineName, GetEngineName(_piperSpeechService), StringComparison.OrdinalIgnoreCase))
+            {
+                await _piperSpeechService.NotifyExternalPlaybackCompletedAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+
+            AppDiagnostics.Info(
+                "speech_chunk_stream_completed",
+                new Dictionary<string, string?>
+                {
+                    ["streamId"] = streamId,
+                    ["chunkCount"] = requests.Count.ToString(CultureInfo.InvariantCulture),
+                    ["engine"] = pinnedChunkEngineName,
+                    ["voice"] = requests[0].Options.VoiceName,
+                    ["pendingPlayback"] = "0"
+                });
+
+            return SpeechResult.Completed();
+        }
+        catch (OperationCanceledException) when (playbackCancellationTokenSource.IsCancellationRequested || cancellationToken.IsCancellationRequested)
+        {
+            return SpeechResult.Stopped();
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Warn(
+                "speech_chunk_continuous_playback_failed",
+                new Dictionary<string, string?>
+                {
+                    ["streamId"] = streamId,
+                    ["message"] = ex.Message,
+                    ["engine"] = pinnedChunkEngineName,
+                    ["chunkCount"] = requests.Count.ToString(CultureInfo.InvariantCulture),
+                    ["voice"] = requests[0].Options.VoiceName,
+                    ["lastKnownChunkIndex"] = Math.Max(0, requests.Count - 1).ToString(CultureInfo.InvariantCulture)
+                });
+            playbackPlayer.Stop();
+            return SpeechResult.Failed("Couldn't continue reading.");
+        }
+        finally
+        {
+            await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                if (ReferenceEquals(_continuousChunkPlaybackCancellationTokenSource, playbackCancellationTokenSource))
+                {
+                    _continuousChunkPlaybackCancellationTokenSource = null;
+                }
+
+                if (ReferenceEquals(_continuousChunkPlaybackPlayer, playbackPlayer))
+                {
+                    _continuousChunkPlaybackPlayer = null;
+                }
+
+                _isContinuousChunkPlaybackActive = false;
+            }
+            finally
+            {
+                _gate.Release();
+            }
+
+            playbackPlayer.Dispose();
+            playbackCancellationTokenSource.Dispose();
+        }
+    }
+
     public async Task<SpeechResult> StopAsync(CancellationToken cancellationToken = default)
     {
-        ThrowIfDisposed();
-        await _piperSpeechService.CancelPrefetchAsync(cancellationToken).ConfigureAwait(false);
-        await _preferredSpeechService.CancelPrefetchAsync(cancellationToken).ConfigureAwait(false);
-        await _fallbackSpeechService.CancelPrefetchAsync(cancellationToken).ConfigureAwait(false);
-
-        if (_piperSpeechService.IsSpeaking)
+        try
         {
-            return await _piperSpeechService.StopAsync(cancellationToken).ConfigureAwait(false);
-        }
+            ThrowIfDisposed();
+            var stoppedContinuousChunkPlayback = await StopActiveContinuousChunkPlaybackAsync(cancellationToken).ConfigureAwait(false);
+            await _piperSpeechService.CancelPrefetchAsync(cancellationToken).ConfigureAwait(false);
+            await _preferredSpeechService.CancelPrefetchAsync(cancellationToken).ConfigureAwait(false);
+            await _fallbackSpeechService.CancelPrefetchAsync(cancellationToken).ConfigureAwait(false);
 
-        if (_preferredSpeechService.IsSpeaking)
+            if (_piperSpeechService.IsSpeaking)
+            {
+                return await _piperSpeechService.StopAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            if (_preferredSpeechService.IsSpeaking)
+            {
+                return await _preferredSpeechService.StopAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            if (_fallbackSpeechService.IsSpeaking)
+            {
+                return await _fallbackSpeechService.StopAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            if (stoppedContinuousChunkPlayback)
+            {
+                return SpeechResult.Stopped();
+            }
+
+            return SpeechResult.Completed("Speech is already stopped.");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            return await _preferredSpeechService.StopAsync(cancellationToken).ConfigureAwait(false);
+            return SpeechResult.Stopped();
         }
-
-        if (_fallbackSpeechService.IsSpeaking)
+        catch (Exception ex)
         {
-            return await _fallbackSpeechService.StopAsync(cancellationToken).ConfigureAwait(false);
+            AppDiagnostics.Error(
+                "windows_speech_stop_failed",
+                new Dictionary<string, string?>
+                {
+                    ["message"] = ex.Message
+                });
+            return SpeechResult.Failed("Couldn't stop reading. Please try again.");
         }
-
-        return SpeechResult.Completed("Speech is already stopped.");
     }
 
     public bool SupportsPrefetch(SpeechRequest request)
@@ -164,23 +444,32 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
+        return SpeakPrefetchedInternalAsync(prefetchedClip, request, cancellationToken);
+    }
+
+    private async Task<SpeechResult> SpeakPrefetchedInternalAsync(
+        IPrefetchedSpeechClip prefetchedClip,
+        SpeechRequest request,
+        CancellationToken cancellationToken)
+    {
+        await StopActiveContinuousChunkPlaybackAsync(cancellationToken).ConfigureAwait(false);
 
         if (prefetchedClip is PiperSpeechService.PiperPrefetchedSpeechClip piperClip)
         {
-            return _piperSpeechService.SpeakPrefetchedAsync(piperClip, request, cancellationToken);
+            return await _piperSpeechService.SpeakPrefetchedAsync(piperClip, request, cancellationToken).ConfigureAwait(false);
         }
 
         if (prefetchedClip is WindowsNeuralSpeechService.WindowsNeuralPrefetchedSpeechClip neuralClip)
         {
-            return _preferredSpeechService.SpeakPrefetchedAsync(neuralClip, request, cancellationToken);
+            return await _preferredSpeechService.SpeakPrefetchedAsync(neuralClip, request, cancellationToken).ConfigureAwait(false);
         }
 
         if (prefetchedClip is SystemSpeechService.SystemPrefetchedSpeechClip systemClip)
         {
-            return _fallbackSpeechService.SpeakPrefetchedAsync(systemClip, request, cancellationToken);
+            return await _fallbackSpeechService.SpeakPrefetchedAsync(systemClip, request, cancellationToken).ConfigureAwait(false);
         }
 
-        return Task.FromResult(SpeechResult.Failed("Prefetched speech clip is not compatible with the active speech engine."));
+        return SpeechResult.Failed("Prefetched speech clip is not compatible with the active speech engine.");
     }
 
     public async Task<SpeechResult> SpeakChunkAsync(
@@ -204,6 +493,7 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
+        await StopActiveContinuousChunkPlaybackAsync(cancellationToken).ConfigureAwait(false);
 
         if (prefetchedClip is null)
         {
@@ -323,10 +613,299 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
             return;
         }
 
+        CancellationTokenSource? continuousChunkPlaybackCancellationTokenSource;
+        ContinuousWaveOutPlayer? continuousChunkPlaybackPlayer;
+        _gate.Wait();
+        try
+        {
+            continuousChunkPlaybackCancellationTokenSource = _continuousChunkPlaybackCancellationTokenSource;
+            continuousChunkPlaybackPlayer = _continuousChunkPlaybackPlayer;
+            _continuousChunkPlaybackCancellationTokenSource = null;
+            _continuousChunkPlaybackPlayer = null;
+            _isContinuousChunkPlaybackActive = false;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        try
+        {
+            continuousChunkPlaybackCancellationTokenSource?.Cancel();
+        }
+        catch
+        {
+            // Best effort only.
+        }
+
+        continuousChunkPlaybackPlayer?.Stop();
+        continuousChunkPlaybackPlayer?.Dispose();
+        continuousChunkPlaybackCancellationTokenSource?.Dispose();
+
         _piperSpeechService.Dispose();
         _preferredSpeechService.Dispose();
         _fallbackSpeechService.Dispose();
+        _gate.Dispose();
         _disposed = true;
+    }
+
+    private async Task<bool> StopActiveContinuousChunkPlaybackAsync(CancellationToken cancellationToken)
+    {
+        CancellationTokenSource? continuousChunkPlaybackCancellationTokenSource;
+        ContinuousWaveOutPlayer? continuousChunkPlaybackPlayer;
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            continuousChunkPlaybackCancellationTokenSource = _continuousChunkPlaybackCancellationTokenSource;
+            continuousChunkPlaybackPlayer = _continuousChunkPlaybackPlayer;
+            _continuousChunkPlaybackCancellationTokenSource = null;
+            _continuousChunkPlaybackPlayer = null;
+            _isContinuousChunkPlaybackActive = false;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        if (continuousChunkPlaybackCancellationTokenSource is null &&
+            continuousChunkPlaybackPlayer is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            continuousChunkPlaybackCancellationTokenSource?.Cancel();
+        }
+        catch
+        {
+            // Best effort only.
+        }
+
+        continuousChunkPlaybackPlayer?.Stop();
+        return true;
+    }
+
+    private async Task<RenderedChunkClip> RenderChunkAsync(
+        SpeechRequest request,
+        int chunkIndex,
+        string streamId,
+        string? preferredEngineName,
+        bool allowEngineFallback,
+        CancellationToken cancellationToken)
+    {
+        var textLength = GetTextLength(request.Text);
+        var engineOrder = allowEngineFallback
+            ? BuildEngineOrder(request.Options.VoiceName, preferredEngineName)
+            : BuildPinnedEngineOrder(request.Options.VoiceName, preferredEngineName);
+        if (!string.IsNullOrWhiteSpace(request.Options.VoiceName) && engineOrder.Count == 0)
+        {
+            throw new InvalidOperationException($"Selected voice '{request.Options.VoiceName}' is not installed.");
+        }
+
+        if (engineOrder.Count == 0)
+        {
+            throw new InvalidOperationException("Couldn't determine a speech engine for chunked playback.");
+        }
+
+        Exception? firstFailure = null;
+        string? successfulFallbackEngineName = null;
+        foreach (var engine in engineOrder)
+        {
+            if (!SupportsPrefetch(engine, request))
+            {
+                AppDiagnostics.Info(
+                    "speech_chunk_render_skipped",
+                    new Dictionary<string, string?>
+                    {
+                        ["streamId"] = streamId,
+                        ["chunkIndex"] = chunkIndex.ToString(CultureInfo.InvariantCulture),
+                        ["engine"] = GetEngineName(engine),
+                        ["voice"] = request.Options.VoiceName,
+                        ["textLength"] = textLength.ToString(CultureInfo.InvariantCulture),
+                        ["reason"] = "prefetch_not_supported",
+                        ["allowFallback"] = allowEngineFallback.ToString()
+                    });
+                continue;
+            }
+
+            try
+            {
+                AppDiagnostics.Info(
+                    "speech_chunk_render_attempt",
+                    new Dictionary<string, string?>
+                    {
+                        ["streamId"] = streamId,
+                        ["chunkIndex"] = chunkIndex.ToString(CultureInfo.InvariantCulture),
+                        ["engine"] = GetEngineName(engine),
+                        ["voice"] = request.Options.VoiceName,
+                        ["textLength"] = textLength.ToString(CultureInfo.InvariantCulture),
+                        ["preferredEngine"] = preferredEngineName,
+                        ["allowFallback"] = allowEngineFallback.ToString()
+                    });
+
+                var prefetchedClip = await PrefetchAsync(engine, request, cancellationToken).ConfigureAwait(false);
+                if (prefetchedClip is null)
+                {
+                    AppDiagnostics.Warn(
+                        "speech_chunk_render_no_clip",
+                        new Dictionary<string, string?>
+                        {
+                            ["streamId"] = streamId,
+                            ["chunkIndex"] = chunkIndex.ToString(CultureInfo.InvariantCulture),
+                            ["engine"] = GetEngineName(engine),
+                            ["voice"] = request.Options.VoiceName,
+                            ["textLength"] = textLength.ToString(CultureInfo.InvariantCulture),
+                            ["preferredEngine"] = preferredEngineName,
+                            ["allowFallback"] = allowEngineFallback.ToString()
+                        });
+                    continue;
+                }
+
+                if (TryCreateRenderedChunkClip(prefetchedClip, engine, out var renderedChunk))
+                {
+                    if (!string.IsNullOrWhiteSpace(successfulFallbackEngineName))
+                    {
+                        AppDiagnostics.Info(
+                            "speech_chunk_render_fallback_engaged",
+                            new Dictionary<string, string?>
+                            {
+                                ["streamId"] = streamId,
+                                ["chunkIndex"] = chunkIndex.ToString(CultureInfo.InvariantCulture),
+                                ["fromEngine"] = successfulFallbackEngineName,
+                                ["toEngine"] = renderedChunk.EngineName,
+                                ["voice"] = request.Options.VoiceName
+                            });
+                    }
+
+                    AppDiagnostics.Info(
+                        "speech_chunk_render_succeeded",
+                        new Dictionary<string, string?>
+                        {
+                            ["streamId"] = streamId,
+                            ["chunkIndex"] = chunkIndex.ToString(CultureInfo.InvariantCulture),
+                            ["engine"] = renderedChunk.EngineName,
+                            ["voice"] = request.Options.VoiceName,
+                            ["textLength"] = textLength.ToString(CultureInfo.InvariantCulture),
+                            ["waveBytes"] = renderedChunk.WaveBytes.Length.ToString(CultureInfo.InvariantCulture)
+                        });
+
+                    return renderedChunk;
+                }
+
+                AppDiagnostics.Warn(
+                    "speech_chunk_render_clip_unrecognized",
+                    new Dictionary<string, string?>
+                    {
+                        ["streamId"] = streamId,
+                        ["chunkIndex"] = chunkIndex.ToString(CultureInfo.InvariantCulture),
+                        ["engine"] = GetEngineName(engine),
+                        ["voice"] = request.Options.VoiceName,
+                        ["textLength"] = textLength.ToString(CultureInfo.InvariantCulture)
+                    });
+
+                prefetchedClip.Dispose();
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                firstFailure ??= ex;
+                successfulFallbackEngineName ??= GetEngineName(engine);
+                AppDiagnostics.Warn(
+                    "speech_chunk_render_failed",
+                    new Dictionary<string, string?>
+                    {
+                        ["streamId"] = streamId,
+                        ["chunkIndex"] = chunkIndex.ToString(CultureInfo.InvariantCulture),
+                        ["engine"] = GetEngineName(engine),
+                        ["voice"] = request.Options.VoiceName,
+                        ["reason"] = ex.Message,
+                        ["textLength"] = textLength.ToString(CultureInfo.InvariantCulture),
+                        ["preferredEngine"] = preferredEngineName,
+                        ["allowFallback"] = allowEngineFallback.ToString()
+                    });
+            }
+        }
+
+        if (firstFailure is not null)
+        {
+            throw new InvalidOperationException(firstFailure.Message, firstFailure);
+        }
+
+        throw new InvalidOperationException("Couldn't render speech for chunked playback.");
+    }
+
+    private Task<RenderedChunkClip> StartPinnedChunkRenderTask(
+        SpeechRequest request,
+        int chunkIndex,
+        string streamId,
+        string? pinnedChunkEngineName,
+        CancellationToken cancellationToken)
+    {
+        return RenderChunkAsync(
+            request,
+            chunkIndex,
+            streamId,
+            pinnedChunkEngineName,
+            allowEngineFallback: false,
+            cancellationToken);
+    }
+
+    private static bool TryCreateRenderedChunkClip(
+        IPrefetchedSpeechClip prefetchedClip,
+        ISpeechService owningEngine,
+        out RenderedChunkClip renderedChunk)
+    {
+        switch (prefetchedClip)
+        {
+            case PiperSpeechService.PiperPrefetchedSpeechClip piperClip:
+                renderedChunk = new RenderedChunkClip(prefetchedClip, piperClip.WaveBytes, GetEngineName(owningEngine));
+                return true;
+            case WindowsNeuralSpeechService.WindowsNeuralPrefetchedSpeechClip neuralClip:
+                renderedChunk = new RenderedChunkClip(prefetchedClip, neuralClip.WaveBytes, GetEngineName(owningEngine));
+                return true;
+            case SystemSpeechService.SystemPrefetchedSpeechClip systemClip:
+                renderedChunk = new RenderedChunkClip(prefetchedClip, systemClip.WaveBytes, GetEngineName(owningEngine));
+                return true;
+            default:
+                renderedChunk = null!;
+                return false;
+        }
+    }
+
+    private static async Task EnqueueRenderedChunkAsync(
+        ContinuousWaveOutPlayer playbackPlayer,
+        RenderedChunkClip renderedChunk,
+        SpeechRequest request,
+        int chunkIndex,
+        int chunkCount,
+        string streamId,
+        CancellationToken cancellationToken)
+    {
+        AppDiagnostics.Info(
+            "speech_chunk_dispatch",
+            new Dictionary<string, string?>
+            {
+                ["streamId"] = streamId,
+                ["chunkIndex"] = chunkIndex.ToString(CultureInfo.InvariantCulture),
+                ["chunkCount"] = chunkCount.ToString(CultureInfo.InvariantCulture),
+                ["chunkTextLength"] = GetTextLength(request.Text).ToString(CultureInfo.InvariantCulture),
+                ["voice"] = request.Options.VoiceName,
+                ["primerOverrideSeconds"] = request.Options.LeadingPrimerSecondsOverride?.ToString("0.00", CultureInfo.InvariantCulture) ?? "default",
+                ["mode"] = "continuous_stream",
+                ["engine"] = renderedChunk.EngineName,
+                ["isContinuationChunk"] = request.Options.IsContinuationChunk.ToString()
+            });
+
+        await playbackPlayer.EnqueueWaveAsync(renderedChunk.WaveBytes, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static int GetTextLength(string? text)
+    {
+        return text?.Length ?? 0;
     }
 
     private IReadOnlyList<ISpeechService> BuildEngineOrder(string? voiceName)
@@ -372,6 +951,18 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
         }
 
         return engines;
+    }
+
+    private IReadOnlyList<ISpeechService> BuildPinnedEngineOrder(string? voiceName, string? preferredEngineName)
+    {
+        if (!string.IsNullOrWhiteSpace(voiceName))
+        {
+            return BuildEngineOrder(voiceName, preferredEngineName);
+        }
+
+        return TryResolveEngine(preferredEngineName, out var pinnedEngine)
+            ? new[] { pinnedEngine }
+            : Array.Empty<ISpeechService>();
     }
 
     private async Task<ChunkSpeechResult> SpeakWithFallbackAsync(

@@ -76,7 +76,7 @@ public sealed class ParagraphTextRetrievalService : IParagraphTextRetrievalServi
             }
 
             lastFailure = result;
-            shouldRetry |= IsRetryableParagraphFailure(result);
+            shouldRetry |= result.ShouldRetry || IsRetryableParagraphFailure(result);
             var source = result.Source?.ToString() ?? provider.GetType().Name;
             var message = string.IsNullOrWhiteSpace(result.Message) ? "No details." : result.Message;
             failureDetails.Add($"{source}: {message}");
