@@ -39,6 +39,10 @@ internal static class WindowFocusInterop
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool ShowWindow(nint hWnd, int nCmdShow);
 
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsIconic(nint hWnd);
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern int GetClassName(nint hWnd, StringBuilder lpClassName, int nMaxCount);
 
@@ -78,7 +82,11 @@ internal static class WindowFocusInterop
                 attached = AttachThreadInput(currentThreadId, foregroundThreadId, true);
             }
 
-            ShowWindow(hWnd, SwRestore);
+            if (IsIconic(hWnd))
+            {
+                ShowWindow(hWnd, SwRestore);
+            }
+
             BringWindowToTop(hWnd);
             return SetForegroundWindow(hWnd);
         }

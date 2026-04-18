@@ -471,6 +471,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private async Task ReadParagraphAsync()
     {
         var operationId = Guid.NewGuid().ToString("N");
+        using var scope = AppDiagnostics.BeginScope(new Dictionary<string, string?>
+        {
+            ["paragraphCommandOperationId"] = operationId,
+            ["paragraphCommandTrigger"] = "read_paragraph_command",
+            ["paragraphFocusedWindowText"] = _focusedWindowText
+        });
         var stopwatch = Stopwatch.StartNew();
         AppDiagnostics.Info(
             "paragraph_workflow_command_started",

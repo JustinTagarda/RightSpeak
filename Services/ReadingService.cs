@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using RightSpeak.Interop;
 using RightSpeak.Models;
 
 namespace RightSpeak.Services;
@@ -341,6 +342,17 @@ public sealed class ReadingService : IReadingService
         var result = await retrieveAsync(cancellationToken).ConfigureAwait(false);
         if (!ShouldRetryTextRetrieval(result))
         {
+            return (result, false);
+        }
+
+        if (IsExternalReadWorkflow(workflowName) &&
+            !IsForegroundExternalToRightSpeak(out var foregroundData))
+        {
+            foregroundData["operationId"] = operationId;
+            foregroundData["workflow"] = workflowName;
+            foregroundData["firstAttemptSource"] = result.Source?.ToString();
+            foregroundData["firstAttemptMessage"] = result.Message;
+            AppDiagnostics.Warn("focused_read_retrieval_retry_skipped_focus_not_external", foregroundData);
             return (result, false);
         }
 
@@ -812,6 +824,31 @@ public sealed class ReadingService : IReadingService
     private static bool ShouldRetryTextRetrieval(TextRetrievalResult retrieval)
     {
         return (!retrieval.Success || string.IsNullOrWhiteSpace(retrieval.Text)) && retrieval.ShouldRetry;
+    }
+
+    private static bool IsExternalReadWorkflow(string workflowName)
+    {
+        return string.Equals(workflowName, "selected", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(workflowName, "paragraph", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(workflowName, "document", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsForegroundExternalToRightSpeak(out Dictionary<string, string?> data)
+    {
+        var foregroundWindow = WindowFocusInterop.GetForegroundWindow();
+        WindowFocusInterop.GetWindowThreadProcessId(foregroundWindow, out var processId);
+        var isExternal = foregroundWindow != nint.Zero &&
+                         processId != 0 &&
+                         processId != Environment.ProcessId;
+        data = new Dictionary<string, string?>
+        {
+            ["foregroundWindowHwnd"] = $"0x{foregroundWindow.ToInt64():X}",
+            ["foregroundWindowClass"] = WindowFocusInterop.GetWindowClassName(foregroundWindow),
+            ["foregroundWindowTitle"] = WindowFocusInterop.GetWindowText(foregroundWindow),
+            ["foregroundWindowProcessId"] = processId.ToString(),
+            ["isExternalForeground"] = isExternal.ToString()
+        };
+        return isExternal;
     }
 
     private static string BuildSelectedTextFailureMessage()

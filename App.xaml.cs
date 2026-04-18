@@ -415,7 +415,9 @@ public partial class App : WpfApplication
         });
 
         var stopwatch = Stopwatch.StartNew();
-        AppDiagnostics.Info("focused_read_focus_restore_started");
+        AppDiagnostics.Info(
+            "focused_read_focus_restore_started",
+            BuildFocusRestoreDiagnostics(trigger));
 
         if (_trayService is not null)
         {
@@ -427,7 +429,9 @@ public partial class App : WpfApplication
                     "focused_read_focus_restore_failed",
                     new Dictionary<string, string?>
                     {
-                        ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
+                        ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString(),
+                        ["trigger"] = trigger,
+                        ["workflow"] = workflowName
                     });
                 await Dispatcher.InvokeAsync(() =>
                     _mainViewModel?.SetStatusMessage("Couldn't switch back to the other app. Click that app first, then try again."));
@@ -441,7 +445,9 @@ public partial class App : WpfApplication
             "focused_read_focus_restore_succeeded",
             new Dictionary<string, string?>
             {
-                ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
+                ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString(),
+                ["trigger"] = trigger,
+                ["workflow"] = workflowName
             });
 
         var commandStopwatch = Stopwatch.StartNew();
@@ -453,7 +459,9 @@ public partial class App : WpfApplication
             "focused_read_command_dispatched",
             new Dictionary<string, string?>
             {
-                ["elapsedMs"] = commandStopwatch.ElapsedMilliseconds.ToString()
+                ["elapsedMs"] = commandStopwatch.ElapsedMilliseconds.ToString(),
+                ["trigger"] = trigger,
+                ["workflow"] = workflowName
             });
     }
 
@@ -466,5 +474,16 @@ public partial class App : WpfApplication
 
         command.Execute(null);
         return Task.CompletedTask;
+    }
+
+    private Dictionary<string, string?> BuildFocusRestoreDiagnostics(string trigger)
+    {
+        return new Dictionary<string, string?>
+        {
+            ["trigger"] = trigger,
+            ["hasTrayService"] = (_trayService is not null).ToString(),
+            ["hasExternalForegroundWindow"] = _trayService?.HasExternalForegroundWindow.ToString(),
+            ["currentForegroundWindowTitle"] = _trayService?.CurrentForegroundWindowTitle
+        };
     }
 }

@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Automation;
@@ -12,6 +14,10 @@ public sealed class ClipboardParagraphTextProvider : IParagraphTextProvider
 {
     private const int PollIntervalMilliseconds = 50;
     private const int PollTimeoutMilliseconds = 900;
+    private const int BrowserPdfPostCopySettleMilliseconds = 320;
+    private const int BrowserPdfMaxCopyCycles = 3;
+    private const int BrowserPdfShortSelectionThresholdCharacters = 420;
+    private const int BrowserPdfMinimumAcceptedParagraphCharacters = 40;
     private const int ClipboardAccessRetries = 8;
     private const int ClipboardAccessRetryDelayMilliseconds = 40;
 
@@ -30,6 +36,23 @@ public sealed class ClipboardParagraphTextProvider : IParagraphTextProvider
             AppDiagnostics.Warn("paragraph_provider_clipboard_no_focused_element");
             return TextRetrievalResult.Failed("No focused control is available for clipboard paragraph fallback.", TextRetrievalSource.ClipboardFallback);
         }
+
+        var focusedData = BuildElementDiagnostics(focusedElement);
+        AppDiagnostics.Info("paragraph_provider_clipboard_started", focusedData);
+
+        var foregroundWindow = ClipboardInterop.GetForegroundWindow();
+        var foregroundWindowClass = WindowFocusInterop.GetWindowClassName(foregroundWindow);
+        var foregroundWindowTitle = WindowFocusInterop.GetWindowText(foregroundWindow);
+        var isBrowserPdfContext = IsBrowserPdfContext(foregroundWindowClass, foregroundWindowTitle);
+        AppDiagnostics.Info(
+            "paragraph_provider_clipboard_context",
+            new Dictionary<string, string?>
+            {
+                ["foregroundWindowHwnd"] = $"0x{foregroundWindow.ToInt64():X}",
+                ["foregroundWindowClass"] = foregroundWindowClass,
+                ["foregroundWindowTitle"] = foregroundWindowTitle,
+                ["isBrowserPdfContext"] = isBrowserPdfContext.ToString()
+            });
 
         // Last-resort paragraph fallback: copy only current selection.
         // Do not issue select-all here to avoid page-wide reads in browsers.
@@ -54,28 +77,87 @@ public sealed class ClipboardParagraphTextProvider : IParagraphTextProvider
 
         uint observedCopySequence = 0;
         string? paragraphText = null;
+        string? failureMessage = null;
 
         try
         {
-            ClipboardInterop.SendCopyShortcut();
-
-            var deadline = DateTime.UtcNow.AddMilliseconds(PollTimeoutMilliseconds);
-            while (DateTime.UtcNow < deadline)
+            var copyCycles = isBrowserPdfContext ? BrowserPdfMaxCopyCycles : 1;
+            for (var cycle = 1; cycle <= copyCycles; cycle++)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var currentSequence = ClipboardInterop.GetClipboardSequenceNumber();
-                if (currentSequence != originalSequence)
-                {
-                    observedCopySequence = currentSequence;
-                    if (TryReadClipboardText(out var copiedText) && !string.IsNullOrWhiteSpace(copiedText))
+                ClipboardInterop.SendCopyShortcut();
+                AppDiagnostics.Info(
+                    "paragraph_provider_clipboard_copy_sent",
+                    new Dictionary<string, string?>
                     {
-                        paragraphText = Normalize(copiedText);
-                        break;
+                        ["copyCycle"] = cycle.ToString(),
+                        ["maxCopyCycles"] = copyCycles.ToString(),
+                        ["originalSequence"] = originalSequence.ToString(),
+                        ["pollTimeoutMs"] = PollTimeoutMilliseconds.ToString(),
+                        ["pollIntervalMs"] = PollIntervalMilliseconds.ToString(),
+                        ["isBrowserPdfContext"] = isBrowserPdfContext.ToString()
+                    });
+
+                var deadline = DateTime.UtcNow.AddMilliseconds(PollTimeoutMilliseconds);
+                var pollCount = 0;
+                var cycleCapturedText = string.Empty;
+                while (DateTime.UtcNow < deadline)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    pollCount++;
+
+                    var currentSequence = ClipboardInterop.GetClipboardSequenceNumber();
+                    if (currentSequence != originalSequence)
+                    {
+                        observedCopySequence = currentSequence;
+                        if (TryReadClipboardText(out var copiedText) && !string.IsNullOrWhiteSpace(copiedText))
+                        {
+                            cycleCapturedText = Normalize(copiedText) ?? string.Empty;
+                            AppDiagnostics.Info(
+                                "paragraph_provider_clipboard_capture_observed",
+                                new Dictionary<string, string?>
+                                {
+                                    ["copyCycle"] = cycle.ToString(),
+                                    ["pollCount"] = pollCount.ToString(),
+                                    ["copiedSequence"] = observedCopySequence.ToString(),
+                                    ["capturedLength"] = cycleCapturedText.Length.ToString(),
+                                    ["capturedPreview"] = BuildPreview(cycleCapturedText)
+                                });
+                            break;
+                        }
+                    }
+
+                    Thread.Sleep(PollIntervalMilliseconds);
+                }
+
+                if (!string.IsNullOrWhiteSpace(cycleCapturedText))
+                {
+                    if (isBrowserPdfContext)
+                    {
+                        cycleCapturedText = CaptureBestClipboardTextWithinSettleWindow(
+                            cycleCapturedText,
+                            ref observedCopySequence,
+                            cancellationToken);
+                    }
+
+                    if (string.IsNullOrWhiteSpace(paragraphText) || cycleCapturedText.Length > paragraphText.Length)
+                    {
+                        paragraphText = cycleCapturedText;
                     }
                 }
 
-                Thread.Sleep(PollIntervalMilliseconds);
+                if (!isBrowserPdfContext || !ShouldRetryBrowserPdfCopy(cycle, copyCycles, paragraphText))
+                {
+                    break;
+                }
+
+                AppDiagnostics.Info(
+                    "paragraph_provider_clipboard_retrying_pdf_copy",
+                    new Dictionary<string, string?>
+                    {
+                        ["copyCycle"] = cycle.ToString(),
+                        ["capturedLength"] = paragraphText?.Length.ToString(),
+                        ["threshold"] = BrowserPdfShortSelectionThresholdCharacters.ToString()
+                    });
             }
         }
         catch (OperationCanceledException)
@@ -103,15 +185,49 @@ public sealed class ClipboardParagraphTextProvider : IParagraphTextProvider
                         "Paragraph candidate retrieved via clipboard fallback. Restoring previous clipboard content failed.");
                 }
             }
+            else
+            {
+                AppDiagnostics.Info(
+                    "paragraph_provider_clipboard_restore_outcome",
+                    new Dictionary<string, string?>
+                    {
+                        ["observedCopySequence"] = observedCopySequence.ToString(),
+                        ["currentSequence"] = currentSequence.ToString(),
+                        ["restoreAttempted"] = (currentSequence == observedCopySequence).ToString(),
+                        ["restoreSkippedSequenceChanged"] = (currentSequence != observedCopySequence).ToString()
+                    });
+            }
+        }
+
+        if (isBrowserPdfContext &&
+            !string.IsNullOrWhiteSpace(paragraphText) &&
+            IsLikelyBrowserPdfFragment(paragraphText))
+        {
+            AppDiagnostics.Warn(
+                "paragraph_provider_clipboard_rejected_short_pdf_fragment",
+                new Dictionary<string, string?>
+                {
+                    ["textLength"] = paragraphText.Length.ToString(),
+                    ["textPreview"] = BuildPreview(paragraphText),
+                    ["minimumAcceptedLength"] = BrowserPdfMinimumAcceptedParagraphCharacters.ToString(),
+                    ["reason"] = "browser_pdf_fragment_not_full_paragraph"
+                });
+
+            failureMessage = "Clipboard paragraph fallback captured only a short PDF fragment, not a full paragraph.";
+            paragraphText = null;
         }
 
         if (!string.IsNullOrWhiteSpace(paragraphText))
         {
             AppDiagnostics.Info(
                 "paragraph_provider_clipboard_success",
-                new System.Collections.Generic.Dictionary<string, string?>
+                new Dictionary<string, string?>
                 {
-                    ["textLength"] = paragraphText.Length.ToString()
+                    ["textLength"] = paragraphText.Length.ToString(),
+                    ["textPreview"] = BuildPreview(paragraphText),
+                    ["originalSequence"] = originalSequence.ToString(),
+                    ["copiedSequence"] = observedCopySequence == 0 ? null : observedCopySequence.ToString(),
+                    ["currentSequence"] = ClipboardInterop.GetClipboardSequenceNumber().ToString()
                 });
             return TextRetrievalResult.Retrieved(
                 paragraphText,
@@ -119,12 +235,21 @@ public sealed class ClipboardParagraphTextProvider : IParagraphTextProvider
                 "Paragraph candidate retrieved via clipboard fallback.");
         }
 
+        if (!string.IsNullOrWhiteSpace(failureMessage))
+        {
+            return TextRetrievalResult.Failed(
+                failureMessage,
+                TextRetrievalSource.ClipboardFallback);
+        }
+
         AppDiagnostics.Warn(
             "paragraph_provider_clipboard_timeout",
-            new System.Collections.Generic.Dictionary<string, string?>
+            new Dictionary<string, string?>
             {
                 ["pollTimeoutMs"] = PollTimeoutMilliseconds.ToString(),
-                ["pollIntervalMs"] = PollIntervalMilliseconds.ToString()
+                ["pollIntervalMs"] = PollIntervalMilliseconds.ToString(),
+                ["originalSequence"] = originalSequence.ToString(),
+                ["lastObservedSequence"] = ClipboardInterop.GetClipboardSequenceNumber().ToString()
             });
         return TextRetrievalResult.Failed(
             "Clipboard paragraph fallback timed out waiting for selected text copy.",
@@ -134,6 +259,102 @@ public sealed class ClipboardParagraphTextProvider : IParagraphTextProvider
     private static string? Normalize(string? value)
     {
         return value?.Trim('\0', '\r', '\n', ' ', '\t');
+    }
+
+    private static string? BuildPreview(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        var normalized = text
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Trim();
+        return normalized.Length <= 180 ? normalized : normalized[..180];
+    }
+
+    private static bool IsBrowserPdfContext(string windowClass, string windowTitle)
+    {
+        if (!string.Equals(windowClass, "Chrome_WidgetWin_1", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return windowTitle.IndexOf(".pdf", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static bool ShouldRetryBrowserPdfCopy(int cycle, int maxCycles, string? capturedText)
+    {
+        if (cycle >= maxCycles)
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(capturedText))
+        {
+            return true;
+        }
+
+        return capturedText.Length < BrowserPdfShortSelectionThresholdCharacters;
+    }
+
+    private static bool IsLikelyBrowserPdfFragment(string capturedText)
+    {
+        if (capturedText.Length < BrowserPdfMinimumAcceptedParagraphCharacters)
+        {
+            return true;
+        }
+
+        var hasWhitespaceSeparator = capturedText.Any(char.IsWhiteSpace);
+        if (!hasWhitespaceSeparator)
+        {
+            return true;
+        }
+
+        var tokenCount = capturedText
+            .Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+            .Length;
+        return tokenCount < 6;
+    }
+
+    private static string CaptureBestClipboardTextWithinSettleWindow(
+        string initialText,
+        ref uint observedCopySequence,
+        CancellationToken cancellationToken)
+    {
+        var bestText = initialText;
+        var settleDeadline = DateTime.UtcNow.AddMilliseconds(BrowserPdfPostCopySettleMilliseconds);
+        while (DateTime.UtcNow < settleDeadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var currentSequence = ClipboardInterop.GetClipboardSequenceNumber();
+            if (currentSequence != observedCopySequence)
+            {
+                observedCopySequence = currentSequence;
+                if (TryReadClipboardText(out var copiedText) && !string.IsNullOrWhiteSpace(copiedText))
+                {
+                    var trimmed = Normalize(copiedText) ?? string.Empty;
+                    if (trimmed.Length > bestText.Length)
+                    {
+                        bestText = trimmed;
+                        AppDiagnostics.Info(
+                            "paragraph_provider_clipboard_pdf_settle_window_upgrade",
+                            new Dictionary<string, string?>
+                            {
+                                ["length"] = bestText.Length.ToString(),
+                                ["copiedSequence"] = observedCopySequence.ToString()
+                            });
+                    }
+                }
+            }
+
+            Thread.Sleep(PollIntervalMilliseconds);
+        }
+
+        return bestText;
     }
 
     private static bool TryReadClipboardText(out string text)
@@ -238,5 +459,18 @@ public sealed class ClipboardParagraphTextProvider : IParagraphTextProvider
         worker.Start();
 
         return completion.Task;
+    }
+
+
+    private static Dictionary<string, string?> BuildElementDiagnostics(AutomationElement element)
+    {
+        return new Dictionary<string, string?>
+        {
+            ["automationId"] = element.Current.AutomationId,
+            ["className"] = element.Current.ClassName,
+            ["controlType"] = element.Current.ControlType?.ProgrammaticName,
+            ["name"] = element.Current.Name,
+            ["isPassword"] = element.Current.IsPassword.ToString()
+        };
     }
 }
