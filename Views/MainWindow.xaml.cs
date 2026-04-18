@@ -1,10 +1,12 @@
 using System;
+using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Forms;
 using System.Windows.Interop;
 using System.Windows.Input;
+using Rect = System.Windows.Rect;
 using RightSpeak.Services;
 using RightSpeak.ViewModels;
 
@@ -83,8 +85,55 @@ public partial class MainWindow : Window
             return;
         }
 
-        PositionBottomRightOnPrimaryWorkingArea();
+        PositionBottomRightOnActiveWorkingArea();
+        EnsureVisibleOnScreen();
         _hasPlacedOnStartup = true;
+    }
+
+    public void EnsureVisibleOnScreen()
+    {
+        var source = PresentationSource.FromVisual(this);
+        if (source?.CompositionTarget is null)
+        {
+            return;
+        }
+
+        var transformFromDevice = source.CompositionTarget.TransformFromDevice;
+        var windowRect = new Rect(
+            Left,
+            Top,
+            ActualWidth > 0 ? ActualWidth : Width,
+            ActualHeight > 0 ? ActualHeight : Height);
+
+        var hasVisibleIntersection = Screen.AllScreens.Any(screen =>
+        {
+            var area = screen.WorkingArea;
+            var topLeft = transformFromDevice.Transform(new System.Windows.Point(area.Left, area.Top));
+            var bottomRight = transformFromDevice.Transform(new System.Windows.Point(area.Right, area.Bottom));
+            var screenRect = new Rect(topLeft, bottomRight);
+            var intersection = Rect.Intersect(windowRect, screenRect);
+            return !intersection.IsEmpty && intersection.Width >= 120 && intersection.Height >= 120;
+        });
+
+        if (hasVisibleIntersection)
+        {
+            return;
+        }
+
+        var primary = Screen.PrimaryScreen;
+        if (primary is null)
+        {
+            return;
+        }
+
+        var primaryTopLeft = transformFromDevice.Transform(new System.Windows.Point(primary.WorkingArea.Left, primary.WorkingArea.Top));
+        var primaryBottomRight = transformFromDevice.Transform(new System.Windows.Point(primary.WorkingArea.Right, primary.WorkingArea.Bottom));
+        var primaryRect = new Rect(primaryTopLeft, primaryBottomRight);
+
+        var width = windowRect.Width > 0 ? windowRect.Width : 700;
+        var height = windowRect.Height > 0 ? windowRect.Height : 700;
+        Left = primaryRect.Left + Math.Max(0, (primaryRect.Width - width) / 2);
+        Top = primaryRect.Top + Math.Max(0, (primaryRect.Height - height) / 2);
     }
 
     private async void OnReadSelectedHotkeyPressed(object? sender, System.EventArgs e)
@@ -216,15 +265,27 @@ public partial class MainWindow : Window
             return nint.Zero;
         }
 
+        RevealWindow();
+        handled = true;
+        return nint.Zero;
+    }
+
+    public void RevealWindow()
+    {
         if (!IsVisible)
         {
             Show();
         }
 
+        ShowInTaskbar = true;
         WindowState = WindowState.Normal;
+        EnsureVisibleOnScreen();
+
+        // Force z-order activation even when other apps are currently foreground.
+        Topmost = true;
         Activate();
-        handled = true;
-        return nint.Zero;
+        Focus();
+        Topmost = false;
     }
 
     private Task ExecuteReadParagraphAsync()
@@ -268,15 +329,16 @@ public partial class MainWindow : Window
         return Task.CompletedTask;
     }
 
-    private void PositionBottomRightOnPrimaryWorkingArea()
+    private void PositionBottomRightOnActiveWorkingArea()
     {
-        var primaryScreen = Screen.PrimaryScreen;
-        if (primaryScreen is null)
+        var mousePosition = Control.MousePosition;
+        var targetScreen = Screen.FromPoint(mousePosition) ?? Screen.PrimaryScreen;
+        if (targetScreen is null)
         {
             return;
         }
 
-        var workingAreaPx = primaryScreen.WorkingArea;
+        var workingAreaPx = targetScreen.WorkingArea;
         var source = PresentationSource.FromVisual(this);
         if (source?.CompositionTarget is null)
         {

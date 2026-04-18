@@ -55,24 +55,51 @@ public sealed class FocusedControlDocumentTextProvider : IDocumentTextProvider
             var focusedElement = AutomationElement.FocusedElement;
             if (focusedElement is null)
             {
+                AppDiagnostics.Warn("document_provider_focused_no_focused_element");
                 return Task.FromResult(TextRetrievalResult.Failed("No focused control is available for document retrieval.", TextRetrievalSource.FocusedControlDocument));
             }
 
-            if (IsBrowserProcess(focusedElement, out var browserProcessName))
+            var focusedDiagnostics = BuildFocusedElementDiagnostics(focusedElement);
+            AppDiagnostics.Info("document_provider_focused_started", focusedDiagnostics);
+
+            var isBrowserContext = IsBrowserProcess(focusedElement, out var browserProcessName);
+            if (isBrowserContext)
             {
+                var browserDiagnostics = BuildBrowserContextDiagnostics(focusedElement, browserProcessName);
                 AppDiagnostics.Info(
                     "document_retrieval_browser_prefers_clipboard_fallback",
-                    BuildBrowserContextDiagnostics(focusedElement, browserProcessName));
-                return Task.FromResult(
-                    TextRetrievalResult.Failed(
-                        "Focused-control document retrieval skipped for browser context; trying clipboard document fallback.",
-                        TextRetrievalSource.FocusedControlDocument));
+                    browserDiagnostics);
+                AppDiagnostics.Info(
+                    "document_retrieval_browser_context_detected",
+                    browserDiagnostics);
             }
 
-            if (focusedElement.TryGetCurrentPattern(TextPattern.Pattern, out var textPatternObject) &&
-                textPatternObject is TextPattern textPattern)
+            var hasTextPattern =
+                focusedElement.TryGetCurrentPattern(TextPattern.Pattern, out var textPatternObject) &&
+                textPatternObject is TextPattern;
+            AppDiagnostics.Info(
+                "document_provider_focused_pattern_probe",
+                new Dictionary<string, string?>
+                {
+                    ["hasTextPattern"] = hasTextPattern.ToString(),
+                    ["hasValuePattern"] = focusedElement.TryGetCurrentPattern(ValuePattern.Pattern, out var _) ? bool.TrueString : bool.FalseString,
+                    ["isBrowserContext"] = isBrowserContext.ToString(),
+                    ["isBrowserPdfContext"] = IsBrowserPdfContext(focusedElement).ToString()
+                });
+
+            if (hasTextPattern && textPatternObject is TextPattern textPattern)
             {
-                var documentText = Normalize(textPattern.DocumentRange.GetText(-1));
+                var rawDocumentText = textPattern.DocumentRange.GetText(-1);
+                var documentText = Normalize(rawDocumentText);
+                AppDiagnostics.Info(
+                    "document_provider_focused_text_pattern_result",
+                    new Dictionary<string, string?>
+                    {
+                        ["rawLength"] = rawDocumentText?.Length.ToString(),
+                        ["normalizedLength"] = documentText?.Length.ToString(),
+                        ["normalizedPreview"] = BuildPreview(documentText ?? string.Empty)
+                    });
+
                 if (!string.IsNullOrWhiteSpace(documentText))
                 {
                     var isBrowserPdfContext = IsBrowserPdfContext(focusedElement);
@@ -88,7 +115,9 @@ public sealed class FocusedControlDocumentTextProvider : IDocumentTextProvider
                                 {
                                     ["originalLength"] = documentText.Length.ToString(),
                                     ["sanitizedLength"] = sanitized.Length.ToString(),
-                                    ["removedLeadingLines"] = removedLines.ToString()
+                                    ["removedLeadingLines"] = removedLines.ToString(),
+                                    ["beforePreview"] = BuildPreview(documentText),
+                                    ["afterPreview"] = BuildPreview(sanitized)
                                 });
                             documentText = sanitized;
                         }
@@ -109,28 +138,81 @@ public sealed class FocusedControlDocumentTextProvider : IDocumentTextProvider
                                 TextRetrievalSource.FocusedControlDocument));
                     }
 
+                    AppDiagnostics.Info(
+                        "document_provider_focused_success",
+                        new Dictionary<string, string?>
+                        {
+                            ["strategy"] = "text_pattern_document_range",
+                            ["length"] = documentText.Length.ToString(),
+                            ["preview"] = BuildPreview(documentText)
+                        });
                     return Task.FromResult(
                         TextRetrievalResult.Retrieved(
                             documentText,
                             TextRetrievalSource.FocusedControlDocument,
                             "Document text retrieved from focused control document range."));
                 }
+
+                AppDiagnostics.Warn(
+                    "document_provider_focused_text_pattern_empty_after_normalization",
+                    new Dictionary<string, string?>
+                    {
+                        ["rawLength"] = rawDocumentText?.Length.ToString()
+                    });
+            }
+            else
+            {
+                AppDiagnostics.Info(
+                    "document_provider_focused_text_pattern_unavailable",
+                    new Dictionary<string, string?>
+                    {
+                        ["isBrowserContext"] = isBrowserContext.ToString()
+                    });
             }
 
             if (focusedElement.TryGetCurrentPattern(ValuePattern.Pattern, out var valuePatternObject) &&
                 valuePatternObject is ValuePattern valuePattern)
             {
+                var rawValue = valuePattern.Current.Value;
                 var valueText = Normalize(valuePattern.Current.Value);
+                AppDiagnostics.Info(
+                    "document_provider_focused_value_pattern_result",
+                    new Dictionary<string, string?>
+                    {
+                        ["rawLength"] = rawValue?.Length.ToString(),
+                        ["normalizedLength"] = valueText?.Length.ToString(),
+                        ["normalizedPreview"] = BuildPreview(valueText ?? string.Empty)
+                    });
                 if (!string.IsNullOrWhiteSpace(valueText))
                 {
+                    AppDiagnostics.Info(
+                        "document_provider_focused_success",
+                        new Dictionary<string, string?>
+                        {
+                            ["strategy"] = "value_pattern",
+                            ["length"] = valueText.Length.ToString(),
+                            ["preview"] = BuildPreview(valueText)
+                        });
                     return Task.FromResult(
                         TextRetrievalResult.Retrieved(
                             valueText,
                             TextRetrievalSource.FocusedControlDocument,
                             "Document text retrieved from focused control value."));
                 }
+
+                AppDiagnostics.Warn("document_provider_focused_value_pattern_empty_after_normalization");
+            }
+            else
+            {
+                AppDiagnostics.Info("document_provider_focused_value_pattern_unavailable");
             }
 
+            AppDiagnostics.Warn(
+                "document_provider_focused_failed",
+                new Dictionary<string, string?>
+                {
+                    ["reason"] = "no_supported_pattern_with_non_empty_text"
+                });
             return Task.FromResult(
                 TextRetrievalResult.Failed(
                     "Focused control does not expose full document text through supported UI Automation patterns.",
@@ -142,6 +224,12 @@ public sealed class FocusedControlDocumentTextProvider : IDocumentTextProvider
         }
         catch (Exception ex)
         {
+            AppDiagnostics.Error(
+                "document_provider_focused_exception",
+                new Dictionary<string, string?>
+                {
+                    ["message"] = ex.Message
+                });
             return Task.FromResult(
                 TextRetrievalResult.Failed(
                     $"Document retrieval failed: {ex.Message}",
@@ -179,6 +267,28 @@ public sealed class FocusedControlDocumentTextProvider : IDocumentTextProvider
         WindowFocusInterop.GetWindowThreadProcessId(foregroundHwnd, out var foregroundProcessId);
         diagnostics["foregroundProcessId"] = foregroundProcessId.ToString();
         diagnostics["foregroundProcessName"] = ResolveProcessName((int)foregroundProcessId);
+        return diagnostics;
+    }
+
+    private static Dictionary<string, string?> BuildFocusedElementDiagnostics(AutomationElement focusedElement)
+    {
+        var processId = focusedElement.Current.ProcessId;
+        var diagnostics = new Dictionary<string, string?>
+        {
+            ["focusedProcessId"] = processId.ToString(),
+            ["focusedProcessName"] = ResolveProcessName(processId),
+            ["focusedControlType"] = focusedElement.Current.ControlType?.ProgrammaticName,
+            ["focusedElementName"] = BuildPreview(focusedElement.Current.Name ?? string.Empty),
+            ["focusedElementClassName"] = focusedElement.Current.ClassName,
+            ["focusedAutomationId"] = focusedElement.Current.AutomationId,
+            ["topLevelTitleFromAutomation"] = ResolveTopLevelWindowTitle(focusedElement),
+            ["isPassword"] = focusedElement.Current.IsPassword.ToString()
+        };
+
+        var foregroundHwnd = WindowFocusInterop.GetForegroundWindow();
+        diagnostics["foregroundWindowHwnd"] = $"0x{foregroundHwnd.ToInt64():X}";
+        diagnostics["foregroundWindowTitle"] = WindowFocusInterop.GetWindowText(foregroundHwnd);
+        diagnostics["foregroundWindowClass"] = WindowFocusInterop.GetWindowClassName(foregroundHwnd);
         return diagnostics;
     }
 

@@ -544,17 +544,74 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    private Task ReadDocumentAsync()
+    private async Task ReadDocumentAsync()
     {
-        AppDiagnostics.Warn(
-            "focused_read_document_temporarily_disabled_pending_fix",
+        var operationId = Guid.NewGuid().ToString("N");
+        var stopwatch = Stopwatch.StartNew();
+        AppDiagnostics.Info(
+            "document_workflow_command_started",
             new Dictionary<string, string?>
             {
+                ["operationId"] = operationId,
+                ["trigger"] = "read_document_command",
+                ["hasExternalFocusedWindow"] = _hasExternalFocusedWindow.ToString(),
                 ["focusedWindowText"] = _focusedWindowText,
-                ["reason"] = "external_read_document_unstable_pending_final_fix"
+                ["isManualReadSpeaking"] = _isManualReadSpeaking.ToString(),
+                ["isSpeaking"] = _isSpeaking.ToString()
             });
-        StatusMessage = "Read Document (external app) is temporarily disabled pending final fix.";
-        return Task.CompletedTask;
+
+        SetExternalReadActive(true);
+        SetSpeakingState(true);
+        UpdateCommandStates();
+        StatusMessage = "Retrieving document text...";
+
+        try
+        {
+            var result = await _readingService.ReadDocumentAsync().ConfigureAwait(true);
+            StatusMessage = result.Message;
+            stopwatch.Stop();
+            AppDiagnostics.Info(
+                "document_workflow_command_completed",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["success"] = result.Success.ToString(),
+                    ["cancelled"] = result.WasCancelled.ToString(),
+                    ["message"] = result.Message,
+                    ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
+                });
+        }
+        catch (OperationCanceledException)
+        {
+            stopwatch.Stop();
+            AppDiagnostics.Warn(
+                "document_workflow_command_cancelled",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
+                });
+            throw;
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            AppDiagnostics.Error(
+                "document_workflow_command_failed",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["message"] = ex.Message,
+                    ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
+                });
+            throw;
+        }
+        finally
+        {
+            SetSpeakingState(false);
+            SetExternalReadActive(false);
+            UpdateCommandStates();
+        }
     }
 
     private async Task PreviewVoiceAsync()

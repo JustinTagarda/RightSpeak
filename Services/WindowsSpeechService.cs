@@ -54,6 +54,9 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
     private const int SystemSpeechPrefetchGraceWindowMilliseconds = 15;
     private const int DefaultPrefetchGraceWindowMilliseconds = 15;
     private const int ShortChunkThresholdCharacters = 120;
+    private const int ChunkRenderMaxRetryAttemptsPinnedEngine = 3;
+    private const int ChunkRenderMaxRetryAttemptsFallbackOrder = 2;
+    private const int ChunkRenderRetryDelayMilliseconds = 45;
 
     private readonly SemaphoreSlim _gate;
     private readonly PiperSpeechService _piperSpeechService;
@@ -173,6 +176,8 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
         }
 
         string? pinnedChunkEngineName = null;
+        var lastDispatchedChunkIndex = -1;
+        var nextRenderChunkIndex = requests.Count > 1 ? 1 : -1;
 
         try
         {
@@ -246,6 +251,7 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
                     streamId,
                     playbackCancellationTokenSource.Token)
                 .ConfigureAwait(false);
+            lastDispatchedChunkIndex = 0;
 
             for (var index = 1; index < requests.Count; index++)
             {
@@ -257,6 +263,7 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
                 using var renderedChunk = await nextChunkRenderTask.ConfigureAwait(false);
                 if (index + 1 < requests.Count)
                 {
+                    nextRenderChunkIndex = index + 1;
                     nextChunkRenderTask = StartPinnedChunkRenderTask(
                         requests[index + 1],
                         index + 1,
@@ -278,6 +285,7 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
                         streamId,
                         playbackCancellationTokenSource.Token)
                     .ConfigureAwait(false);
+                lastDispatchedChunkIndex = index;
             }
 
             await playbackPlayer.DrainAsync(playbackCancellationTokenSource.Token).ConfigureAwait(false);
@@ -315,6 +323,8 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
                     ["engine"] = pinnedChunkEngineName,
                     ["chunkCount"] = requests.Count.ToString(CultureInfo.InvariantCulture),
                     ["voice"] = requests[0].Options.VoiceName,
+                    ["lastDispatchedChunkIndex"] = lastDispatchedChunkIndex.ToString(CultureInfo.InvariantCulture),
+                    ["nextRenderChunkIndex"] = nextRenderChunkIndex.ToString(CultureInfo.InvariantCulture),
                     ["lastKnownChunkIndex"] = Math.Max(0, requests.Count - 1).ToString(CultureInfo.InvariantCulture)
                 });
             playbackPlayer.Stop();
@@ -712,6 +722,7 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
         string? successfulFallbackEngineName = null;
         foreach (var engine in engineOrder)
         {
+            var engineName = GetEngineName(engine);
             if (!SupportsPrefetch(engine, request))
             {
                 AppDiagnostics.Info(
@@ -720,7 +731,7 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
                     {
                         ["streamId"] = streamId,
                         ["chunkIndex"] = chunkIndex.ToString(CultureInfo.InvariantCulture),
-                        ["engine"] = GetEngineName(engine),
+                        ["engine"] = engineName,
                         ["voice"] = request.Options.VoiceName,
                         ["textLength"] = textLength.ToString(CultureInfo.InvariantCulture),
                         ["reason"] = "prefetch_not_supported",
@@ -729,104 +740,182 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
                 continue;
             }
 
-            try
+            var maxRetryAttempts = allowEngineFallback
+                ? ChunkRenderMaxRetryAttemptsFallbackOrder
+                : ChunkRenderMaxRetryAttemptsPinnedEngine;
+            for (var attempt = 1; attempt <= maxRetryAttempts; attempt++)
             {
-                AppDiagnostics.Info(
-                    "speech_chunk_render_attempt",
-                    new Dictionary<string, string?>
-                    {
-                        ["streamId"] = streamId,
-                        ["chunkIndex"] = chunkIndex.ToString(CultureInfo.InvariantCulture),
-                        ["engine"] = GetEngineName(engine),
-                        ["voice"] = request.Options.VoiceName,
-                        ["textLength"] = textLength.ToString(CultureInfo.InvariantCulture),
-                        ["preferredEngine"] = preferredEngineName,
-                        ["allowFallback"] = allowEngineFallback.ToString()
-                    });
-
-                var prefetchedClip = await PrefetchAsync(engine, request, cancellationToken).ConfigureAwait(false);
-                if (prefetchedClip is null)
+                try
                 {
-                    AppDiagnostics.Warn(
-                        "speech_chunk_render_no_clip",
+                    AppDiagnostics.Info(
+                        "speech_chunk_render_attempt",
                         new Dictionary<string, string?>
                         {
                             ["streamId"] = streamId,
                             ["chunkIndex"] = chunkIndex.ToString(CultureInfo.InvariantCulture),
-                            ["engine"] = GetEngineName(engine),
+                            ["engine"] = engineName,
                             ["voice"] = request.Options.VoiceName,
                             ["textLength"] = textLength.ToString(CultureInfo.InvariantCulture),
                             ["preferredEngine"] = preferredEngineName,
-                            ["allowFallback"] = allowEngineFallback.ToString()
+                            ["allowFallback"] = allowEngineFallback.ToString(),
+                            ["attempt"] = attempt.ToString(CultureInfo.InvariantCulture),
+                            ["maxAttempts"] = maxRetryAttempts.ToString(CultureInfo.InvariantCulture)
                         });
-                    continue;
-                }
 
-                if (TryCreateRenderedChunkClip(prefetchedClip, engine, out var renderedChunk))
-                {
-                    if (!string.IsNullOrWhiteSpace(successfulFallbackEngineName))
+                    var prefetchedClip = await PrefetchAsync(engine, request, cancellationToken).ConfigureAwait(false);
+                    if (prefetchedClip is null)
                     {
-                        AppDiagnostics.Info(
-                            "speech_chunk_render_fallback_engaged",
+                        AppDiagnostics.Warn(
+                            "speech_chunk_render_no_clip",
                             new Dictionary<string, string?>
                             {
                                 ["streamId"] = streamId,
                                 ["chunkIndex"] = chunkIndex.ToString(CultureInfo.InvariantCulture),
-                                ["fromEngine"] = successfulFallbackEngineName,
-                                ["toEngine"] = renderedChunk.EngineName,
-                                ["voice"] = request.Options.VoiceName
+                                ["engine"] = engineName,
+                                ["voice"] = request.Options.VoiceName,
+                                ["textLength"] = textLength.ToString(CultureInfo.InvariantCulture),
+                                ["preferredEngine"] = preferredEngineName,
+                                ["allowFallback"] = allowEngineFallback.ToString(),
+                                ["attempt"] = attempt.ToString(CultureInfo.InvariantCulture),
+                                ["maxAttempts"] = maxRetryAttempts.ToString(CultureInfo.InvariantCulture)
                             });
+
+                        if (attempt < maxRetryAttempts)
+                        {
+                            AppDiagnostics.Warn(
+                                "speech_chunk_render_retry_scheduled",
+                                new Dictionary<string, string?>
+                                {
+                                    ["streamId"] = streamId,
+                                    ["chunkIndex"] = chunkIndex.ToString(CultureInfo.InvariantCulture),
+                                    ["engine"] = engineName,
+                                    ["voice"] = request.Options.VoiceName,
+                                    ["attempt"] = attempt.ToString(CultureInfo.InvariantCulture),
+                                    ["nextAttempt"] = (attempt + 1).ToString(CultureInfo.InvariantCulture),
+                                    ["maxAttempts"] = maxRetryAttempts.ToString(CultureInfo.InvariantCulture),
+                                    ["reason"] = "prefetch_returned_no_clip",
+                                    ["retryDelayMs"] = ChunkRenderRetryDelayMilliseconds.ToString(CultureInfo.InvariantCulture)
+                                });
+                            await Task.Delay(ChunkRenderRetryDelayMilliseconds, cancellationToken).ConfigureAwait(false);
+                            continue;
+                        }
+
+                        continue;
                     }
 
-                    AppDiagnostics.Info(
-                        "speech_chunk_render_succeeded",
+                    if (TryCreateRenderedChunkClip(prefetchedClip, engine, out var renderedChunk))
+                    {
+                        if (!string.IsNullOrWhiteSpace(successfulFallbackEngineName))
+                        {
+                            AppDiagnostics.Info(
+                                "speech_chunk_render_fallback_engaged",
+                                new Dictionary<string, string?>
+                                {
+                                    ["streamId"] = streamId,
+                                    ["chunkIndex"] = chunkIndex.ToString(CultureInfo.InvariantCulture),
+                                    ["fromEngine"] = successfulFallbackEngineName,
+                                    ["toEngine"] = renderedChunk.EngineName,
+                                    ["voice"] = request.Options.VoiceName
+                                });
+                        }
+
+                        AppDiagnostics.Info(
+                            "speech_chunk_render_succeeded",
+                            new Dictionary<string, string?>
+                            {
+                                ["streamId"] = streamId,
+                                ["chunkIndex"] = chunkIndex.ToString(CultureInfo.InvariantCulture),
+                                ["engine"] = renderedChunk.EngineName,
+                                ["voice"] = request.Options.VoiceName,
+                                ["textLength"] = textLength.ToString(CultureInfo.InvariantCulture),
+                                ["waveBytes"] = renderedChunk.WaveBytes.Length.ToString(CultureInfo.InvariantCulture),
+                                ["attempt"] = attempt.ToString(CultureInfo.InvariantCulture),
+                                ["maxAttempts"] = maxRetryAttempts.ToString(CultureInfo.InvariantCulture)
+                            });
+
+                        return renderedChunk;
+                    }
+
+                    AppDiagnostics.Warn(
+                        "speech_chunk_render_clip_unrecognized",
                         new Dictionary<string, string?>
                         {
                             ["streamId"] = streamId,
                             ["chunkIndex"] = chunkIndex.ToString(CultureInfo.InvariantCulture),
-                            ["engine"] = renderedChunk.EngineName,
+                            ["engine"] = engineName,
                             ["voice"] = request.Options.VoiceName,
                             ["textLength"] = textLength.ToString(CultureInfo.InvariantCulture),
-                            ["waveBytes"] = renderedChunk.WaveBytes.Length.ToString(CultureInfo.InvariantCulture)
+                            ["attempt"] = attempt.ToString(CultureInfo.InvariantCulture),
+                            ["maxAttempts"] = maxRetryAttempts.ToString(CultureInfo.InvariantCulture)
                         });
 
-                    return renderedChunk;
+                    prefetchedClip.Dispose();
+                    if (attempt < maxRetryAttempts)
+                    {
+                        AppDiagnostics.Warn(
+                            "speech_chunk_render_retry_scheduled",
+                            new Dictionary<string, string?>
+                            {
+                                ["streamId"] = streamId,
+                                ["chunkIndex"] = chunkIndex.ToString(CultureInfo.InvariantCulture),
+                                ["engine"] = engineName,
+                                ["voice"] = request.Options.VoiceName,
+                                ["attempt"] = attempt.ToString(CultureInfo.InvariantCulture),
+                                ["nextAttempt"] = (attempt + 1).ToString(CultureInfo.InvariantCulture),
+                                ["maxAttempts"] = maxRetryAttempts.ToString(CultureInfo.InvariantCulture),
+                                ["reason"] = "clip_unrecognized",
+                                ["retryDelayMs"] = ChunkRenderRetryDelayMilliseconds.ToString(CultureInfo.InvariantCulture)
+                            });
+                        await Task.Delay(ChunkRenderRetryDelayMilliseconds, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    firstFailure ??= ex;
+                    successfulFallbackEngineName ??= engineName;
+                    AppDiagnostics.Warn(
+                        "speech_chunk_render_failed",
+                        new Dictionary<string, string?>
+                        {
+                            ["streamId"] = streamId,
+                            ["chunkIndex"] = chunkIndex.ToString(CultureInfo.InvariantCulture),
+                            ["engine"] = engineName,
+                            ["voice"] = request.Options.VoiceName,
+                            ["reason"] = ex.Message,
+                            ["textLength"] = textLength.ToString(CultureInfo.InvariantCulture),
+                            ["preferredEngine"] = preferredEngineName,
+                            ["allowFallback"] = allowEngineFallback.ToString(),
+                            ["attempt"] = attempt.ToString(CultureInfo.InvariantCulture),
+                            ["maxAttempts"] = maxRetryAttempts.ToString(CultureInfo.InvariantCulture)
+                        });
+
+                    if (attempt < maxRetryAttempts)
+                    {
+                        AppDiagnostics.Warn(
+                            "speech_chunk_render_retry_scheduled",
+                            new Dictionary<string, string?>
+                            {
+                                ["streamId"] = streamId,
+                                ["chunkIndex"] = chunkIndex.ToString(CultureInfo.InvariantCulture),
+                                ["engine"] = engineName,
+                                ["voice"] = request.Options.VoiceName,
+                                ["attempt"] = attempt.ToString(CultureInfo.InvariantCulture),
+                                ["nextAttempt"] = (attempt + 1).ToString(CultureInfo.InvariantCulture),
+                                ["maxAttempts"] = maxRetryAttempts.ToString(CultureInfo.InvariantCulture),
+                                ["reason"] = "prefetch_exception",
+                                ["retryDelayMs"] = ChunkRenderRetryDelayMilliseconds.ToString(CultureInfo.InvariantCulture),
+                                ["error"] = ex.Message
+                            });
+                        await Task.Delay(ChunkRenderRetryDelayMilliseconds, cancellationToken).ConfigureAwait(false);
+                        continue;
+                    }
                 }
 
-                AppDiagnostics.Warn(
-                    "speech_chunk_render_clip_unrecognized",
-                    new Dictionary<string, string?>
-                    {
-                        ["streamId"] = streamId,
-                        ["chunkIndex"] = chunkIndex.ToString(CultureInfo.InvariantCulture),
-                        ["engine"] = GetEngineName(engine),
-                        ["voice"] = request.Options.VoiceName,
-                        ["textLength"] = textLength.ToString(CultureInfo.InvariantCulture)
-                    });
-
-                prefetchedClip.Dispose();
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                firstFailure ??= ex;
-                successfulFallbackEngineName ??= GetEngineName(engine);
-                AppDiagnostics.Warn(
-                    "speech_chunk_render_failed",
-                    new Dictionary<string, string?>
-                    {
-                        ["streamId"] = streamId,
-                        ["chunkIndex"] = chunkIndex.ToString(CultureInfo.InvariantCulture),
-                        ["engine"] = GetEngineName(engine),
-                        ["voice"] = request.Options.VoiceName,
-                        ["reason"] = ex.Message,
-                        ["textLength"] = textLength.ToString(CultureInfo.InvariantCulture),
-                        ["preferredEngine"] = preferredEngineName,
-                        ["allowFallback"] = allowEngineFallback.ToString()
-                    });
+                break;
             }
         }
 

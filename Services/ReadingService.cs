@@ -260,6 +260,13 @@ public sealed class ReadingService : IReadingService
     public async Task<SpeechResult> ReadDocumentAsync(CancellationToken cancellationToken = default)
     {
         var operationId = Guid.NewGuid().ToString("N");
+        using var scope = AppDiagnostics.BeginScope(new Dictionary<string, string?>
+        {
+            ["readOperationId"] = operationId,
+            ["readWorkflow"] = "document_external",
+            ["readVoice"] = _settingsService.Current.VoiceName,
+            ["readRate"] = _settingsService.Current.SpeechRate.ToString()
+        });
         var readStopwatch = Stopwatch.StartNew();
         AppDiagnostics.Info(
             "focused_read_document_started",
@@ -288,6 +295,7 @@ public sealed class ReadingService : IReadingService
                 ["source"] = retrieval.Source?.ToString(),
                 ["message"] = retrieval.Message,
                 ["textLength"] = retrieval.Text?.Length.ToString(),
+                ["textPreview"] = BuildPreview(retrieval.Text),
                 ["retried"] = retrievalAttempt.Retried.ToString(),
                 ["elapsedMs"] = retrievalStopwatch.ElapsedMilliseconds.ToString()
             });
@@ -300,11 +308,13 @@ public sealed class ReadingService : IReadingService
                 new Dictionary<string, string?>
                 {
                     ["operationId"] = operationId,
+                    ["source"] = retrieval.Source?.ToString(),
                     ["reason"] = retrieval.Message,
+                    ["textPreview"] = BuildPreview(retrieval.Text),
                     ["retried"] = retrievalAttempt.Retried.ToString(),
                     ["totalElapsedMs"] = readStopwatch.ElapsedMilliseconds.ToString()
                 });
-            return SpeechResult.Failed(BuildDocumentFailureMessage());
+            return SpeechResult.Failed(BuildDocumentFailureMessage(retrieval));
         }
 
         var chunkCount = EstimateSpeechChunkCount(retrieval.Text);
@@ -321,6 +331,8 @@ public sealed class ReadingService : IReadingService
                 ["cancelled"] = speechResult.WasCancelled.ToString(),
                 ["message"] = speechResult.Message,
                 ["chunkCount"] = chunkCount.ToString(),
+                ["textLength"] = retrieval.Text?.Length.ToString(),
+                ["textPreview"] = BuildPreview(retrieval.Text),
                 ["speechElapsedMs"] = speechStopwatch.ElapsedMilliseconds.ToString(),
                 ["totalElapsedMs"] = readStopwatch.ElapsedMilliseconds.ToString()
             });
@@ -875,8 +887,15 @@ public sealed class ReadingService : IReadingService
         return "Couldn't read the current paragraph. Click in the paragraph you want, then try again.";
     }
 
-    private static string BuildDocumentFailureMessage()
+    private static string BuildDocumentFailureMessage(TextRetrievalResult retrieval)
     {
+        if (retrieval.Source == TextRetrievalSource.ClipboardFallback &&
+            !string.IsNullOrWhiteSpace(retrieval.Message) &&
+            retrieval.Message.Contains("Browser PDF viewer blocked document copy to clipboard", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Couldn't copy document text from the browser PDF viewer. Enable PDF accessibility text access and try again, or open the PDF in an external reader.";
+        }
+
         return "Couldn't read the document from that app.";
     }
 }

@@ -5,10 +5,9 @@
 - As of `2026-04-17`, external-app `Read Document` is **temporarily disabled** in UI/hotkey/tray command flow.
 - Current user-facing behavior:  
   `Read Document (external app) is temporarily disabled pending final fix.`
-- As of `2026-04-18`, external-app `Read Paragraph` fixing is **ON HOLD**.
-- Current directive:
-  - do not continue paragraph-caret targeting remediation for browser PDF until re-opened.
-  - keep current diagnostics for paragraph retrieval for future resumption.
+- Scope note:
+  - this file tracks only external `Read Document`.
+  - paragraph status and directives are tracked separately in [FOLLOWUP_EXTERNAL_READ_PARAGRAPH.md](/D:/Projects/RightSpeak/FOLLOWUP_EXTERNAL_READ_PARAGRAPH.md).
 
 ## Why It Was Disabled
 - The external document pipeline was unstable and still read wrong preamble content in browser/PDF scenarios (especially Chrome PDF viewer), even after:
@@ -73,4 +72,3 @@
   - preserve focused-read restore behavior,
   - preserve tray shell-window exclusions,
   - do not regress selected/paragraph flows while fixing document mode.
-- Read Paragraph (external app) workstream is paused by product directive and should not receive additional behavior changes until explicitly resumed.

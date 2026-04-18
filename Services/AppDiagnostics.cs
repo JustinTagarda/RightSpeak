@@ -55,6 +55,16 @@ internal static class AppDiagnostics
         return new ScopeState(previous);
     }
 
+    public static IReadOnlyDictionary<string, string?>? CaptureScope()
+    {
+        if (ScopeData.Value is null)
+        {
+            return null;
+        }
+
+        return new Dictionary<string, string?>(ScopeData.Value, StringComparer.Ordinal);
+    }
+
     public static void Info(string eventName, IReadOnlyDictionary<string, string?>? data = null)
     {
         Write("INFO", eventName, data);

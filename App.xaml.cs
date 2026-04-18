@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Threading;
 using System.Windows.Input;
 using RightSpeak.Interop;
 using RightSpeak.Services;
@@ -35,8 +36,23 @@ public partial class App : WpfApplication
 
     protected override void OnStartup(StartupEventArgs e)
     {
-        if (TryRunCommandMode(e.Args, out var exitCode))
+        AppDiagnostics.Info(
+            "app_startup_entered",
+            new Dictionary<string, string?>
+            {
+                ["args"] = string.Join(" ", e.Args ?? Array.Empty<string>()),
+                ["processId"] = Environment.ProcessId.ToString()
+            });
+
+        if (TryRunCommandMode(e.Args ?? Array.Empty<string>(), out var exitCode))
         {
+            AppDiagnostics.Info(
+                "app_startup_command_mode_exit",
+                new Dictionary<string, string?>
+                {
+                    ["exitCode"] = exitCode.ToString(),
+                    ["args"] = string.Join(" ", e.Args ?? Array.Empty<string>())
+                });
             Environment.Exit(exitCode);
             return;
         }
@@ -44,6 +60,7 @@ public partial class App : WpfApplication
         _activateWindowMessageId = WindowMessageInterop.RegisterWindowMessage(ActivateWindowMessageName);
         if (!TryAcquireSingleInstanceLock())
         {
+            AppDiagnostics.Info("app_startup_single_instance_forwarded");
             SignalExistingInstance();
             Environment.Exit(0);
             return;
@@ -106,7 +123,33 @@ public partial class App : WpfApplication
             ExecuteTrayFocusSensitiveReadAsync,
             placeOnStartup: true);
         _mainWindow.Closing += OnMainWindowClosing;
-        _mainWindow.Show();
+        AppDiagnostics.Info("main_window_created");
+        _mainWindow.RevealWindow();
+        AppDiagnostics.Info(
+            "main_window_revealed",
+            new Dictionary<string, string?>
+            {
+                ["isVisible"] = _mainWindow.IsVisible.ToString(),
+                ["windowState"] = _mainWindow.WindowState.ToString()
+            });
+
+        _ = Dispatcher.BeginInvoke(async () =>
+        {
+            await Task.Delay(350).ConfigureAwait(true);
+            if (_mainWindow is null)
+            {
+                return;
+            }
+
+            if (_mainWindow.IsVisible)
+            {
+                AppDiagnostics.Info("main_window_reveal_post_startup_visible");
+                return;
+            }
+
+            AppDiagnostics.Warn("main_window_reveal_post_startup_retry");
+            _mainWindow.RevealWindow();
+        }, DispatcherPriority.ApplicationIdle);
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -172,12 +215,6 @@ public partial class App : WpfApplication
 
         if (args.Length == 0)
         {
-            if (ShouldRunNativeHostMode())
-            {
-                exitCode = WindowsNativeMessagingHost.RunAsync().GetAwaiter().GetResult();
-                return true;
-            }
-
             return false;
         }
 
@@ -219,23 +256,6 @@ public partial class App : WpfApplication
         }
 
         return args.Skip(1).Any(argument => argument.StartsWith("--parent-window=", StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static bool ShouldRunNativeHostMode()
-    {
-        if (!Console.IsInputRedirected || !Console.IsOutputRedirected)
-        {
-            return false;
-        }
-
-        var parentProcessName = ProcessInterop.GetParentProcessName();
-        if (string.IsNullOrWhiteSpace(parentProcessName))
-        {
-            return false;
-        }
-
-        return string.Equals(parentProcessName, "chrome", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(parentProcessName, "msedge", StringComparison.OrdinalIgnoreCase);
     }
 
     private bool TryAcquireSingleInstanceLock()
@@ -323,13 +343,7 @@ public partial class App : WpfApplication
             return;
         }
 
-        if (!_mainWindow.IsVisible)
-        {
-            _mainWindow.Show();
-        }
-
-        _mainWindow.WindowState = WindowState.Normal;
-        _mainWindow.Activate();
+        _mainWindow.RevealWindow();
     }
 
     private void OnTrayExitRequested(object? sender, EventArgs e)

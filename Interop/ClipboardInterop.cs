@@ -7,6 +7,7 @@ internal static class ClipboardInterop
     public const byte VkControl = 0x11;
     public const byte VkA = 0x41;
     public const byte VkC = 0x43;
+    public const byte VkInsert = 0x2D;
     private const uint KeyEventfKeyUp = 0x0002;
 
     [DllImport("user32.dll")]
@@ -31,6 +32,14 @@ internal static class ClipboardInterop
         keybd_event(VkControl, 0, 0, 0);
         keybd_event(VkA, 0, 0, 0);
         keybd_event(VkA, 0, KeyEventfKeyUp, 0);
+        keybd_event(VkControl, 0, KeyEventfKeyUp, 0);
+    }
+
+    public static void SendCopyShortcutCtrlInsert()
+    {
+        keybd_event(VkControl, 0, 0, 0);
+        keybd_event(VkInsert, 0, 0, 0);
+        keybd_event(VkInsert, 0, KeyEventfKeyUp, 0);
         keybd_event(VkControl, 0, KeyEventfKeyUp, 0);
     }
 

@@ -22,6 +22,21 @@ public sealed class WindowsTrayService : ITrayService
         "NotifyIconOverflowWindow",
         "TopLevelWindowForOverflowXamlIsland"
     };
+    private static readonly string[] IgnoredForegroundProcessNames =
+    {
+        "LockApp",
+        "SearchHost",
+        "StartMenuExperienceHost",
+        "PowerToys.MouseWithoutBordersHelper"
+    };
+    private static readonly string[] IgnoredForegroundWindowTitles =
+    {
+        "Windows Default Lock Screen",
+        "UnlockingWindow",
+        "Search",
+        "Start",
+        "Mouse without Borders Helper"
+    };
 
     private NotifyIcon? _notifyIcon;
     private ContextMenuStrip? _contextMenu;
@@ -283,6 +298,18 @@ public sealed class WindowsTrayService : ITrayService
             return;
         }
 
+        if (IsIgnoredForegroundProcess(processId))
+        {
+            if (shouldLogProbe)
+            {
+                var probeData = BuildWindowDiagnostics("window", foregroundWindow);
+                probeData["classification"] = "ignored_non_target_window";
+                probeData["reason"] = "ignored_foreground_process";
+                AppDiagnostics.Info("foreground_probe", probeData);
+            }
+            return;
+        }
+
         if (IsIgnoredForegroundWindowClass(foregroundWindow))
         {
             if (shouldLogProbe)
@@ -299,6 +326,18 @@ public sealed class WindowsTrayService : ITrayService
         if (string.IsNullOrWhiteSpace(title))
         {
             title = "Current app";
+        }
+
+        if (IsIgnoredForegroundWindowTitle(title))
+        {
+            if (shouldLogProbe)
+            {
+                var probeData = BuildWindowDiagnostics("window", foregroundWindow);
+                probeData["classification"] = "ignored_non_target_window";
+                probeData["reason"] = "ignored_foreground_title";
+                AppDiagnostics.Info("foreground_probe", probeData);
+            }
+            return;
         }
 
         if (shouldLogProbe)
@@ -484,6 +523,34 @@ public sealed class WindowsTrayService : ITrayService
 
         return IgnoredForegroundWindowClasses.Any(ignored =>
             string.Equals(className, ignored, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsIgnoredForegroundWindowTitle(string title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            return false;
+        }
+
+        return IgnoredForegroundWindowTitles.Any(ignored =>
+            string.Equals(title, ignored, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsIgnoredForegroundProcess(uint processId)
+    {
+        if (processId == 0)
+        {
+            return false;
+        }
+
+        var processName = TryGetProcessName(processId);
+        if (string.IsNullOrWhiteSpace(processName))
+        {
+            return false;
+        }
+
+        return IgnoredForegroundProcessNames.Any(ignored =>
+            string.Equals(processName, ignored, StringComparison.OrdinalIgnoreCase));
     }
 
     private static Dictionary<string, string?> BuildWindowDiagnostics(string prefix, nint windowHandle)
