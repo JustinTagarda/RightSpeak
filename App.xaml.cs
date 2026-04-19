@@ -332,6 +332,13 @@ public partial class App : WpfApplication
     {
         if (_mainViewModel?.StopCommand.CanExecute(null) == true)
         {
+            AppDiagnostics.Info(
+                "stop_command_dispatch_requested",
+                new Dictionary<string, string?>
+                {
+                    ["trigger"] = "tray_menu",
+                    ["source"] = nameof(App)
+                });
             _mainViewModel.StopCommand.Execute(null);
         }
     }

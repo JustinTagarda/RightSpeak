@@ -11,6 +11,7 @@ Current state:
 - WPF app scaffold exists
 - project targets `.NET 10` on Windows
 - core reading workflows are implemented and being hardened for reliability
+- external `Read Document` is enabled with browser-PDF-specific hardening and diagnostics
 
 The current focus is getting the MVP path working reliably:
 1. local text-to-speech
@@ -98,7 +99,12 @@ dotnet run --project .\RightSpeak.csproj
 - selected-text reading pipeline with UI Automation, focused-control, and clipboard fallback stages
 - paragraph reading (first path via UI Automation paragraph expansion from focused selection/caret)
 - document reading (first path via focused-control UI Automation document or value patterns)
+- document browser-PDF fallback hardening:
+  - multi-cycle clipboard capture and settle-window upgrade
+  - UI Automation fallback when browser PDF copy is blocked
+  - retrieval candidate scoring to reduce viewer-UI preamble drift
 - chunked/continuous speech stream orchestration for longer reads
+- chunk-render retry path for transient long-read continuation misses in pinned-engine chunk streams
 - Piper startup-clipping mitigation baseline:
   - short and long Piper reads both use continuous stream playback
   - single-chunk Piper reads are routed through the same stream path as multi-chunk reads

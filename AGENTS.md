@@ -170,6 +170,18 @@ Validated selected-text cross-app reliability note (fixed baseline):
 - Treat this selected-text behavior as fixed baseline for "Read Selected Text from other apps."
 - Do not revise, simplify, or bypass this path (provider deferral rules, clipboard PDF stabilization, or Piper single-line normalization) unless explicitly instructed.
 
+Validated document-read cross-app reliability note (fixed baseline):
+- External `Read Document` is enabled again for app button, tray command, and global hotkey flows.
+- Browser-PDF document retrieval baseline depends on:
+  - multi-cycle clipboard capture with PDF-specific stabilization/retry and settle-window upgrade;
+  - browser-PDF UI Automation fallback when clipboard copy is blocked (`copySequenceTransitions=0`);
+  - document candidate scoring/selection in retrieval orchestration to avoid low-quality preamble candidates.
+- Long document speech continuity baseline depends on:
+  - Piper continuous chunk stream path (no direct playback path for normal reads);
+  - chunk render retry handling for transient `speech_chunk_render_no_clip` events before failing the read.
+- Keep document diagnostics in place (for example `clipboard_document_*`, `document_retrieval_*`, `speech_chunk_render_retry_scheduled`, `speech_chunk_continuous_playback_failed`) so regressions are diagnosable.
+- Do not re-disable external `Read Document`, remove browser-PDF fallback paths, or remove chunk-render retry/diagnostics unless explicitly instructed and revalidated.
+
 ### Global Hotkeys
 Global hotkeys are a first-class feature.
 

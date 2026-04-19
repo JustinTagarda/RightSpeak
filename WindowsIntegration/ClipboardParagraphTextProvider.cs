@@ -13,7 +13,7 @@ namespace RightSpeak.WindowsIntegration;
 public sealed class ClipboardParagraphTextProvider : IParagraphTextProvider
 {
     private const int PollIntervalMilliseconds = 50;
-    private const int PollTimeoutMilliseconds = 900;
+    private const int PollTimeoutMilliseconds = 1200;
     private const int BrowserPdfPostCopySettleMilliseconds = 320;
     private const int BrowserPdfMaxCopyCycles = 3;
     private const int BrowserPdfShortSelectionThresholdCharacters = 420;
@@ -84,6 +84,59 @@ public sealed class ClipboardParagraphTextProvider : IParagraphTextProvider
             var copyCycles = isBrowserPdfContext ? BrowserPdfMaxCopyCycles : 1;
             for (var cycle = 1; cycle <= copyCycles; cycle++)
             {
+                var cyclePollCount = 0;
+                var cycleObservedSequenceChanges = 0;
+                AppDiagnostics.Info(
+                    "paragraph_provider_clipboard_capture_cycle_started",
+                    new Dictionary<string, string?>
+                    {
+                        ["copyCycle"] = cycle.ToString(),
+                        ["maxCopyCycles"] = copyCycles.ToString(),
+                        ["isBrowserPdfContext"] = isBrowserPdfContext.ToString(),
+                        ["foregroundWindowHwnd"] = $"0x{foregroundWindow.ToInt64():X}",
+                        ["foregroundWindowClass"] = foregroundWindowClass,
+                        ["foregroundWindowTitle"] = foregroundWindowTitle
+                    });
+
+                if (isBrowserPdfContext)
+                {
+                    var activationResult = WindowFocusInterop.TryActivateWindow(foregroundWindow);
+                    AppDiagnostics.Info(
+                        "paragraph_provider_clipboard_capture_cycle_activation_attempted",
+                        new Dictionary<string, string?>
+                        {
+                            ["copyCycle"] = cycle.ToString(),
+                            ["activationResult"] = activationResult.ToString(),
+                            ["foregroundWindowHwnd"] = $"0x{foregroundWindow.ToInt64():X}",
+                            ["foregroundWindowClass"] = foregroundWindowClass,
+                            ["foregroundWindowTitle"] = foregroundWindowTitle
+                        });
+
+                    try
+                    {
+                        focusedElement.SetFocus();
+                        AppDiagnostics.Info(
+                            "paragraph_provider_clipboard_capture_cycle_focused_element_refocused",
+                            new Dictionary<string, string?>
+                            {
+                                ["copyCycle"] = cycle.ToString(),
+                                ["focusedElementControlType"] = focusedElement.Current.ControlType?.ProgrammaticName,
+                                ["focusedElementClassName"] = focusedElement.Current.ClassName,
+                                ["focusedElementName"] = BuildPreview(focusedElement.Current.Name)
+                            });
+                    }
+                    catch (Exception ex)
+                    {
+                        AppDiagnostics.Warn(
+                            "paragraph_provider_clipboard_capture_cycle_refocus_failed",
+                            new Dictionary<string, string?>
+                            {
+                                ["copyCycle"] = cycle.ToString(),
+                                ["message"] = ex.Message
+                            });
+                    }
+                }
+
                 ClipboardInterop.SendCopyShortcut();
                 AppDiagnostics.Info(
                     "paragraph_provider_clipboard_copy_sent",
@@ -104,10 +157,12 @@ public sealed class ClipboardParagraphTextProvider : IParagraphTextProvider
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     pollCount++;
+                    cyclePollCount++;
 
                     var currentSequence = ClipboardInterop.GetClipboardSequenceNumber();
                     if (currentSequence != originalSequence)
                     {
+                        cycleObservedSequenceChanges++;
                         observedCopySequence = currentSequence;
                         if (TryReadClipboardText(out var copiedText) && !string.IsNullOrWhiteSpace(copiedText))
                         {
@@ -124,9 +179,82 @@ public sealed class ClipboardParagraphTextProvider : IParagraphTextProvider
                                 });
                             break;
                         }
+
+                        AppDiagnostics.Info(
+                            "paragraph_provider_clipboard_sequence_changed_without_text",
+                            new Dictionary<string, string?>
+                            {
+                                ["copyCycle"] = cycle.ToString(),
+                                ["copiedSequence"] = observedCopySequence.ToString(),
+                                ["clipboardFormats"] = ReadClipboardFormatsSummary()
+                            });
                     }
 
                     Thread.Sleep(PollIntervalMilliseconds);
+                }
+
+                if (isBrowserPdfContext && string.IsNullOrWhiteSpace(cycleCapturedText))
+                {
+                    ClipboardInterop.SendCopyShortcutCtrlInsert();
+                    AppDiagnostics.Info(
+                        "paragraph_provider_clipboard_copy_alt_shortcut_sent",
+                        new Dictionary<string, string?>
+                        {
+                            ["copyCycle"] = cycle.ToString(),
+                            ["shortcut"] = "Ctrl+Insert"
+                        });
+
+                    var altDeadline = DateTime.UtcNow.AddMilliseconds(700);
+                    while (DateTime.UtcNow < altDeadline)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        pollCount++;
+                        cyclePollCount++;
+
+                        var currentSequence = ClipboardInterop.GetClipboardSequenceNumber();
+                        if (currentSequence != originalSequence)
+                        {
+                            cycleObservedSequenceChanges++;
+                            observedCopySequence = currentSequence;
+                            if (TryReadClipboardText(out var copiedText) && !string.IsNullOrWhiteSpace(copiedText))
+                            {
+                                cycleCapturedText = Normalize(copiedText) ?? string.Empty;
+                                AppDiagnostics.Info(
+                                    "paragraph_provider_clipboard_capture_observed",
+                                    new Dictionary<string, string?>
+                                    {
+                                        ["copyCycle"] = cycle.ToString(),
+                                        ["pollCount"] = pollCount.ToString(),
+                                        ["copiedSequence"] = observedCopySequence.ToString(),
+                                        ["capturedLength"] = cycleCapturedText.Length.ToString(),
+                                        ["capturedPreview"] = BuildPreview(cycleCapturedText),
+                                        ["capturePhase"] = "alt_copy_shortcut"
+                                    });
+                                break;
+                            }
+                        }
+
+                        Thread.Sleep(PollIntervalMilliseconds);
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(cycleCapturedText))
+                {
+                    AppDiagnostics.Warn(
+                        "paragraph_provider_clipboard_capture_cycle_timeout",
+                        new Dictionary<string, string?>
+                        {
+                            ["copyCycle"] = cycle.ToString(),
+                            ["maxCopyCycles"] = copyCycles.ToString(),
+                            ["cyclePollCount"] = cyclePollCount.ToString(),
+                            ["cycleObservedSequenceChanges"] = cycleObservedSequenceChanges.ToString(),
+                            ["lastObservedSequence"] = ClipboardInterop.GetClipboardSequenceNumber().ToString(),
+                            ["foregroundWindowClass"] = WindowFocusInterop.GetWindowClassName(ClipboardInterop.GetForegroundWindow()),
+                            ["foregroundWindowTitle"] = WindowFocusInterop.GetWindowText(ClipboardInterop.GetForegroundWindow()),
+                            ["focusedElementControlType"] = focusedElement.Current.ControlType?.ProgrammaticName,
+                            ["focusedElementClassName"] = focusedElement.Current.ClassName,
+                            ["focusedElementName"] = BuildPreview(focusedElement.Current.Name)
+                        });
                 }
 
                 if (!string.IsNullOrWhiteSpace(cycleCapturedText))
@@ -249,7 +377,8 @@ public sealed class ClipboardParagraphTextProvider : IParagraphTextProvider
                 ["pollTimeoutMs"] = PollTimeoutMilliseconds.ToString(),
                 ["pollIntervalMs"] = PollIntervalMilliseconds.ToString(),
                 ["originalSequence"] = originalSequence.ToString(),
-                ["lastObservedSequence"] = ClipboardInterop.GetClipboardSequenceNumber().ToString()
+                ["lastObservedSequence"] = ClipboardInterop.GetClipboardSequenceNumber().ToString(),
+                ["clipboardFormats"] = ReadClipboardFormatsSummary()
             });
         return TextRetrievalResult.Failed(
             "Clipboard paragraph fallback timed out waiting for selected text copy.",
@@ -355,6 +484,35 @@ public sealed class ClipboardParagraphTextProvider : IParagraphTextProvider
         }
 
         return bestText;
+    }
+
+    private static string ReadClipboardFormatsSummary()
+    {
+        for (var attempt = 0; attempt < ClipboardAccessRetries; attempt++)
+        {
+            try
+            {
+                var dataObject = System.Windows.Clipboard.GetDataObject();
+                if (dataObject is null)
+                {
+                    return "<none>";
+                }
+
+                var formats = dataObject.GetFormats();
+                if (formats is null || formats.Length == 0)
+                {
+                    return "<none>";
+                }
+
+                return string.Join(", ", formats.Take(8));
+            }
+            catch
+            {
+                Thread.Sleep(ClipboardAccessRetryDelayMilliseconds);
+            }
+        }
+
+        return "<unavailable>";
     }
 
     private static bool TryReadClipboardText(out string text)

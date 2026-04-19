@@ -1,74 +1,59 @@
-# External Read Document Follow-Up (Pending Final Fix)
+# External Read Document Follow-Up (Resolved Baseline, Monitor)
 
 ## Status
-- `OPEN`
-- As of `2026-04-17`, external-app `Read Document` is **temporarily disabled** in UI/hotkey/tray command flow.
-- Current user-facing behavior:  
-  `Read Document (external app) is temporarily disabled pending final fix.`
-- Scope note:
-  - this file tracks only external `Read Document`.
-  - paragraph status and directives are tracked separately in [FOLLOWUP_EXTERNAL_READ_PARAGRAPH.md](/D:/Projects/RightSpeak/FOLLOWUP_EXTERNAL_READ_PARAGRAPH.md).
+- `RESOLVED_BASELINE_MONITOR`
+- As of `2026-04-18`, external-app `Read Document` is enabled in UI/tray/hotkey flow.
+- Current user-facing behavior:
+  - normal read path is active;
+  - failures are surfaced with explicit status and diagnostics.
 
-## Why It Was Disabled
-- The external document pipeline was unstable and still read wrong preamble content in browser/PDF scenarios (especially Chrome PDF viewer), even after:
-  - focused-control browser bypass attempts,
-  - clipboard document fallback,
-  - leading viewer-UI sanitization.
-- To avoid unreliable output, command is intentionally hard-failed pending final remediation.
+## What Was Fixed
+- Re-enabled external document command flow after prior temporary gate.
+- Hardened browser-PDF retrieval behavior:
+  - multi-cycle clipboard document capture;
+  - PDF settle-window upgrade for larger post-copy text;
+  - browser-PDF UI Automation fallback when clipboard copy is blocked.
+- Hardened document candidate selection:
+  - provider candidate scoring/selection to avoid low-quality leading viewer preamble.
+- Hardened long-read speech continuity:
+  - chunk-render retry path for transient pinned-engine prefetch misses (for example `speech_chunk_render_no_clip`) before terminal failure.
 
-## Temporary Gate Location
-- [MainViewModel.cs](/D:/Projects/RightSpeak/ViewModels/MainViewModel.cs)
-  - `ReadDocumentAsync()` now logs:
-    - `focused_read_document_temporarily_disabled_pending_fix`
-  - and returns immediate status failure message.
+## Current Baseline Guardrails
+1. Keep browser-PDF clipboard stabilization/retry path.
+2. Keep browser-PDF automation fallback path for blocked copy contexts.
+3. Keep document candidate quality scoring.
+4. Keep chunk-render retry diagnostics and stream diagnostics in speech path.
 
-## Repro Scenario (Previously Failing)
-1. Open PDF in Chrome:
-   - `file:///C:/Users/Justiniano/Downloads/ACA-22-67%20DESCRIPTIVE%20STATISTICS.pdf`
-2. Focus PDF tab content.
-3. Trigger `Read Document` from RightSpeak.
-4. Observed before gate:
-   - often starts with browser/PDF viewer accessibility or UI text instead of pure document body.
-
-## Key Diagnostics Already Added
-- Focus/document orchestration:
+## Key Diagnostics To Keep
+- Retrieval:
   - `focused_read_document_started`
   - `document_retrieval_started`
   - `document_retrieval_provider_result`
+  - `document_retrieval_candidate_scored`
   - `document_retrieval_success`
   - `focused_read_document_retrieval_result`
-- Browser/PDF and fallback diagnostics:
-  - `document_retrieval_browser_prefers_clipboard_fallback`
-  - `clipboard_document_capture_started`
+- Browser-PDF document fallback:
+  - `clipboard_document_capture_cycle_*`
+  - `clipboard_document_pdf_settle_window_upgrade`
+  - `clipboard_document_browser_pdf_copy_blocked`
+  - `clipboard_document_browser_pdf_automation_fallback_*`
   - `clipboard_document_capture_succeeded`
-  - `clipboard_document_capture_timeout`
-- Speech diagnostics (separate known issue):
-  - `piper_speech_playback_failed`
-  - `speech_fallback_engaged`
+- Speech continuity:
+  - `speech_chunk_render_attempt`
+  - `speech_chunk_render_no_clip`
+  - `speech_chunk_render_retry_scheduled`
+  - `speech_chunk_stream_*`
+  - `speech_chunk_continuous_playback_failed`
 
-## Latest Confirmed Symptom Pattern Before Gate
-- Retrieval frequently succeeded with large text (`textLength` around `28300`) but content still began with wrong/non-document preamble.
-- Fallback and sanitization improved behavior but did not fully stabilize first-content correctness.
+## Monitoring Notes
+- If a new regression appears, capture a fresh log window around:
+  - `focused_read_document_started` to `focused_read_document_speech_result`.
+- For browser PDF specifically, include:
+  - `copySequenceTransitions`,
+  - `captureStrategy`,
+  - first document preview lines,
+  - chunk index where speech continuity failed (if any).
 
-## Next-Agent Follow-Up Plan
-1. Re-enable `ReadDocumentAsync()` behind a guarded feature flag or branch-only toggle.
-2. Capture and compare first `N` lines from:
-   - focused-control document text,
-   - clipboard fallback text.
-3. Choose source by content-quality heuristic:
-   - reject known viewer/accessibility/navigation preamble,
-   - prefer body text density and paragraph continuity.
-4. Add deterministic acceptance criteria for Chrome PDF:
-   - first spoken chunk must start from actual document content, not viewer UI/help text.
-5. Re-run manual matrix:
-   - Chrome PDF (local file URL)
-   - Notepad
-   - VS Code
-   - browser text pages/inputs
-6. Remove temporary gate only after repeated pass.
-
-## Notes
-- Keep AGENTS reliability constraints intact:
-  - preserve focused-read restore behavior,
-  - preserve tray shell-window exclusions,
-  - do not regress selected/paragraph flows while fixing document mode.
+## Scope Note
+- This file tracks only external `Read Document`.
+- External paragraph follow-up remains tracked separately in [FOLLOWUP_EXTERNAL_READ_PARAGRAPH.md](/D:/Projects/RightSpeak/FOLLOWUP_EXTERNAL_READ_PARAGRAPH.md).

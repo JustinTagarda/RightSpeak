@@ -380,11 +380,33 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private async Task StopAsync()
     {
+        var operationId = Guid.NewGuid().ToString("N");
+        AppDiagnostics.Info(
+            "stop_command_started",
+            new Dictionary<string, string?>
+            {
+                ["operationId"] = operationId,
+                ["isSpeaking"] = _isSpeaking.ToString(),
+                ["isManualReadSpeaking"] = _isManualReadSpeaking.ToString(),
+                ["isExternalReadActive"] = _isExternalReadActive.ToString(),
+                ["hasExternalFocusedWindow"] = _hasExternalFocusedWindow.ToString(),
+                ["focusedWindowText"] = _focusedWindowText
+            });
+
         StatusMessage = "Stopping...";
         try
         {
             var result = await _readingService.StopAsync().ConfigureAwait(true);
             StatusMessage = result.Message;
+            AppDiagnostics.Info(
+                "stop_command_completed",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["success"] = result.Success.ToString(),
+                    ["cancelled"] = result.WasCancelled.ToString(),
+                    ["message"] = result.Message
+                });
         }
         catch (Exception ex)
         {
@@ -392,6 +414,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 "stop_command_failed",
                 new Dictionary<string, string?>
                 {
+                    ["operationId"] = operationId,
                     ["message"] = ex.Message
                 });
             StatusMessage = "Couldn't stop reading. Please try again.";

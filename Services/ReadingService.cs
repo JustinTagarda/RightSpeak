@@ -183,6 +183,13 @@ public sealed class ReadingService : IReadingService
     public async Task<SpeechResult> ReadParagraphAsync(CancellationToken cancellationToken = default)
     {
         var operationId = Guid.NewGuid().ToString("N");
+        using var scope = AppDiagnostics.BeginScope(new Dictionary<string, string?>
+        {
+            ["readOperationId"] = operationId,
+            ["readWorkflow"] = "paragraph_external",
+            ["readVoice"] = _settingsService.Current.VoiceName,
+            ["readRate"] = _settingsService.Current.SpeechRate.ToString()
+        });
         var readStopwatch = Stopwatch.StartNew();
         AppDiagnostics.Info(
             "focused_read_paragraph_started",
@@ -224,7 +231,9 @@ public sealed class ReadingService : IReadingService
                 new Dictionary<string, string?>
                 {
                     ["operationId"] = operationId,
+                    ["source"] = retrieval.Source?.ToString(),
                     ["reason"] = retrieval.Message,
+                    ["textPreview"] = BuildPreview(retrieval.Text),
                     ["retried"] = retrievalAttempt.Retried.ToString(),
                     ["totalElapsedMs"] = readStopwatch.ElapsedMilliseconds.ToString()
                 });

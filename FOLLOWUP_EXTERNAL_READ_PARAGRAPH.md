@@ -9,7 +9,7 @@
 
 ## Scope
 - This file tracks only external `Read Paragraph`.
-- External `Read Document` follow-up is tracked in [FOLLOWUP_EXTERNAL_READ_DOCUMENT.md](/D:/Projects/RightSpeak/FOLLOWUP_EXTERNAL_READ_DOCUMENT.md).
+- External `Read Document` follow-up is tracked in [FOLLOWUP_EXTERNAL_READ_DOCUMENT.md](/D:/Projects/RightSpeak/FOLLOWUP_EXTERNAL_READ_DOCUMENT.md) and is currently in resolved-baseline monitoring mode.
 
 ## Latest Confirmed Symptom Pattern
 - In browser PDF context, caret-based paragraph retrieval remains unreliable.

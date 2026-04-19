@@ -19,6 +19,9 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
     private const int BrowserPdfMaxCopyCycles = 4;
     private const int BrowserPdfShortCaptureThresholdCharacters = 2200;
     private const int BrowserPdfAutomationFallbackMinimumLength = 180;
+    private const int BrowserPdfSelectionLeakMaxCandidateLength = 1200;
+    private const double BrowserPdfSelectionLeakSimilarityThreshold = 0.92;
+    private const int BrowserPdfSelectAllSettleMilliseconds = 140;
     private const int ClipboardAccessRetries = 8;
     private const int ClipboardAccessRetryDelayMilliseconds = 40;
     private static readonly string[] BrowserPdfViewerUiLineMarkers =
@@ -101,6 +104,9 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
         var isBrowserPdfContext = false;
         var foregroundWindowClass = string.Empty;
         var foregroundWindowTitle = string.Empty;
+        string? selectionBaselineText = null;
+        string? selectionBaselineFingerprint = null;
+        double latestSelectionOverlap = 0;
 
         try
         {
@@ -137,26 +143,42 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
                     ["foregroundWindowTitle"] = foregroundWindowTitle
                 });
 
+            if (isBrowserPdfContext &&
+                TryCaptureSelectionBaseline(
+                    foregroundWindow,
+                    focusedElement,
+                    originalSequence,
+                    out var baselineText,
+                    out var baselineObservedSequence))
+            {
+                selectionBaselineText = baselineText;
+                selectionBaselineFingerprint = BuildScopeFingerprint(selectionBaselineText);
+                if (baselineObservedSequence != 0)
+                {
+                    observedCopySequence = baselineObservedSequence;
+                }
+
+                AppDiagnostics.Info(
+                    "document_scope_validation_started",
+                    new Dictionary<string, string?>
+                    {
+                        ["provider"] = nameof(ClipboardDocumentTextProvider),
+                        ["source"] = TextRetrievalSource.ClipboardFallback.ToString(),
+                        ["phase"] = "pre_capture_selection_baseline",
+                        ["baselineLength"] = selectionBaselineText?.Length.ToString(),
+                        ["baselinePreview"] = BuildPreview(selectionBaselineText ?? string.Empty)
+                    });
+            }
+
             var copyCycles = isBrowserPdfContext ? BrowserPdfMaxCopyCycles : 1;
             for (var cycle = 1; cycle <= copyCycles; cycle++)
             {
                 var cyclePollStart = pollCount;
                 var cycleTransitionsStart = copySequenceTransitions;
+                var cycleExpectedSequence = ClipboardInterop.GetClipboardSequenceNumber();
                 AppDiagnostics.Info(
                     "clipboard_document_capture_cycle_started",
                     BuildCycleDiagnostics(cycle, copyCycles, isBrowserPdfContext));
-
-                ClipboardInterop.SendSelectAllShortcut();
-                Thread.Sleep(isBrowserPdfContext ? 180 : 120);
-                ClipboardInterop.SendCopyShortcut();
-                AppDiagnostics.Info(
-                    "clipboard_document_capture_copy_shortcuts_sent",
-                    new Dictionary<string, string?>
-                    {
-                        ["copyCycle"] = cycle.ToString(),
-                        ["copyCycles"] = copyCycles.ToString(),
-                        ["isBrowserPdfContext"] = isBrowserPdfContext.ToString()
-                    });
 
                 if (isBrowserPdfContext)
                 {
@@ -195,6 +217,18 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
                     }
                 }
 
+                ClipboardInterop.SendSelectAllShortcut();
+                Thread.Sleep(isBrowserPdfContext ? BrowserPdfSelectAllSettleMilliseconds : 120);
+                ClipboardInterop.SendCopyShortcut();
+                AppDiagnostics.Info(
+                    "clipboard_document_capture_copy_shortcuts_sent",
+                    new Dictionary<string, string?>
+                    {
+                        ["copyCycle"] = cycle.ToString(),
+                        ["copyCycles"] = copyCycles.ToString(),
+                        ["isBrowserPdfContext"] = isBrowserPdfContext.ToString()
+                    });
+
                 var cycleDeadline = DateTime.UtcNow.AddMilliseconds(PollTimeoutMilliseconds);
                 var cycleCapturedText = string.Empty;
                 while (DateTime.UtcNow < cycleDeadline)
@@ -203,10 +237,11 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
                     pollCount++;
 
                     var currentSequence = ClipboardInterop.GetClipboardSequenceNumber();
-                    if (currentSequence != originalSequence)
+                    if (currentSequence != cycleExpectedSequence)
                     {
                         copySequenceTransitions++;
                         observedCopySequence = currentSequence;
+                        cycleExpectedSequence = currentSequence;
                         if (TryReadClipboardText(out var copiedText) && !string.IsNullOrWhiteSpace(copiedText))
                         {
                             cycleCapturedText = copiedText.Trim();
@@ -255,10 +290,11 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
                         pollCount++;
 
                         var currentSequence = ClipboardInterop.GetClipboardSequenceNumber();
-                        if (currentSequence != originalSequence)
+                        if (currentSequence != cycleExpectedSequence)
                         {
                             copySequenceTransitions++;
                             observedCopySequence = currentSequence;
+                            cycleExpectedSequence = currentSequence;
                             if (TryReadClipboardText(out var copiedText) && !string.IsNullOrWhiteSpace(copiedText))
                             {
                                 cycleCapturedText = copiedText.Trim();
@@ -306,9 +342,32 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
                             cycleCapturedText,
                             ref observedCopySequence,
                             cancellationToken);
+
+                        if (IsSelectionLeakCandidate(
+                                selectionBaselineFingerprint,
+                                cycleCapturedText,
+                                out var overlap))
+                        {
+                            latestSelectionOverlap = overlap;
+                            AppDiagnostics.Warn(
+                                "document_scope_selection_leak_detected",
+                                new Dictionary<string, string?>
+                                {
+                                    ["provider"] = nameof(ClipboardDocumentTextProvider),
+                                    ["source"] = TextRetrievalSource.ClipboardFallback.ToString(),
+                                    ["copyCycle"] = cycle.ToString(),
+                                    ["baselineLength"] = selectionBaselineText?.Length.ToString(),
+                                    ["candidateLength"] = cycleCapturedText.Length.ToString(),
+                                    ["similarity"] = overlap.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture),
+                                    ["threshold"] = BrowserPdfSelectionLeakSimilarityThreshold.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture),
+                                    ["candidatePreview"] = BuildPreview(cycleCapturedText)
+                                });
+                            cycleCapturedText = string.Empty;
+                        }
                     }
 
-                    if (string.IsNullOrWhiteSpace(documentText) || cycleCapturedText.Length > documentText.Length)
+                    if (!string.IsNullOrWhiteSpace(cycleCapturedText) &&
+                        (string.IsNullOrWhiteSpace(documentText) || cycleCapturedText.Length > documentText.Length))
                     {
                         documentText = cycleCapturedText;
                     }
@@ -340,11 +399,34 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
                             out var automationFallbackText,
                             out var automationFallbackDiagnostics))
                     {
+                        if (IsSelectionLeakCandidate(
+                                selectionBaselineFingerprint,
+                                automationFallbackText ?? string.Empty,
+                                out var overlap))
+                        {
+                            latestSelectionOverlap = overlap;
+                            AppDiagnostics.Warn(
+                                "document_scope_selection_leak_detected",
+                                new Dictionary<string, string?>
+                                {
+                                    ["provider"] = nameof(ClipboardDocumentTextProvider),
+                                    ["source"] = TextRetrievalSource.ClipboardFallback.ToString(),
+                                    ["phase"] = "automation_fallback",
+                                    ["baselineLength"] = selectionBaselineText?.Length.ToString(),
+                                    ["candidateLength"] = automationFallbackText?.Length.ToString(),
+                                    ["similarity"] = overlap.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture),
+                                    ["threshold"] = BrowserPdfSelectionLeakSimilarityThreshold.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture),
+                                    ["candidatePreview"] = BuildPreview(automationFallbackText ?? string.Empty)
+                                });
+                        }
+                        else
+                        {
                         documentText = automationFallbackText;
                         captureStrategy = "browser_pdf_automation_fallback";
                         AppDiagnostics.Info(
                             "clipboard_document_browser_pdf_automation_fallback_succeeded",
                             automationFallbackDiagnostics);
+                        }
                     }
                     else
                     {
@@ -368,6 +450,7 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
 
                 if (string.IsNullOrWhiteSpace(documentText) && string.IsNullOrWhiteSpace(failureMessage))
                 {
+                    failureCode ??= "clipboard_document_capture_timeout";
                     failureMessage = "Clipboard document fallback timed out waiting for copied text.";
                 }
 
@@ -467,7 +550,10 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
                 ["copySequenceTransitions"] = copySequenceTransitions.ToString(),
                 ["failureCode"] = failureCode,
                 ["shouldRetry"] = shouldRetry.ToString(),
-                ["failureMessage"] = failureMessage
+                ["failureMessage"] = failureMessage,
+                ["selectionLeakSimilarity"] = latestSelectionOverlap <= 0
+                    ? null
+                    : latestSelectionOverlap.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture)
             });
         return TextRetrievalResult.Failed(
             failureMessage ?? "Clipboard document fallback failed.",
@@ -511,6 +597,142 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
         }
 
         return false;
+    }
+
+    private static bool TryCaptureSelectionBaseline(
+        nint foregroundWindow,
+        System.Windows.Automation.AutomationElement focusedElement,
+        uint originalSequence,
+        out string? baselineText,
+        out uint observedSequence)
+    {
+        baselineText = null;
+        observedSequence = 0;
+
+        var activationResult = WindowFocusInterop.TryActivateWindow(foregroundWindow);
+        AppDiagnostics.Info(
+            "clipboard_document_pre_capture_baseline_activation_attempted",
+            new Dictionary<string, string?>
+            {
+                ["activationResult"] = activationResult.ToString(),
+                ["foregroundWindowHwnd"] = $"0x{foregroundWindow.ToInt64():X}",
+                ["foregroundWindowClass"] = WindowFocusInterop.GetWindowClassName(foregroundWindow),
+                ["foregroundWindowTitle"] = WindowFocusInterop.GetWindowText(foregroundWindow)
+            });
+
+        try
+        {
+            focusedElement.SetFocus();
+            AppDiagnostics.Info(
+                "clipboard_document_pre_capture_baseline_refocused",
+                new Dictionary<string, string?>
+                {
+                    ["focusedElementSnapshot"] = BuildFocusedElementSnapshot()
+                });
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Warn(
+                "clipboard_document_pre_capture_baseline_refocus_failed",
+                new Dictionary<string, string?>
+                {
+                    ["message"] = ex.Message
+                });
+        }
+
+        ClipboardInterop.SendCopyShortcut();
+        var deadline = DateTime.UtcNow.AddMilliseconds(700);
+        var expectedSequence = ClipboardInterop.GetClipboardSequenceNumber();
+        while (DateTime.UtcNow < deadline)
+        {
+            var currentSequence = ClipboardInterop.GetClipboardSequenceNumber();
+            if (currentSequence != expectedSequence && currentSequence != originalSequence)
+            {
+                observedSequence = currentSequence;
+                if (TryReadClipboardText(out var copiedText) && !string.IsNullOrWhiteSpace(copiedText))
+                {
+                    baselineText = copiedText.Trim();
+                    AppDiagnostics.Info(
+                        "clipboard_document_pre_capture_baseline_observed",
+                        new Dictionary<string, string?>
+                        {
+                            ["baselineLength"] = baselineText.Length.ToString(),
+                            ["baselinePreview"] = BuildPreview(baselineText),
+                            ["observedSequence"] = observedSequence.ToString()
+                        });
+                    return true;
+                }
+            }
+
+            Thread.Sleep(PollIntervalMilliseconds);
+        }
+
+        AppDiagnostics.Info("clipboard_document_pre_capture_baseline_missing");
+        return false;
+    }
+
+    private static string? BuildScopeFingerprint(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        var filtered = new string(
+            text
+                .ToLowerInvariant()
+                .Where(ch => char.IsLetterOrDigit(ch) || char.IsWhiteSpace(ch))
+                .ToArray());
+        var normalized = string.Join(
+            " ",
+            filtered.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    private static bool IsSelectionLeakCandidate(
+        string? baselineFingerprint,
+        string candidateText,
+        out double similarity)
+    {
+        similarity = 0;
+        if (string.IsNullOrWhiteSpace(baselineFingerprint) ||
+            string.IsNullOrWhiteSpace(candidateText))
+        {
+            return false;
+        }
+
+        if (candidateText.Length > BrowserPdfSelectionLeakMaxCandidateLength)
+        {
+            return false;
+        }
+
+        var candidateFingerprint = BuildScopeFingerprint(candidateText);
+        if (string.IsNullOrWhiteSpace(candidateFingerprint))
+        {
+            return false;
+        }
+
+        similarity = ComputeTokenDiceSimilarity(baselineFingerprint, candidateFingerprint);
+        return similarity >= BrowserPdfSelectionLeakSimilarityThreshold;
+    }
+
+    private static double ComputeTokenDiceSimilarity(string baseline, string candidate)
+    {
+        var baselineTokens = baseline
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var candidateTokens = candidate
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (baselineTokens.Length == 0 || candidateTokens.Length == 0)
+        {
+            return 0;
+        }
+
+        var intersection = baselineTokens.Intersect(candidateTokens, StringComparer.Ordinal).Count();
+        return (2d * intersection) / (baselineTokens.Length + candidateTokens.Length);
     }
 
     private static bool TryCaptureBrowserPdfViaAutomationFallback(

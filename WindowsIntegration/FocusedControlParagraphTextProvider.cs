@@ -16,6 +16,18 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
 {
     private const int AncestorProbeDepth = 8;
     private const int BrowserPdfMaxPointRangeDistanceSquared = 90000;
+    private const int BrowserPdfDegenerateSelectionMaxDistanceSquared = 260000;
+    private const int BrowserPdfRelaxedPointRangeDistanceSquared = 260000;
+    private const int BrowserPdfPreferredParagraphMinLength = 80;
+    private const int BrowserPdfMinimumAcceptedParagraphCharacters = 40;
+    private const int BrowserPdfMaximumAcceptedParagraphCharacters = 700;
+    private const int BrowserPdfLocalLineClusterRadius = 2;
+    private const int BrowserPdfMaxIsolatedRelaxedDistanceSquared = 180000;
+    private const int BrowserPdfMaxRelaxedOnlyDistanceSquared = 180000;
+    private const int ValuePatternParagraphMaximumAcceptedCharacters = 650;
+    private const int ValuePatternParagraphMaximumAcceptedLines = 3;
+    private const int GenericParagraphMaximumAcceptedCharacters = 2200;
+    private const int GenericParagraphMaximumAcceptedLines = 12;
 
     public Task<TextRetrievalResult> TryGetParagraphTextAsync(CancellationToken cancellationToken = default)
     {
@@ -144,6 +156,52 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
         return value?.Trim('\0', '\r', '\n', ' ', '\t');
     }
 
+    private static bool ShouldRejectParagraphCandidate(
+        string text,
+        bool fromValuePattern,
+        out string rejectionReason,
+        out int nonEmptyLineCount)
+    {
+        var normalized = Normalize(text) ?? string.Empty;
+        var lines = normalized
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0)
+            .ToArray();
+        nonEmptyLineCount = lines.Length;
+
+        if (normalized.Length == 0)
+        {
+            rejectionReason = "empty_after_normalization";
+            return true;
+        }
+
+        if (normalized.Length > GenericParagraphMaximumAcceptedCharacters)
+        {
+            rejectionReason = "candidate_exceeds_generic_maximum_length";
+            return true;
+        }
+
+        if (nonEmptyLineCount > GenericParagraphMaximumAcceptedLines &&
+            normalized.Length > 1000)
+        {
+            rejectionReason = "candidate_spans_too_many_lines";
+            return true;
+        }
+
+        if (fromValuePattern &&
+            (normalized.Length > ValuePatternParagraphMaximumAcceptedCharacters ||
+             nonEmptyLineCount > ValuePatternParagraphMaximumAcceptedLines))
+        {
+            rejectionReason = "value_pattern_candidate_scope_too_wide";
+            return true;
+        }
+
+        rejectionReason = string.Empty;
+        return false;
+    }
+
     private static bool TryReadParagraphFromElementOrAncestors(
         AutomationElement startElement,
         out string paragraphText,
@@ -198,13 +256,24 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
 
                 if (!string.IsNullOrWhiteSpace(selectionParagraph))
                 {
-                    paragraphText = selectionParagraph;
-                    sourceMessage = "Paragraph candidate retrieved from focused control text pattern selection.";
-                    probe = BuildProbeInfo(depth, element, "text_pattern_selection", paragraphText.Length, selectionRanges.Length, valueLength: null);
-                    return true;
-                }
+                    if (!ShouldRejectParagraphCandidate(
+                            selectionParagraph,
+                            fromValuePattern: false,
+                            out var rejectionReason,
+                            out var nonEmptyLineCount))
+                    {
+                        paragraphText = selectionParagraph;
+                        sourceMessage = "Paragraph candidate retrieved from focused control text pattern selection.";
+                        probe = BuildProbeInfo(depth, element, "text_pattern_selection", paragraphText.Length, selectionRanges.Length, valueLength: null);
+                        return true;
+                    }
 
-                probe = BuildProbeInfo(depth, element, "text_pattern_empty_selection", 0, selectionRanges.Length, valueLength: null);
+                    probe = $"{BuildProbeInfo(depth, element, "text_pattern_selection_rejected_scope", selectionParagraph.Length, selectionRanges.Length, valueLength: null)};nonEmptyLineCount={nonEmptyLineCount};rejection={rejectionReason}";
+                }
+                else
+                {
+                    probe = BuildProbeInfo(depth, element, "text_pattern_empty_selection", 0, selectionRanges.Length, valueLength: null);
+                }
             }
             else
             {
@@ -222,13 +291,24 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
             var valueText = Normalize(valuePattern.Current.Value);
             if (!string.IsNullOrWhiteSpace(valueText))
             {
-                paragraphText = valueText;
-                sourceMessage = "Paragraph candidate retrieved from focused control value.";
-                probe = BuildProbeInfo(depth, element, "value_pattern", paragraphText.Length, selectionRangeCount: null, valueLength: valueText.Length);
-                return true;
-            }
+                if (!ShouldRejectParagraphCandidate(
+                        valueText,
+                        fromValuePattern: true,
+                        out var rejectionReason,
+                        out var nonEmptyLineCount))
+                {
+                    paragraphText = valueText;
+                    sourceMessage = "Paragraph candidate retrieved from focused control value.";
+                    probe = BuildProbeInfo(depth, element, "value_pattern", paragraphText.Length, selectionRangeCount: null, valueLength: valueText.Length);
+                    return true;
+                }
 
-            probe = BuildProbeInfo(depth, element, "value_pattern_empty", 0, selectionRangeCount: null, valueLength: 0);
+                probe = $"{BuildProbeInfo(depth, element, "value_pattern_rejected_scope", valueText.Length, selectionRangeCount: null, valueLength: valueText.Length)};nonEmptyLineCount={nonEmptyLineCount};rejection={rejectionReason}";
+            }
+            else
+            {
+                probe = BuildProbeInfo(depth, element, "value_pattern_empty", 0, selectionRangeCount: null, valueLength: 0);
+            }
         }
         else if (string.IsNullOrWhiteSpace(probe))
         {
@@ -405,9 +485,34 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
                         {
                             var normalizedCandidate = TryReadMeaningfulAroundRange(range);
                             var geometry = BuildRangeGeometry(range, cursorX, cursorY);
-                            if (geometry.DistanceSquared is null ||
-                                geometry.DistanceSquared.Value > BrowserPdfMaxPointRangeDistanceSquared)
+                            if (geometry.DistanceSquared is null)
                             {
+                                probes.Add(
+                                    $"depth={depth};class={current.Current.ClassName};controlType={current.Current.ControlType?.ProgrammaticName};path=range_from_point_rejected_unknown_distance;cursorX={probeX};cursorY={probeY};offsetDx={offset.Dx};offsetDy={offset.Dy};candidateLength={normalizedCandidate?.Length ?? 0};{geometry.Diagnostics};rejection=missing_geometry_distance");
+                                continue;
+                            }
+
+                            var distanceSquared = geometry.DistanceSquared.Value;
+                            if (distanceSquared > BrowserPdfMaxPointRangeDistanceSquared)
+                            {
+                                if (distanceSquared <= BrowserPdfRelaxedPointRangeDistanceSquared &&
+                                    IsMeaningfulParagraphCandidate(normalizedCandidate))
+                                {
+                                    var relaxedProbe =
+                                        $"depth={depth};class={current.Current.ClassName};controlType={current.Current.ControlType?.ProgrammaticName};path=range_from_point_relaxed_threshold;cursorX={probeX};cursorY={probeY};offsetDx={offset.Dx};offsetDy={offset.Dy};candidateLength={normalizedCandidate!.Length};{geometry.Diagnostics};strictThreshold={BrowserPdfMaxPointRangeDistanceSquared};relaxedThreshold={BrowserPdfRelaxedPointRangeDistanceSquared}";
+                                    probes.Add(relaxedProbe);
+                                    candidates.Add(new BrowserPdfProbeCandidate(
+                                        normalizedCandidate!,
+                                        relaxedProbe,
+                                        depth,
+                                        MethodPriority: 5,
+                                        DistanceSquared: distanceSquared,
+                                        OffsetIndex: index,
+                                        RectCount: geometry.RectCount,
+                                        Method: "range_from_point_relaxed"));
+                                    continue;
+                                }
+
                                 probes.Add(
                                     $"depth={depth};class={current.Current.ClassName};controlType={current.Current.ControlType?.ProgrammaticName};path=range_from_point_rejected_distance;cursorX={probeX};cursorY={probeY};offsetDx={offset.Dx};offsetDy={offset.Dy};candidateLength={normalizedCandidate?.Length ?? 0};{geometry.Diagnostics};threshold={BrowserPdfMaxPointRangeDistanceSquared};rejection=range_geometry_too_far_from_point");
                                 continue;
@@ -415,7 +520,6 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
 
                             if (IsMeaningfulParagraphCandidate(normalizedCandidate))
                             {
-                                var distanceSquared = (offset.Dx * offset.Dx) + (offset.Dy * offset.Dy);
                                 var probeRecord =
                                     $"depth={depth};class={current.Current.ClassName};controlType={current.Current.ControlType?.ProgrammaticName};path=range_from_point;cursorX={probeX};cursorY={probeY};offsetDx={offset.Dx};offsetDy={offset.Dy};candidateLength={normalizedCandidate!.Length};{geometry.Diagnostics}";
                                 probes.Add(probeRecord);
@@ -424,7 +528,7 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
                                     probeRecord,
                                     depth,
                                     MethodPriority: 2,
-                                    DistanceSquared: geometry.DistanceSquared ?? distanceSquared,
+                                    DistanceSquared: distanceSquared,
                                     OffsetIndex: index,
                                     RectCount: geometry.RectCount,
                                     Method: "range_from_point"));
@@ -460,8 +564,18 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
             new Dictionary<string, string?>
             {
                 ["candidateCount"] = candidates.Count.ToString(),
-                ["caretRangeUnavailableCount"] = probes.Count(probe => probe.Contains("path=caret_range_unavailable_managed_api", StringComparison.Ordinal)).ToString(),
+                ["distinctCandidateTextCount"] = candidates.Select(candidate => candidate.Text).Distinct(StringComparer.Ordinal).Count().ToString(),
+                ["candidateMinDistanceSquared"] = candidates.Count == 0 ? "na" : candidates.Min(candidate => candidate.DistanceSquared).ToString(),
+                ["candidateRelaxedOnlySet"] = candidates.Count == 0
+                    ? "False"
+                    : candidates.All(candidate => candidate.Method.IndexOf("relaxed", StringComparison.OrdinalIgnoreCase) >= 0).ToString(),
+                ["caretHintTextPatternUnavailableCount"] = probes.Count(probe => probe.Contains("path=caret_hint_text_pattern_unavailable", StringComparison.Ordinal)).ToString(),
+                ["caretHintSelectionRangesEmptyCount"] = probes.Count(probe => probe.Contains("path=caret_hint_selection_ranges_empty", StringComparison.Ordinal)).ToString(),
+                ["caretHintExceptionCount"] = probes.Count(probe => probe.Contains("path=caret_hint_exception", StringComparison.Ordinal)).ToString(),
+                ["caretHintAcceptedCount"] = probes.Count(probe => probe.Contains("path=caret_hint;", StringComparison.Ordinal)).ToString(),
+                ["caretHintRejectedDistanceCount"] = probes.Count(probe => probe.Contains("path=caret_hint_rejected_distance", StringComparison.Ordinal)).ToString(),
                 ["selectionRejectedEmptyCount"] = probes.Count(probe => probe.Contains("path=selection_range_rejected_empty_pdf_selection", StringComparison.Ordinal)).ToString(),
+                ["rangeFromPointRelaxedAcceptedCount"] = probes.Count(probe => probe.Contains("path=range_from_point_relaxed_threshold", StringComparison.Ordinal)).ToString(),
                 ["rangeFromPointRejectedDistanceCount"] = probes.Count(probe => probe.Contains("path=range_from_point_rejected_distance", StringComparison.Ordinal)).ToString(),
                 ["candidates"] = string.Join(" | ", candidates.Select(candidate => candidate.ToDecisionSummary())),
                 ["probeTrail"] = string.Join(" | ", probes)
@@ -470,6 +584,14 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
         var bestCandidate = ChooseBestBrowserPdfProbeCandidate(candidates);
         if (bestCandidate is not null)
         {
+            if (ShouldRejectBrowserPdfFragmentCandidate(bestCandidate, candidates))
+            {
+                probes.Add(
+                    $"selectedProbe={bestCandidate.Probe};selectedMethod={bestCandidate.Method};selectedDepth={bestCandidate.Depth};selectedMethodPriority={bestCandidate.MethodPriority};selectedQualityScore={bestCandidate.QualityScore};selectedDistanceSquared={bestCandidate.DistanceSquared};selectedOffsetIndex={bestCandidate.OffsetIndex};selectedRectCount={bestCandidate.RectCount};selectedLength={bestCandidate.Text.Length};selectedPreview={BuildPreview(bestCandidate.Text)};rejection=browser_pdf_candidate_rejected;minimumAcceptedLength={BrowserPdfMinimumAcceptedParagraphCharacters};maxIsolatedRelaxedDistanceSquared={BrowserPdfMaxIsolatedRelaxedDistanceSquared}");
+                probeTrail = string.Join(" | ", probes);
+                return false;
+            }
+
             paragraphText = bestCandidate.Text;
             sourceMessage = $"Paragraph candidate retrieved from browser PDF {bestCandidate.Method}.";
             probes.Add(
@@ -485,13 +607,116 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
     private static BrowserPdfProbeCandidate? ChooseBestBrowserPdfProbeCandidate(
         IEnumerable<BrowserPdfProbeCandidate> candidates)
     {
-        return candidates
-            .OrderBy(candidate => candidate.Depth)
-            .ThenBy(candidate => candidate.MethodPriority)
+        var candidateList = candidates.ToList();
+        if (candidateList.Count == 0)
+        {
+            return null;
+        }
+
+        var hitCountByText = candidateList
+            .GroupBy(candidate => candidate.Text, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+
+        return candidateList
+            .OrderBy(candidate => candidate.MethodPriority)
+            .ThenByDescending(candidate => hitCountByText.TryGetValue(candidate.Text, out var hitCount) ? hitCount : 1)
+            .ThenByDescending(candidate => candidate.QualityScore)
             .ThenBy(candidate => candidate.DistanceSquared)
+            .ThenBy(candidate => candidate.Depth)
             .ThenBy(candidate => candidate.OffsetIndex)
             .ThenByDescending(candidate => candidate.Text.Length)
             .FirstOrDefault();
+    }
+
+    private static int ComputeBrowserPdfCandidateQuality(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return int.MinValue;
+        }
+
+        var trimmed = text.Trim();
+        var score = Math.Min(trimmed.Length, 400);
+
+        if (trimmed.Length >= BrowserPdfPreferredParagraphMinLength)
+        {
+            score += 500;
+        }
+
+        if (trimmed.Length > BrowserPdfMaximumAcceptedParagraphCharacters)
+        {
+            score -= 900;
+        }
+
+        if (trimmed.IndexOf(' ', StringComparison.Ordinal) >= 0)
+        {
+            score += 40;
+        }
+
+        if (trimmed.IndexOfAny(new[] { '.', '!', '?', ';' }) >= 0)
+        {
+            score += 120;
+        }
+
+        if (LooksLikeHeaderFragment(trimmed))
+        {
+            score -= 450;
+        }
+
+        return score;
+    }
+
+    private static bool LooksLikeHeaderFragment(string text)
+    {
+        if (text.Length > 120)
+        {
+            return false;
+        }
+
+        if (text.EndsWith(":", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        // Common browser-PDF header shapes: short title-cased fragments without sentence punctuation.
+        var hasSentencePunctuation = text.IndexOfAny(new[] { '.', '!', '?', ';' }) >= 0;
+        var hasManyWords = text.Count(ch => ch == ' ') >= 4;
+        return !hasSentencePunctuation && !hasManyWords;
+    }
+
+    private static bool ShouldRejectBrowserPdfFragmentCandidate(
+        BrowserPdfProbeCandidate candidate,
+        IReadOnlyList<BrowserPdfProbeCandidate> allCandidates)
+    {
+        var textHitCount = allCandidates.Count(item => string.Equals(item.Text, candidate.Text, StringComparison.Ordinal));
+        var hasRelaxedOnlyCandidates = allCandidates.Count > 0 &&
+                                       allCandidates.All(item => item.Method.IndexOf("relaxed", StringComparison.OrdinalIgnoreCase) >= 0);
+        var minDistanceSquared = allCandidates.Count == 0
+            ? int.MaxValue
+            : allCandidates.Min(item => item.DistanceSquared);
+
+        // A single relaxed far-distance hit is usually drift from the caret paragraph.
+        if (candidate.Method.IndexOf("relaxed", StringComparison.OrdinalIgnoreCase) >= 0 &&
+            candidate.DistanceSquared > BrowserPdfMaxIsolatedRelaxedDistanceSquared &&
+            textHitCount <= 1)
+        {
+            return true;
+        }
+
+        // If all candidates are relaxed and all of them are far from cursor, they are usually stale/wrong blocks.
+        if (candidate.Method.IndexOf("relaxed", StringComparison.OrdinalIgnoreCase) >= 0 &&
+            hasRelaxedOnlyCandidates &&
+            minDistanceSquared > BrowserPdfMaxRelaxedOnlyDistanceSquared)
+        {
+            return true;
+        }
+
+        if (candidate.Text.Length >= BrowserPdfMinimumAcceptedParagraphCharacters)
+        {
+            return candidate.Text.Length > BrowserPdfMaximumAcceptedParagraphCharacters;
+        }
+
+        return LooksLikeHeaderFragment(candidate.Text);
     }
 
     private static string BuildBrowserPdfElementProbeDiagnostics(
@@ -661,8 +886,59 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
         candidate = BrowserPdfProbeCandidate.Empty;
         probe = string.Empty;
 
-        probe = $"depth={depth};class={element.Current.ClassName};controlType={element.Current.ControlType?.ProgrammaticName};path=caret_range_unavailable_managed_api;cursorX={cursorX};cursorY={cursorY}";
-        return false;
+        try
+        {
+            if (!element.TryGetCurrentPattern(TextPattern.Pattern, out var textPatternObject) ||
+                textPatternObject is not TextPattern textPattern)
+            {
+                probe = $"depth={depth};class={element.Current.ClassName};controlType={element.Current.ControlType?.ProgrammaticName};path=caret_hint_text_pattern_unavailable;cursorX={cursorX};cursorY={cursorY}";
+                return false;
+            }
+
+            var selectionRanges = textPattern.GetSelection();
+            if (selectionRanges is null || selectionRanges.Length == 0)
+            {
+                probe = $"depth={depth};class={element.Current.ClassName};controlType={element.Current.ControlType?.ProgrammaticName};path=caret_hint_selection_ranges_empty;cursorX={cursorX};cursorY={cursorY}";
+                return false;
+            }
+
+            var range = selectionRanges[0];
+            var selectedText = Normalize(range.GetText(-1));
+            var candidateText = TryReadMeaningfulAroundRange(range);
+            var geometry = BuildRangeGeometry(range, cursorX, cursorY);
+            if (!IsMeaningfulParagraphCandidate(candidateText))
+            {
+                probe = $"depth={depth};class={element.Current.ClassName};controlType={element.Current.ControlType?.ProgrammaticName};path=caret_hint_non_text;cursorX={cursorX};cursorY={cursorY};selectionLength={selectedText?.Length ?? 0};candidateLength={candidateText?.Length ?? 0};{geometry.Diagnostics};rejection=not_meaningful_text";
+                return false;
+            }
+
+            var distanceSquared = geometry.DistanceSquared ?? int.MaxValue;
+            if (distanceSquared > BrowserPdfDegenerateSelectionMaxDistanceSquared)
+            {
+                probe = $"depth={depth};class={element.Current.ClassName};controlType={element.Current.ControlType?.ProgrammaticName};path=caret_hint_rejected_distance;cursorX={cursorX};cursorY={cursorY};selectionLength={selectedText?.Length ?? 0};candidateLength={candidateText!.Length};{geometry.Diagnostics};threshold={BrowserPdfDegenerateSelectionMaxDistanceSquared};rejection=degenerate_selection_range_too_far";
+                return false;
+            }
+
+            var method = (selectedText?.Length ?? 0) == 0
+                ? "degenerate_selection_caret_hint"
+                : "selection_range_non_empty";
+            probe = $"depth={depth};class={element.Current.ClassName};controlType={element.Current.ControlType?.ProgrammaticName};path=caret_hint;cursorX={cursorX};cursorY={cursorY};selectionLength={selectedText?.Length ?? 0};candidateLength={candidateText!.Length};{geometry.Diagnostics};method={method}";
+            candidate = new BrowserPdfProbeCandidate(
+                candidateText!,
+                probe,
+                depth,
+                MethodPriority: method == "degenerate_selection_caret_hint" ? 0 : 1,
+                DistanceSquared: distanceSquared,
+                OffsetIndex: 0,
+                RectCount: geometry.RectCount,
+                Method: method);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            probe = $"depth={depth};class={element.Current.ClassName};controlType={element.Current.ControlType?.ProgrammaticName};path=caret_hint_exception;cursorX={cursorX};cursorY={cursorY};message={SanitizeLogValue(ex.Message)}";
+            return false;
+        }
     }
 
     private static void AddSelectionRangeCandidates(
@@ -753,11 +1029,23 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
 
     private static string? TryReadMeaningfulAroundRange(TextPatternRange sourceRange)
     {
-        var bestCandidate = Normalize(TryExpandAndRead(sourceRange, TextUnit.Paragraph)) ??
-                            Normalize(TryExpandAndRead(sourceRange, TextUnit.Line));
-        if (IsMeaningfulParagraphCandidate(bestCandidate))
+        var centerLineCandidate = Normalize(TryExpandAndRead(sourceRange, TextUnit.Line));
+        var localLineCluster = TryReadLocalLineCluster(sourceRange, BrowserPdfLocalLineClusterRadius);
+        if (IsMeaningfulParagraphCandidate(localLineCluster))
         {
-            return bestCandidate;
+            return localLineCluster;
+        }
+
+        var paragraphCandidate = Normalize(TryExpandAndRead(sourceRange, TextUnit.Paragraph));
+        if (IsMeaningfulParagraphCandidate(paragraphCandidate) &&
+            paragraphCandidate!.Length <= BrowserPdfMaximumAcceptedParagraphCharacters)
+        {
+            return paragraphCandidate;
+        }
+
+        if (IsMeaningfulParagraphCandidate(centerLineCandidate))
+        {
+            return centerLineCandidate;
         }
 
         var candidate = TryReadNearbyUnit(sourceRange, TextUnit.Line, maxOffset: 3);
@@ -767,18 +1055,94 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
         }
 
         candidate = TryReadNearbyUnit(sourceRange, TextUnit.Paragraph, maxOffset: 2);
-        if (IsMeaningfulParagraphCandidate(candidate))
+        if (IsMeaningfulParagraphCandidate(candidate) &&
+            candidate!.Length <= BrowserPdfMaximumAcceptedParagraphCharacters)
         {
             return candidate;
         }
 
-        return bestCandidate;
+        return paragraphCandidate;
+    }
+
+    private static string? TryReadLocalLineCluster(TextPatternRange sourceRange, int radius)
+    {
+        var linesByOffset = new Dictionary<int, string>();
+        for (var offset = -radius; offset <= radius; offset++)
+        {
+            try
+            {
+                var moved = sourceRange.Clone();
+                if (offset != 0)
+                {
+                    moved.Move(TextUnit.Line, offset);
+                }
+
+                moved.ExpandToEnclosingUnit(TextUnit.Line);
+                var text = Normalize(moved.GetText(-1));
+                if (!IsMeaningfulParagraphCandidate(text))
+                {
+                    continue;
+                }
+
+                linesByOffset[offset] = text!;
+            }
+            catch
+            {
+                // Keep probing nearby offsets.
+            }
+        }
+
+        if (!linesByOffset.TryGetValue(0, out var centerLine) ||
+            !IsMeaningfulParagraphCandidate(centerLine))
+        {
+            return null;
+        }
+
+        var selectedOffsets = new HashSet<int> { 0 };
+
+        var cursor = -1;
+        while (linesByOffset.ContainsKey(cursor))
+        {
+            selectedOffsets.Add(cursor);
+            cursor--;
+        }
+
+        cursor = 1;
+        while (linesByOffset.ContainsKey(cursor))
+        {
+            selectedOffsets.Add(cursor);
+            cursor++;
+        }
+
+        var orderedLines = selectedOffsets
+            .OrderBy(offset => offset)
+            .Select(offset => linesByOffset[offset])
+            .ToList();
+        if (orderedLines.Count == 0)
+        {
+            return null;
+        }
+
+        var merged = string.Join(" ", orderedLines.Where(text => !string.IsNullOrWhiteSpace(text)));
+        merged = Normalize(merged);
+        if (string.IsNullOrWhiteSpace(merged))
+        {
+            return null;
+        }
+
+        if (merged.Length > BrowserPdfMaximumAcceptedParagraphCharacters)
+        {
+            return centerLine.Length <= BrowserPdfMaximumAcceptedParagraphCharacters
+                ? centerLine
+                : centerLine[..BrowserPdfMaximumAcceptedParagraphCharacters];
+        }
+
+        return merged;
     }
 
     private static string? TryReadNearbyUnit(TextPatternRange sourceRange, TextUnit unit, int maxOffset)
     {
-        string? best = null;
-        for (var offset = -maxOffset; offset <= maxOffset; offset++)
+        foreach (var offset in EnumerateOffsetsNearestFirst(maxOffset))
         {
             try
             {
@@ -795,10 +1159,7 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
                     continue;
                 }
 
-                if (best is null || text!.Length > best.Length)
-                {
-                    best = text;
-                }
+                return text;
             }
             catch
             {
@@ -806,7 +1167,17 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
             }
         }
 
-        return best;
+        return null;
+    }
+
+    private static IEnumerable<int> EnumerateOffsetsNearestFirst(int maxOffset)
+    {
+        yield return 0;
+        for (var delta = 1; delta <= maxOffset; delta++)
+        {
+            yield return -delta;
+            yield return delta;
+        }
     }
 
     private sealed record BrowserPdfProbeCandidate(
@@ -829,9 +1200,11 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
             0,
             "none");
 
+        public int QualityScore { get; } = ComputeBrowserPdfCandidateQuality(Text);
+
         public string ToDecisionSummary()
         {
-            return $"method={Method};depth={Depth};methodPriority={MethodPriority};distanceSquared={DistanceSquared};offsetIndex={OffsetIndex};rectCount={RectCount};length={Text.Length};preview={BuildPreview(Text)}";
+            return $"method={Method};depth={Depth};methodPriority={MethodPriority};qualityScore={QualityScore};distanceSquared={DistanceSquared};offsetIndex={OffsetIndex};rectCount={RectCount};length={Text.Length};preview={BuildPreview(Text)}";
         }
     }
 

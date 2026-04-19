@@ -63,6 +63,7 @@ public sealed class FocusedControlDocumentTextProvider : IDocumentTextProvider
             AppDiagnostics.Info("document_provider_focused_started", focusedDiagnostics);
 
             var isBrowserContext = IsBrowserProcess(focusedElement, out var browserProcessName);
+            var isBrowserPdfContext = IsBrowserPdfContext(focusedElement);
             if (isBrowserContext)
             {
                 var browserDiagnostics = BuildBrowserContextDiagnostics(focusedElement, browserProcessName);
@@ -72,6 +73,17 @@ public sealed class FocusedControlDocumentTextProvider : IDocumentTextProvider
                 AppDiagnostics.Info(
                     "document_retrieval_browser_context_detected",
                     browserDiagnostics);
+            }
+
+            if (isBrowserPdfContext)
+            {
+                var deferDiagnostics = BuildFocusedElementDiagnostics(focusedElement);
+                deferDiagnostics["reason"] = "browser_pdf_document_prefers_clipboard_pipeline";
+                AppDiagnostics.Info("document_provider_focused_pdf_deferred_to_clipboard", deferDiagnostics);
+                return Task.FromResult(
+                    TextRetrievalResult.Failed(
+                        "Browser PDF document via focused-control UI Automation can drift; trying clipboard fallback.",
+                        TextRetrievalSource.FocusedControlDocument));
             }
 
             var hasTextPattern =
@@ -84,7 +96,7 @@ public sealed class FocusedControlDocumentTextProvider : IDocumentTextProvider
                     ["hasTextPattern"] = hasTextPattern.ToString(),
                     ["hasValuePattern"] = focusedElement.TryGetCurrentPattern(ValuePattern.Pattern, out var _) ? bool.TrueString : bool.FalseString,
                     ["isBrowserContext"] = isBrowserContext.ToString(),
-                    ["isBrowserPdfContext"] = IsBrowserPdfContext(focusedElement).ToString()
+                    ["isBrowserPdfContext"] = isBrowserPdfContext.ToString()
                 });
 
             if (hasTextPattern && textPatternObject is TextPattern textPattern)
@@ -102,7 +114,6 @@ public sealed class FocusedControlDocumentTextProvider : IDocumentTextProvider
 
                 if (!string.IsNullOrWhiteSpace(documentText))
                 {
-                    var isBrowserPdfContext = IsBrowserPdfContext(focusedElement);
                     if (isBrowserPdfContext)
                     {
                         var sanitized = RemoveLeadingBrowserPdfViewerUi(documentText, out var removedLines);

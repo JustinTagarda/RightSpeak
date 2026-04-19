@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
@@ -159,6 +160,13 @@ public partial class MainWindow : Window
     {
         if (_viewModel.StopCommand.CanExecute(null))
         {
+            AppDiagnostics.Info(
+                "stop_command_dispatch_requested",
+                new Dictionary<string, string?>
+                {
+                    ["trigger"] = "global_hotkey",
+                    ["source"] = nameof(MainWindow)
+                });
             _viewModel.StopCommand.Execute(null);
         }
     }
@@ -237,6 +245,36 @@ public partial class MainWindow : Window
         }
 
         await ExecuteReadSelectedTextAsync().ConfigureAwait(true);
+    }
+
+    private void OnManualStopButtonClick(object sender, RoutedEventArgs e)
+    {
+        if (_viewModel.StopCommand.CanExecute(null))
+        {
+            AppDiagnostics.Info(
+                "stop_command_dispatch_requested",
+                new Dictionary<string, string?>
+                {
+                    ["trigger"] = "manual_stop_button",
+                    ["source"] = nameof(MainWindow)
+                });
+            _viewModel.StopCommand.Execute(null);
+        }
+    }
+
+    private void OnExternalStopButtonClick(object sender, RoutedEventArgs e)
+    {
+        if (_viewModel.StopCommand.CanExecute(null))
+        {
+            AppDiagnostics.Info(
+                "stop_command_dispatch_requested",
+                new Dictionary<string, string?>
+                {
+                    ["trigger"] = "external_stop_button",
+                    ["source"] = nameof(MainWindow)
+                });
+            _viewModel.StopCommand.Execute(null);
+        }
     }
 
     private async void OnReadDocumentButtonClick(object sender, RoutedEventArgs e)

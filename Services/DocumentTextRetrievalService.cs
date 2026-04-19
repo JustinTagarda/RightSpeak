@@ -11,6 +11,9 @@ namespace RightSpeak.Services;
 public sealed class DocumentTextRetrievalService : IDocumentTextRetrievalService
 {
     private const int MaxLeadingLinesForQualityScan = 12;
+    private const int DocumentScopeShortTextThreshold = 140;
+    private const int DocumentScopeClipboardShortTextThreshold = 420;
+    private const int DocumentScopeShortTextMaxLines = 2;
     private static readonly string[] ViewerUiMarkers =
     {
         "toolbar",
@@ -89,6 +92,21 @@ public sealed class DocumentTextRetrievalService : IDocumentTextRetrievalService
                 var providerName = provider.GetType().Name;
                 var candidate = AnalyzeCandidate(result.Text);
                 AppDiagnostics.Info(
+                    "document_scope_validation_started",
+                    new Dictionary<string, string?>
+                    {
+                        ["providerIndex"] = providerIndex.ToString(),
+                        ["provider"] = providerName,
+                        ["source"] = result.Source?.ToString(),
+                        ["textLength"] = result.Text?.Length.ToString(),
+                        ["nonEmptyLineCount"] = candidate.NonEmptyLineCount.ToString(),
+                        ["leadingUiLikeLineCount"] = candidate.LeadingUiLikeLineCount.ToString(),
+                        ["leadingBodyLikeLineCount"] = candidate.LeadingBodyLikeLineCount.ToString(),
+                        ["leadingMarkerHitCount"] = candidate.LeadingMarkerHitCount.ToString(),
+                        ["suspiciousLeadingPreamble"] = candidate.SuspiciousLeadingPreamble.ToString(),
+                        ["candidateSourceMessage"] = result.Message
+                    });
+                AppDiagnostics.Info(
                     "document_retrieval_candidate_scored",
                     new Dictionary<string, string?>
                     {
@@ -108,12 +126,55 @@ public sealed class DocumentTextRetrievalService : IDocumentTextRetrievalService
                         ["candidateSourceMessage"] = result.Message
                     });
 
+                if (TryGetDocumentScopeRejectionReason(result, candidate, out var scopeRejectionReason))
+                {
+                    shouldRetry |= true;
+                    var rejectionMessage = BuildScopeRejectionMessage(scopeRejectionReason);
+                    failureDetails.Add($"{result.Source?.ToString() ?? providerName}: {rejectionMessage}");
+                    lastFailure = TextRetrievalResult.Failed(
+                        rejectionMessage,
+                        result.Source,
+                        shouldRetry: true);
+                    AppDiagnostics.Warn(
+                        "document_scope_validation_rejected",
+                        new Dictionary<string, string?>
+                        {
+                            ["providerIndex"] = providerIndex.ToString(),
+                            ["provider"] = providerName,
+                            ["source"] = result.Source?.ToString(),
+                            ["rejectionReason"] = scopeRejectionReason,
+                            ["textLength"] = result.Text?.Length.ToString(),
+                            ["nonEmptyLineCount"] = candidate.NonEmptyLineCount.ToString(),
+                            ["leadingUiLikeLineCount"] = candidate.LeadingUiLikeLineCount.ToString(),
+                            ["leadingBodyLikeLineCount"] = candidate.LeadingBodyLikeLineCount.ToString(),
+                            ["leadingMarkerHitCount"] = candidate.LeadingMarkerHitCount.ToString(),
+                            ["textPreview"] = BuildPreview(result.Text),
+                            ["candidateSourceMessage"] = result.Message
+                        });
+                    continue;
+                }
+
                 if (bestSuccess is null || candidate.Score > bestScore)
                 {
                     bestSuccess = result;
                     bestProviderName = providerName;
                     bestScore = candidate.Score;
                     bestSelectionReason = "highest_score_so_far";
+                    AppDiagnostics.Info(
+                        "document_scope_validation_passed",
+                        new Dictionary<string, string?>
+                        {
+                            ["providerIndex"] = providerIndex.ToString(),
+                            ["provider"] = providerName,
+                            ["source"] = result.Source?.ToString(),
+                            ["selectionReason"] = bestSelectionReason,
+                            ["textLength"] = result.Text?.Length.ToString(),
+                            ["nonEmptyLineCount"] = candidate.NonEmptyLineCount.ToString(),
+                            ["leadingUiLikeLineCount"] = candidate.LeadingUiLikeLineCount.ToString(),
+                            ["leadingBodyLikeLineCount"] = candidate.LeadingBodyLikeLineCount.ToString(),
+                            ["leadingMarkerHitCount"] = candidate.LeadingMarkerHitCount.ToString(),
+                            ["textPreview"] = BuildPreview(result.Text)
+                        });
                 }
 
                 var hasMoreProviders = providerIndex < _providers.Count - 1;
@@ -142,7 +203,7 @@ public sealed class DocumentTextRetrievalService : IDocumentTextRetrievalService
             }
 
             lastFailure = result;
-            shouldRetry |= result.ShouldRetry;
+            shouldRetry |= result.ShouldRetry || IsRetryableDocumentFailure(result);
             var source = result.Source?.ToString() ?? provider.GetType().Name;
             var message = string.IsNullOrWhiteSpace(result.Message) ? "No details." : result.Message;
             failureDetails.Add($"{source}: {message}");
@@ -154,7 +215,8 @@ public sealed class DocumentTextRetrievalService : IDocumentTextRetrievalService
                     ["provider"] = provider.GetType().Name,
                     ["source"] = result.Source?.ToString(),
                     ["message"] = message,
-                    ["shouldRetry"] = result.ShouldRetry.ToString()
+                    ["shouldRetry"] = result.ShouldRetry.ToString(),
+                    ["retryableByHeuristic"] = IsRetryableDocumentFailure(result).ToString()
                 });
         }
 
@@ -173,6 +235,17 @@ public sealed class DocumentTextRetrievalService : IDocumentTextRetrievalService
                     ["textLength"] = bestSuccess.Text?.Length.ToString(),
                     ["textPreview"] = BuildPreview(bestSuccess.Text),
                     ["elapsedMs"] = overallStopwatch.ElapsedMilliseconds.ToString()
+                });
+            AppDiagnostics.Info(
+                "document_scope_validation_passed",
+                new Dictionary<string, string?>
+                {
+                    ["provider"] = bestProviderName,
+                    ["source"] = bestSuccess.Source?.ToString(),
+                    ["selectionReason"] = bestSelectionReason,
+                    ["successfulCandidateCount"] = successfulCandidateCount.ToString(),
+                    ["textLength"] = bestSuccess.Text?.Length.ToString(),
+                    ["textPreview"] = BuildPreview(bestSuccess.Text)
                 });
             return bestSuccess;
         }
@@ -215,6 +288,8 @@ public sealed class DocumentTextRetrievalService : IDocumentTextRetrievalService
         {
             return new CandidateAnalysis(
                 int.MinValue,
+                0,
+                0,
                 SuspiciousLeadingPreamble: false,
                 LeadingNonEmptyLineCount: 0,
                 LeadingUiLikeLineCount: 0,
@@ -231,6 +306,8 @@ public sealed class DocumentTextRetrievalService : IDocumentTextRetrievalService
         {
             return new CandidateAnalysis(
                 int.MinValue,
+                0,
+                0,
                 SuspiciousLeadingPreamble: false,
                 LeadingNonEmptyLineCount: 0,
                 LeadingUiLikeLineCount: 0,
@@ -240,10 +317,13 @@ public sealed class DocumentTextRetrievalService : IDocumentTextRetrievalService
                 LeadingLinesPreview: null);
         }
 
-        var lines = normalized
+        var allNonEmptyLines = normalized
             .Split('\n')
             .Select(line => line.Trim())
             .Where(line => line.Length > 0)
+            .ToArray();
+
+        var lines = allNonEmptyLines
             .Take(MaxLeadingLinesForQualityScan)
             .ToArray();
 
@@ -255,6 +335,8 @@ public sealed class DocumentTextRetrievalService : IDocumentTextRetrievalService
         {
             return new CandidateAnalysis(
                 score - 90,
+                normalized.Length,
+                0,
                 SuspiciousLeadingPreamble: false,
                 LeadingNonEmptyLineCount: 0,
                 LeadingUiLikeLineCount: 0,
@@ -281,6 +363,7 @@ public sealed class DocumentTextRetrievalService : IDocumentTextRetrievalService
         }
 
         score -= uiLineCount * 55;
+        score -= markerHitCount * 12;
         score += bodyLikeLineCount * 20;
 
         if (uiLineCount >= 3 && bodyLikeLineCount == 0)
@@ -288,9 +371,13 @@ public sealed class DocumentTextRetrievalService : IDocumentTextRetrievalService
             score -= 120;
         }
 
-        var suspiciousLeadingPreamble = uiLineCount >= 3 && bodyLikeLineCount <= 1;
+        var suspiciousLeadingPreamble =
+            (uiLineCount >= 3 && bodyLikeLineCount <= 1) ||
+            (markerHitCount >= 5 && bodyLikeLineCount <= 2);
         return new CandidateAnalysis(
             score,
+            normalized.Length,
+            allNonEmptyLines.Length,
             suspiciousLeadingPreamble,
             lines.Length,
             uiLineCount,
@@ -351,6 +438,85 @@ public sealed class DocumentTextRetrievalService : IDocumentTextRetrievalService
         return line.Length >= 55;
     }
 
+    private static bool TryGetDocumentScopeRejectionReason(
+        TextRetrievalResult result,
+        CandidateAnalysis candidate,
+        out string rejectionReason)
+    {
+        rejectionReason = string.Empty;
+        var message = result.Message ?? string.Empty;
+        var source = result.Source;
+
+        if (candidate.NormalizedLength <= DocumentScopeShortTextThreshold &&
+            candidate.NonEmptyLineCount <= DocumentScopeShortTextMaxLines)
+        {
+            rejectionReason = "short_low_line_candidate";
+            return true;
+        }
+
+        if (source == TextRetrievalSource.ClipboardFallback &&
+            candidate.NormalizedLength <= DocumentScopeClipboardShortTextThreshold &&
+            candidate.NonEmptyLineCount <= 3)
+        {
+            rejectionReason = "clipboard_candidate_scope_too_small";
+            return true;
+        }
+
+        if (candidate.SuspiciousLeadingPreamble &&
+            candidate.LeadingBodyLikeLineCount == 0)
+        {
+            rejectionReason = "viewer_ui_preamble_without_body_content";
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string BuildScopeRejectionMessage(string reason)
+    {
+        return reason switch
+        {
+            "short_low_line_candidate" =>
+                "Document scope not achieved (short_low_line_candidate): captured text is too short to confirm full document.",
+            "clipboard_candidate_scope_too_small" =>
+                "Document scope not achieved (clipboard_candidate_scope_too_small): clipboard candidate looks like selection-level text.",
+            "viewer_ui_preamble_without_body_content" =>
+                "Document scope not achieved (viewer_ui_preamble_without_body_content): captured content appears to be viewer UI.",
+            _ =>
+                "Document scope not achieved: full-document confidence is low."
+        };
+    }
+
+    private static bool IsRetryableDocumentFailure(TextRetrievalResult result)
+    {
+        if (result.Success)
+        {
+            return false;
+        }
+
+        var message = result.Message ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return true;
+        }
+
+        return result.Source switch
+        {
+            TextRetrievalSource.FocusedControlDocument =>
+                message.Equals("No focused control is available for document retrieval.", StringComparison.OrdinalIgnoreCase) ||
+                message.Equals("Focused control does not expose full document text through supported UI Automation patterns.", StringComparison.OrdinalIgnoreCase) ||
+                message.Equals("Focused control returned browser PDF accessibility UI text instead of document content.", StringComparison.OrdinalIgnoreCase) ||
+                message.Equals("Browser PDF document via focused-control UI Automation can drift; trying clipboard fallback.", StringComparison.OrdinalIgnoreCase),
+            TextRetrievalSource.ClipboardFallback =>
+                message.Equals("No focused control is available for clipboard document fallback.", StringComparison.OrdinalIgnoreCase) ||
+                message.Equals("Clipboard document fallback failed: unable to read current clipboard safely.", StringComparison.OrdinalIgnoreCase) ||
+                message.Equals("Clipboard document fallback failed: no foreground window to copy from.", StringComparison.OrdinalIgnoreCase) ||
+                message.Equals("Clipboard document fallback timed out waiting for copied text.", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("Document scope not achieved", StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
+    }
+
     private static string BuildLinePreview(string? line)
     {
         if (string.IsNullOrWhiteSpace(line))
@@ -378,6 +544,8 @@ public sealed class DocumentTextRetrievalService : IDocumentTextRetrievalService
 
     private sealed record CandidateAnalysis(
         int Score,
+        int NormalizedLength,
+        int NonEmptyLineCount,
         bool SuspiciousLeadingPreamble,
         int LeadingNonEmptyLineCount,
         int LeadingUiLikeLineCount,

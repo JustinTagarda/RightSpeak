@@ -46,6 +46,7 @@ public sealed class SelectedTextRetrievalService : ISelectedTextRetrievalService
             var providerStopwatch = Stopwatch.StartNew();
             var result = await provider.TryGetSelectedTextAsync(cancellationToken).ConfigureAwait(false);
             providerStopwatch.Stop();
+            var retryableByHeuristic = IsRetryableSelectedFailure(result);
             AppDiagnostics.Info(
                 "selected_workflow_provider_result",
                 new Dictionary<string, string?>
@@ -57,6 +58,8 @@ public sealed class SelectedTextRetrievalService : ISelectedTextRetrievalService
                     ["message"] = result.Message,
                     ["textLength"] = result.Text?.Length.ToString(),
                     ["textPreview"] = BuildPreview(result.Text),
+                    ["shouldRetry"] = result.ShouldRetry.ToString(),
+                    ["retryableByHeuristic"] = retryableByHeuristic.ToString(),
                     ["elapsedMs"] = providerStopwatch.ElapsedMilliseconds.ToString()
                 });
             if (result.Success && !string.IsNullOrWhiteSpace(result.Text))
@@ -78,7 +81,7 @@ public sealed class SelectedTextRetrievalService : ISelectedTextRetrievalService
             }
 
             lastFailure = result;
-            shouldRetry |= result.ShouldRetry;
+            shouldRetry |= result.ShouldRetry || retryableByHeuristic;
             var source = result.Source?.ToString() ?? provider.GetType().Name;
             var message = string.IsNullOrWhiteSpace(result.Message) ? "No details." : result.Message;
             failureDetails.Add($"{source}: {message}");
@@ -89,7 +92,9 @@ public sealed class SelectedTextRetrievalService : ISelectedTextRetrievalService
                     ["operationId"] = operationId,
                     ["provider"] = provider.GetType().Name,
                     ["source"] = result.Source?.ToString(),
-                    ["message"] = message
+                    ["message"] = message,
+                    ["shouldRetry"] = result.ShouldRetry.ToString(),
+                    ["retryableByHeuristic"] = retryableByHeuristic.ToString()
                 });
         }
 
@@ -126,5 +131,36 @@ public sealed class SelectedTextRetrievalService : ISelectedTextRetrievalService
             .Replace("\n", " ", StringComparison.Ordinal)
             .Trim();
         return normalized.Length <= 180 ? normalized : normalized[..180];
+    }
+
+    private static bool IsRetryableSelectedFailure(TextRetrievalResult result)
+    {
+        if (result.Success)
+        {
+            return false;
+        }
+
+        var message = result.Message ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return true;
+        }
+
+        return result.Source switch
+        {
+            TextRetrievalSource.UiAutomationSelection =>
+                message.Equals("No focused element is available for UI Automation.", StringComparison.OrdinalIgnoreCase) ||
+                message.Equals("Focused element does not expose text selection through UI Automation.", StringComparison.OrdinalIgnoreCase) ||
+                message.Equals("No selected text was found via UI Automation.", StringComparison.OrdinalIgnoreCase) ||
+                message.Equals("UI Automation returned an empty text selection.", StringComparison.OrdinalIgnoreCase),
+            TextRetrievalSource.FocusedControl =>
+                message.Equals("No focused control is available.", StringComparison.OrdinalIgnoreCase) ||
+                message.Equals("Focused control does not expose selected text through supported UI Automation patterns.", StringComparison.OrdinalIgnoreCase),
+            TextRetrievalSource.ClipboardFallback =>
+                message.Equals("Clipboard fallback failed: unable to read current clipboard safely.", StringComparison.OrdinalIgnoreCase) ||
+                message.Equals("Clipboard fallback failed: no foreground window to copy from.", StringComparison.OrdinalIgnoreCase) ||
+                message.Equals("Clipboard fallback timed out waiting for copied text.", StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
     }
 }
