@@ -1,4 +1,3 @@
 <Solution>
   <Project Path="RightSpeak.csproj" />
-  <Project Path="RightSpeak.NativeHost\RightSpeak.NativeHost.csproj" />
 </Solution>

@@ -39,8 +39,6 @@ Target capabilities include:
 - trigger reading from a global hotkey
 - expose quick actions from the tray
 
-Context-menu integration may be added where practical, but it is not a universal Windows capability and should not be treated as the primary path.
-
 ## Windows-First Design
 RightSpeak is intentionally Windows-specific.
 
@@ -76,7 +74,6 @@ The MVP should optimize for:
 It should avoid:
 - broad architectural churn
 - unnecessary dependencies
-- fragile claims about universal context-menu support
 - hardwiring Windows interop directly into view models
 
 ## Getting Started
@@ -124,42 +121,6 @@ dotnet run --project .\RightSpeak.csproj
   - stop reading
   - show app / exit
   - menu items display current hotkey hints
-- browser context-menu integration for Chrome/Edge through an unpacked extension plus native messaging bridge
-
-## Browser Context Menu Setup
-Browser context-menu support is implemented only where specifically supported. It is currently provided through a Chrome/Edge extension, not as a universal Windows context menu.
-
-Files:
-- `Resources/BrowserIntegration/Extension`
-- `Resources/BrowserIntegration/Install-BrowserExtensionIntegration.ps1`
-
-Development setup:
-1. Build the solution.
-2. Load the unpacked extension from `Resources/BrowserIntegration/Extension`.
-3. Copy the extension ID from Chrome or Edge.
-4. Run:
-
-```powershell
-.\Resources\BrowserIntegration\Install-BrowserExtensionIntegration.ps1 -ExtensionId "<extension-id>"
-```
-
-If you use both Chrome and Edge unpacked extensions:
-
-```powershell
-.\Resources\BrowserIntegration\Install-BrowserExtensionIntegration.ps1 -ExtensionId "<chrome-id>" -AdditionalExtensionIds "<edge-id>" -RunBridgeTest
-```
-
-5. Start RightSpeak.
-6. In Chrome or Edge, select text, right-click, and choose `Read with RightSpeak`.
-
-Bridge verification:
-
-```powershell
-.\Resources\BrowserIntegration\Test-BrowserIntegration.ps1
-```
-
-Troubleshooting:
-- [Browser Integration Troubleshooting](./Resources/BrowserIntegration/TROUBLESHOOTING.md)
 
 ## Current Project Shape
 The repository currently starts as a single WPF project. As features are added, code should stay organized so it can later split cleanly into dedicated layers for UI, core logic, and Windows-specific integration.

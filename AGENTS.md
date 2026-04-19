@@ -213,9 +213,6 @@ Primary intended workflow:
 Preferred trigger order:
 1. global hotkey
 2. tray or window command
-3. context-menu integration where specifically supported
-
-Do not present right-click integration as universal. It is not.
 
 ---
 

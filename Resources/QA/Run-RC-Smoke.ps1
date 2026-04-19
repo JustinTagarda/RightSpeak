@@ -43,18 +43,6 @@ Run-Check -Name "Build verify output" -Action {
     dotnet build (Join-Path $ProjectRoot "RightSpeak.csproj") "-p:OutputPath=$buildOutputPath" | Out-Null
 }
 
-Run-Check -Name "Install-NativeHost.ps1 parse" -Action {
-    [void][scriptblock]::Create((Get-Content -Raw -Path (Join-Path $ProjectRoot "Resources\BrowserIntegration\Install-NativeHost.ps1")))
-}
-
-Run-Check -Name "Install-BrowserExtensionIntegration.ps1 parse" -Action {
-    [void][scriptblock]::Create((Get-Content -Raw -Path (Join-Path $ProjectRoot "Resources\BrowserIntegration\Install-BrowserExtensionIntegration.ps1")))
-}
-
-Run-Check -Name "Test-BrowserIntegration.ps1 parse" -Action {
-    [void][scriptblock]::Create((Get-Content -Raw -Path (Join-Path $ProjectRoot "Resources\BrowserIntegration\Test-BrowserIntegration.ps1")))
-}
-
 Run-Check -Name "Diagnostics path writable" -Action {
     $logDirectory = Join-Path $env:LOCALAPPDATA "RightSpeak\logs"
     if (-not (Test-Path $logDirectory)) {

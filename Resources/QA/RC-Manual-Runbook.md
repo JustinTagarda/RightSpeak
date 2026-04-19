@@ -97,25 +97,6 @@ Execution date: `2026-04-16`
    - App starts with defaults.
    - Corrupt backup file created: `settings.json.<timestamp>.corrupt`.
 
-## Installer/First-Run Steps
-### Single-ID setup
-1. Run:
-```powershell
-.\Resources\BrowserIntegration\Install-BrowserExtensionIntegration.ps1 -ExtensionId "<id>" -RunBridgeTest
-```
-2. Expected:
-   - Script succeeds.
-   - Bridge test passes.
-
-### Multi-ID setup
-1. Run:
-```powershell
-.\Resources\BrowserIntegration\Install-BrowserExtensionIntegration.ps1 -ExtensionId "<chrome-id>" -AdditionalExtensionIds "<edge-id>" -RunBridgeTest
-```
-2. Expected:
-   - Both origins registered.
-   - Browser context menu path works in both browsers.
-
 ## Diagnostics Verification
 1. Trigger at least one successful retrieval and one failed retrieval.
 2. Check `%LocalAppData%\RightSpeak\logs\rightspeak.log`.

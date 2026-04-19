@@ -15,12 +15,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Remove="RightSpeak.NativeHost\**\*.cs" />
-    <EmbeddedResource Remove="RightSpeak.NativeHost\**\*" />
-    <None Remove="RightSpeak.NativeHost\**\*" />
-  </ItemGroup>
-
-  <ItemGroup>
     <Resource Include="Resources\Icons\RightSpeak.ico" />
   </ItemGroup>
 

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -23,7 +22,6 @@ public partial class App : WpfApplication
 
     private WindowsSpeechService? _speechService;
     private WindowsGlobalHotkeyService? _hotkeyService;
-    private WindowsNamedPipeContextReadIngressService? _contextReadIngressService;
     private WindowsTrayService? _trayService;
     private JsonAppSettingsService? _appSettingsService;
     private IHotkeySettingsService? _hotkeySettingsService;
@@ -43,19 +41,6 @@ public partial class App : WpfApplication
                 ["args"] = string.Join(" ", e.Args ?? Array.Empty<string>()),
                 ["processId"] = Environment.ProcessId.ToString()
             });
-
-        if (TryRunCommandMode(e.Args ?? Array.Empty<string>(), out var exitCode))
-        {
-            AppDiagnostics.Info(
-                "app_startup_command_mode_exit",
-                new Dictionary<string, string?>
-                {
-                    ["exitCode"] = exitCode.ToString(),
-                    ["args"] = string.Join(" ", e.Args ?? Array.Empty<string>())
-                });
-            Environment.Exit(exitCode);
-            return;
-        }
 
         _activateWindowMessageId = WindowMessageInterop.RegisterWindowMessage(ActivateWindowMessageName);
         if (!TryAcquireSingleInstanceLock())
@@ -105,10 +90,6 @@ public partial class App : WpfApplication
             _hotkeySettingsService,
             ApplyHotkeysAndRefreshTray,
             BuildConfiguration.IsDebugDiagnosticsEnabled);
-
-        _contextReadIngressService = new WindowsNamedPipeContextReadIngressService();
-        _contextReadIngressService.ReadRequested += OnContextReadRequested;
-        _contextReadIngressService.Start();
 
         _trayService = new WindowsTrayService();
         _trayService.ReadSelectedRequested += OnTrayReadSelectedRequested;
@@ -161,12 +142,6 @@ public partial class App : WpfApplication
 
     protected override void OnExit(ExitEventArgs e)
     {
-        if (_contextReadIngressService is not null)
-        {
-            _contextReadIngressService.ReadRequested -= OnContextReadRequested;
-            _contextReadIngressService.Dispose();
-        }
-
         _hotkeyService?.Dispose();
         if (_trayService is not null)
         {
@@ -183,85 +158,6 @@ public partial class App : WpfApplication
         _appSettingsService?.Save();
         _singleInstanceMutex?.Dispose();
         base.OnExit(e);
-    }
-
-    private async void OnContextReadRequested(object? sender, string text)
-    {
-        if (_readingService is null || _mainViewModel is null)
-        {
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return;
-        }
-
-        try
-        {
-            await Dispatcher.InvokeAsync(() => _mainViewModel.SetStatusMessage("Context read request received."));
-            var result = await _readingService.ReadTextAsync(text).ConfigureAwait(false);
-            await Dispatcher.InvokeAsync(() => _mainViewModel.SetStatusMessage(result.Message));
-        }
-        catch (Exception ex)
-        {
-            AppDiagnostics.Warn(
-                "context_read_request_failed",
-                new Dictionary<string, string?>
-                {
-                    ["message"] = ex.Message
-                });
-            await Dispatcher.InvokeAsync(() => _mainViewModel.SetStatusMessage("Couldn't read the text that was sent to RightSpeak."));
-        }
-    }
-
-    private static bool TryRunCommandMode(string[] args, out int exitCode)
-    {
-        exitCode = 0;
-
-        if (args.Length == 0)
-        {
-            return false;
-        }
-
-        var command = args[0];
-        if (LooksLikeBrowserNativeHostInvocation(args))
-        {
-            exitCode = WindowsNativeMessagingHost.RunAsync().GetAwaiter().GetResult();
-            return true;
-        }
-
-        if (string.Equals(command, "--send-text", StringComparison.OrdinalIgnoreCase))
-        {
-            var text = string.Join(" ", args.Skip(1)).Trim();
-            var result = WindowsNamedPipeContextReadClient.SendReadRequestAsync(text).GetAwaiter().GetResult();
-            exitCode = result.Success ? 0 : 1;
-            return true;
-        }
-
-        if (string.Equals(command, "--native-host", StringComparison.OrdinalIgnoreCase))
-        {
-            exitCode = WindowsNativeMessagingHost.RunAsync().GetAwaiter().GetResult();
-            return true;
-        }
-
-        return false;
-    }
-
-    private static bool LooksLikeBrowserNativeHostInvocation(string[] args)
-    {
-        if (args.Length == 0)
-        {
-            return false;
-        }
-
-        var firstArgument = args[0];
-        if (!firstArgument.StartsWith("chrome-extension://", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        return args.Skip(1).Any(argument => argument.StartsWith("--parent-window=", StringComparison.OrdinalIgnoreCase));
     }
 
     private bool TryAcquireSingleInstanceLock()

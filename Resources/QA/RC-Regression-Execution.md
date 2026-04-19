@@ -26,8 +26,6 @@ Recommended manual execution capture:
 | Check | Command | Status | Notes |
 |---|---|---|---|
 | Build (verify output path) | `dotnet build .\RightSpeak.csproj -p:OutputPath=bin\Debug\net10.0-windows-verify\` | Pass | 0 warnings, 0 errors |
-| Native host bridge script parse | `Install-BrowserExtensionIntegration.ps1` parse | Pass | Script parses |
-| Native host installer script parse | `Install-NativeHost.ps1` parse | Pass | Script parses |
 
 ## Retrieval Matrix
 | Target App | Action | Status | Notes |
@@ -43,7 +41,6 @@ Recommended manual execution capture:
 | Edge/Chrome text field | Read selected text | Not Run | Manual validation required |
 | Edge/Chrome text field | Read paragraph | Not Run | Manual validation required |
 | Edge/Chrome page selection | Read selected text | Not Run | Manual validation required |
-| Edge/Chrome page selection | Context menu read | Not Run | Requires extension loaded and installed |
 
 ## Hotkey/Tray Robustness
 | Scenario | Status | Notes |
@@ -60,14 +57,6 @@ Recommended manual execution capture:
 | Save voice/rate/hotkeys and restart | Not Run | Manual validation required |
 | Missing settings file | Not Run | Should recreate defaults |
 | Malformed settings file recovery | Not Run | Should backup `*.corrupt` and continue |
-
-## Installer/First-Run
-| Scenario | Status | Notes |
-|---|---|---|
-| Install browser integration (single ID) | Not Run | Manual validation required |
-| Install browser integration (Chrome + Edge IDs) | Not Run | Manual validation required |
-| `-RunBridgeTest` path | Not Run | Requires host/runtime environment |
-| Troubleshooting doc followability | Not Run | Manual walkthrough required |
 
 ## Open P0/P1 Bugs
 - None recorded in this file yet.
