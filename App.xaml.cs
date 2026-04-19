@@ -86,9 +86,11 @@ public partial class App : WpfApplication
                 new FocusedControlParagraphTextProvider(),
                 new ClipboardParagraphTextProvider()
             });
+        var webpageMainContextAnalyzer = new WebpageMainContextAnalyzer();
         var documentTextRetrievalService = new DocumentTextRetrievalService(
             new List<IDocumentTextProvider>
             {
+                new WebpageMainContextDocumentTextProvider(webpageMainContextAnalyzer),
                 new FocusedControlDocumentTextProvider(),
                 new ClipboardDocumentTextProvider()
             });
@@ -98,7 +100,11 @@ public partial class App : WpfApplication
             paragraphTextRetrievalService,
             documentTextRetrievalService,
             _appSettingsService);
-        _mainViewModel = new MainViewModel(_readingService, _hotkeySettingsService, ApplyHotkeysAndRefreshTray);
+        _mainViewModel = new MainViewModel(
+            _readingService,
+            _hotkeySettingsService,
+            ApplyHotkeysAndRefreshTray,
+            BuildConfiguration.IsDebugDiagnosticsEnabled);
 
         _contextReadIngressService = new WindowsNamedPipeContextReadIngressService();
         _contextReadIngressService.ReadRequested += OnContextReadRequested;
@@ -106,7 +112,6 @@ public partial class App : WpfApplication
 
         _trayService = new WindowsTrayService();
         _trayService.ReadSelectedRequested += OnTrayReadSelectedRequested;
-        _trayService.ReadParagraphRequested += OnTrayReadParagraphRequested;
         _trayService.ReadDocumentRequested += OnTrayReadDocumentRequested;
         _trayService.StopRequested += OnTrayStopRequested;
         _trayService.ShowRequested += OnTrayShowRequested;
@@ -119,6 +124,8 @@ public partial class App : WpfApplication
         _mainWindow = new MainWindow(
             _mainViewModel,
             _hotkeyService,
+            webpageMainContextAnalyzer,
+            () => _trayService?.LastExternalForegroundWindow ?? nint.Zero,
             _activateWindowMessageId,
             ExecuteTrayFocusSensitiveReadAsync,
             placeOnStartup: true);
@@ -164,7 +171,6 @@ public partial class App : WpfApplication
         if (_trayService is not null)
         {
             _trayService.ReadSelectedRequested -= OnTrayReadSelectedRequested;
-            _trayService.ReadParagraphRequested -= OnTrayReadParagraphRequested;
             _trayService.ReadDocumentRequested -= OnTrayReadDocumentRequested;
             _trayService.StopRequested -= OnTrayStopRequested;
             _trayService.ShowRequested -= OnTrayShowRequested;
@@ -286,24 +292,6 @@ public partial class App : WpfApplication
             if (_mainViewModel?.ReadSelectedTextCommand.CanExecute(null) == true)
             {
                 return ExecuteCommandAsync(_mainViewModel.ReadSelectedTextCommand);
-            }
-
-            return Task.CompletedTask;
-        });
-    }
-
-    private void OnTrayReadParagraphRequested(object? sender, EventArgs e)
-    {
-        if (_mainViewModel?.ReadParagraphCommand.CanExecute(null) != true)
-        {
-            return;
-        }
-
-        _ = ExecuteTrayFocusSensitiveReadAsync("read_paragraph_external", "tray_menu", () =>
-        {
-            if (_mainViewModel?.ReadParagraphCommand.CanExecute(null) == true)
-            {
-                return ExecuteCommandAsync(_mainViewModel.ReadParagraphCommand);
             }
 
             return Task.CompletedTask;

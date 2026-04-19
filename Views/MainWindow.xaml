@@ -13,6 +13,8 @@
         FontFamily="Segoe UI"
         FontSize="13">
     <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+
         <Style x:Key="SectionHeaderStyle" TargetType="TextBlock">
             <Setter Property="FontSize" Value="14" />
             <Setter Property="FontWeight" Value="SemiBold" />
@@ -133,7 +135,7 @@
                                TextTrimming="CharacterEllipsis"
                                TextWrapping="NoWrap" />
                 </Grid>
-                <TextBlock Text="Read selected text, paragraphs, or documents from the active app."
+                <TextBlock Text="Read selected text or full documents from the active app."
                            Margin="0,0,0,6"
                            Style="{StaticResource SubtleTextStyle}" />
 
@@ -144,12 +146,6 @@
                             Content="Read Selected Text"
                             IsEnabled="{Binding IsExternalReadsEnabled}"
                             Click="OnReadSelectedTextButtonClick"
-                            Style="{StaticResource SecondaryButtonStyle}" />
-                    <Button Width="128"
-                            Margin="0,0,8,0"
-                            Content="Read Paragraph"
-                            IsEnabled="{Binding IsExternalReadsEnabled}"
-                            Click="OnReadParagraphButtonClick"
                             Style="{StaticResource SecondaryButtonStyle}" />
                     <Button Width="128"
                             Margin="0,0,8,0"
@@ -269,7 +265,6 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
@@ -296,14 +291,14 @@
 
                         <TextBlock Grid.Row="1"
                                    VerticalAlignment="Center"
-                                   Text="Read paragraph"
+                                   Text="Read document"
                                    Margin="0,0,6,4" />
                         <ComboBox Grid.Row="1"
                                   Grid.Column="2"
                                   Height="30"
                                   VerticalContentAlignment="Center"
                                   ItemsSource="{Binding HotkeyKeyOptions}"
-                                  SelectedItem="{Binding ReadParagraphHotkeyKey, UpdateSourceTrigger=PropertyChanged}" />
+                                  SelectedItem="{Binding ReadDocumentHotkeyKey, UpdateSourceTrigger=PropertyChanged}" />
                         <TextBlock Grid.Row="1"
                                    Grid.Column="1"
                                    VerticalAlignment="Center"
@@ -313,32 +308,15 @@
 
                         <TextBlock Grid.Row="2"
                                    VerticalAlignment="Center"
-                                   Text="Read document"
-                                   Margin="0,0,6,4" />
+                                   Text="Stop"
+                                   Margin="0,0,6,0" />
                         <ComboBox Grid.Row="2"
                                   Grid.Column="2"
                                   Height="30"
                                   VerticalContentAlignment="Center"
                                   ItemsSource="{Binding HotkeyKeyOptions}"
-                                  SelectedItem="{Binding ReadDocumentHotkeyKey, UpdateSourceTrigger=PropertyChanged}" />
-                        <TextBlock Grid.Row="2"
-                                   Grid.Column="1"
-                                   VerticalAlignment="Center"
-                                   Text="{Binding HotkeyModifierLabel, StringFormat={}{0}+}"
-                                   Margin="0,0,4,4"
-                                   Style="{StaticResource SubtleTextStyle}" />
-
-                        <TextBlock Grid.Row="3"
-                                   VerticalAlignment="Center"
-                                   Text="Stop"
-                                   Margin="0,0,6,0" />
-                        <ComboBox Grid.Row="3"
-                                  Grid.Column="2"
-                                  Height="30"
-                                  VerticalContentAlignment="Center"
-                                  ItemsSource="{Binding HotkeyKeyOptions}"
                                   SelectedItem="{Binding StopHotkeyKey, UpdateSourceTrigger=PropertyChanged}" />
-                        <TextBlock Grid.Row="3"
+                        <TextBlock Grid.Row="2"
                                    Grid.Column="1"
                                    VerticalAlignment="Center"
                                    Text="{Binding HotkeyModifierLabel, StringFormat={}{0}+}"

@@ -12,6 +12,7 @@ Current state:
 - project targets `.NET 10` on Windows
 - core reading workflows are implemented and being hardened for reliability
 - external `Read Document` is enabled with browser-PDF-specific hardening and diagnostics
+- production-facing external commands are currently `Read Selected Text` and `Read Document` (`Read Paragraph` is intentionally hidden/disabled)
 
 The current focus is getting the MVP path working reliably:
 1. local text-to-speech
@@ -33,7 +34,7 @@ Target capabilities include:
 - read selected text
 - stop or pause reading
 - choose voice and speech rate
-- read a paragraph when the target app exposes enough structure
+- read a paragraph when the target app exposes enough structure (currently not exposed in production UI)
 - read the current control or document content where possible
 - trigger reading from a global hotkey
 - expose quick actions from the tray
@@ -97,12 +98,14 @@ dotnet run --project .\RightSpeak.csproj
 - local speech engine abstraction with Windows OneCore, `System.Speech`, and Piper support
 - manual text input with `Read` and `Stop`
 - selected-text reading pipeline with UI Automation, focused-control, and clipboard fallback stages
-- paragraph reading (first path via UI Automation paragraph expansion from focused selection/caret)
+- paragraph-reading pipeline retained in code for diagnostics/hardening, but excluded from production-facing commands
 - document reading (first path via focused-control UI Automation document or value patterns)
 - document browser-PDF fallback hardening:
   - multi-cycle clipboard capture and settle-window upgrade
   - UI Automation fallback when browser PDF copy is blocked
   - retrieval candidate scoring to reduce viewer-UI preamble drift
+  - strict command-scope behavior for document flow (no selected-text downgrade)
+  - webpage main-context extraction path for conversation-like pages before generic document fallbacks
 - chunked/continuous speech stream orchestration for longer reads
 - chunk-render retry path for transient long-read continuation misses in pinned-engine chunk streams
 - Piper startup-clipping mitigation baseline:
@@ -111,17 +114,16 @@ dotnet run --project .\RightSpeak.csproj
   - direct Piper `SoundPlayer` playback is not the normal read path
 - speech diagnostics include stream and engine routing events (for example `speech_single_chunk_stream_routed`, `speech_chunk_stream_*`, `piper_continuous_playback_*`)
 - global hotkeys:
-  - `Ctrl+Shift+R` read selected text
-  - `Ctrl+Shift+T` read typed text from the app input box
-  - `Ctrl+Shift+X` stop reading
-  - keys are configurable in-app (modifier stays `Ctrl+Shift`)
-- tray quick actions:
-  - read typed text
   - read selected text
-  - read paragraph
   - read document
   - stop reading
-  - typed/selected/stop items show current hotkey hints
+  - modifier and keys are configurable in-app (`Alt+Shift`, `Ctrl+Shift`, `Ctrl+Alt`)
+- tray quick actions:
+  - read selected text
+  - read document
+  - stop reading
+  - show app / exit
+  - menu items display current hotkey hints
 - browser context-menu integration for Chrome/Edge through an unpacked extension plus native messaging bridge
 
 ## Browser Context Menu Setup

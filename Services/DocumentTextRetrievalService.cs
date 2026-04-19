@@ -507,6 +507,10 @@ public sealed class DocumentTextRetrievalService : IDocumentTextRetrievalService
                 message.Equals("Focused control does not expose full document text through supported UI Automation patterns.", StringComparison.OrdinalIgnoreCase) ||
                 message.Equals("Focused control returned browser PDF accessibility UI text instead of document content.", StringComparison.OrdinalIgnoreCase) ||
                 message.Equals("Browser PDF document via focused-control UI Automation can drift; trying clipboard fallback.", StringComparison.OrdinalIgnoreCase),
+            TextRetrievalSource.WebpageMainContext =>
+                message.Contains("did not find a document core", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("not enabled for Read Document", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("Webpage main-context rejected", StringComparison.OrdinalIgnoreCase),
             TextRetrievalSource.ClipboardFallback =>
                 message.Equals("No focused control is available for clipboard document fallback.", StringComparison.OrdinalIgnoreCase) ||
                 message.Equals("Clipboard document fallback failed: unable to read current clipboard safely.", StringComparison.OrdinalIgnoreCase) ||

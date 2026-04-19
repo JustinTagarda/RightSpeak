@@ -44,6 +44,17 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
 
             AppDiagnostics.Info("paragraph_provider_focused_started", BuildElementDiagnostics("focused", focusedElement));
 
+            if (ShouldDeferGoogleDocsParagraphToClipboard(focusedElement))
+            {
+                var deferData = BuildElementDiagnostics("focused", focusedElement);
+                deferData["reason"] = "google_docs_focused_paragraph_can_return_editor_shell";
+                AppDiagnostics.Info("paragraph_provider_focused_google_docs_deferred_to_clipboard", deferData);
+                return Task.FromResult(
+                    TextRetrievalResult.Failed(
+                        "Google Docs paragraph via focused-control UI Automation can be inaccurate; trying clipboard fallback.",
+                        TextRetrievalSource.FocusedControl));
+            }
+
             if (ShouldDeferBrowserPdfParagraphToClipboard(focusedElement))
             {
                 if (TryReadBrowserPdfParagraphFromCursorPoint(
@@ -200,6 +211,41 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
 
         rejectionReason = string.Empty;
         return false;
+    }
+
+    private static bool ShouldDeferGoogleDocsParagraphToClipboard(AutomationElement focusedElement)
+    {
+        try
+        {
+            var processId = focusedElement.Current.ProcessId;
+            if (processId == 0)
+            {
+                return false;
+            }
+
+            using var process = Process.GetProcessById(processId);
+            var processName = process.ProcessName;
+            if (!string.Equals(processName, "chrome", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(processName, "msedge", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            var foregroundWindow = ClipboardInterop.GetForegroundWindow();
+            if (foregroundWindow == nint.Zero)
+            {
+                return false;
+            }
+
+            var windowTitle = WindowFocusInterop.GetWindowText(foregroundWindow);
+            return windowTitle.IndexOf("Google Docs", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                   string.Equals(focusedElement.Current.ControlType?.ProgrammaticName, "ControlType.Edit", StringComparison.Ordinal) &&
+                   string.Equals(focusedElement.Current.Name, "Document content", StringComparison.Ordinal);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool TryReadParagraphFromElementOrAncestors(
@@ -405,7 +451,7 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
         }
     }
 
-    private static bool TryReadBrowserPdfParagraphFromCursorPoint(
+    internal static bool TryReadBrowserPdfParagraphFromCursorPoint(
         AutomationElement startElement,
         out string paragraphText,
         out string sourceMessage,
@@ -421,9 +467,20 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
             return false;
         }
 
+        var anchorMode = "cursor";
+        var originalCursorX = cursorX;
+        var originalCursorY = cursorY;
+        if (!IsPointInsideElement(startElement, cursorX, cursorY) &&
+            TryGetElementCenterPoint(startElement, out var centerX, out var centerY))
+        {
+            cursorX = centerX;
+            cursorY = centerY;
+            anchorMode = "focused_element_center";
+        }
+
         var probes = new List<string>
         {
-            $"cursorX={cursorX};cursorY={cursorY}"
+            $"cursorX={cursorX};cursorY={cursorY};anchorMode={anchorMode};originalCursorX={originalCursorX};originalCursorY={originalCursorY}"
         };
         var pointOffsets = new (int Dx, int Dy)[]
         {
@@ -742,6 +799,22 @@ public sealed class FocusedControlParagraphTextProvider : IParagraphTextProvider
     private static bool IsPointInsideElement(AutomationElement element, int x, int y)
     {
         return IsPointInsideRect(element.Current.BoundingRectangle, x, y);
+    }
+
+    private static bool TryGetElementCenterPoint(AutomationElement element, out int centerX, out int centerY)
+    {
+        centerX = 0;
+        centerY = 0;
+
+        var bounds = element.Current.BoundingRectangle;
+        if (bounds.IsEmpty || bounds.Width <= 0 || bounds.Height <= 0)
+        {
+            return false;
+        }
+
+        centerX = (int)Math.Round(bounds.Left + (bounds.Width / 2d));
+        centerY = (int)Math.Round(bounds.Top + (bounds.Height / 2d));
+        return true;
     }
 
     private static bool IsPointInsideRect(System.Windows.Rect rect, int x, int y)

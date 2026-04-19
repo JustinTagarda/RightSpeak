@@ -29,6 +29,17 @@ public sealed class UiAutomationParagraphTextProvider : IParagraphTextProvider
 
             AppDiagnostics.Info("paragraph_provider_uia_started", BuildElementDiagnostics(focusedElement));
 
+            if (ShouldDeferGoogleDocsParagraphToClipboard(focusedElement))
+            {
+                var deferData = BuildElementDiagnostics(focusedElement);
+                deferData["reason"] = "google_docs_uia_paragraph_can_return_editor_shell";
+                AppDiagnostics.Info("paragraph_provider_uia_google_docs_deferred_to_clipboard", deferData);
+                return Task.FromResult(
+                    TextRetrievalResult.Failed(
+                        "Google Docs paragraph via UI Automation can be inaccurate; trying clipboard fallback.",
+                        TextRetrievalSource.UiAutomationParagraph));
+            }
+
             if (ShouldDeferBrowserPdfParagraphToClipboard(focusedElement))
             {
                 var deferData = BuildElementDiagnostics(focusedElement);
@@ -229,6 +240,41 @@ public sealed class UiAutomationParagraphTextProvider : IParagraphTextProvider
             }
 
             return windowTitle.IndexOf(".pdf", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool ShouldDeferGoogleDocsParagraphToClipboard(AutomationElement focusedElement)
+    {
+        try
+        {
+            var processId = focusedElement.Current.ProcessId;
+            if (processId == 0)
+            {
+                return false;
+            }
+
+            using var process = Process.GetProcessById(processId);
+            var processName = process.ProcessName;
+            if (!string.Equals(processName, "chrome", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(processName, "msedge", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            var foregroundWindow = ClipboardInterop.GetForegroundWindow();
+            if (foregroundWindow == nint.Zero)
+            {
+                return false;
+            }
+
+            var windowTitle = WindowFocusInterop.GetWindowText(foregroundWindow);
+            return windowTitle.IndexOf("Google Docs", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                   string.Equals(focusedElement.Current.ControlType?.ProgrammaticName, "ControlType.Edit", StringComparison.Ordinal) &&
+                   string.Equals(focusedElement.Current.Name, "Document content", StringComparison.Ordinal);
         }
         catch
         {

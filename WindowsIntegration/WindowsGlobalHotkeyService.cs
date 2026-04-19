@@ -11,7 +11,6 @@ namespace RightSpeak.WindowsIntegration;
 public sealed class WindowsGlobalHotkeyService : IGlobalHotkeyService
 {
     private const int ReadSelectedHotkeyId = 0x1000;
-    private const int ReadParagraphHotkeyId = 0x1001;
     private const int ReadDocumentHotkeyId = 0x1002;
     private const int StopHotkeyId = 0x1003;
 
@@ -27,7 +26,6 @@ public sealed class WindowsGlobalHotkeyService : IGlobalHotkeyService
     }
 
     public event EventHandler? ReadSelectedHotkeyPressed;
-    public event EventHandler? ReadParagraphHotkeyPressed;
     public event EventHandler? ReadDocumentHotkeyPressed;
     public event EventHandler? StopHotkeyPressed;
     public string LastRegistrationStatus { get; private set; } = "Hotkeys are not registered.";
@@ -114,13 +112,6 @@ public sealed class WindowsGlobalHotkeyService : IGlobalHotkeyService
             return nint.Zero;
         }
 
-        if (hotkeyId == ReadParagraphHotkeyId)
-        {
-            ReadParagraphHotkeyPressed?.Invoke(this, EventArgs.Empty);
-            handled = true;
-            return nint.Zero;
-        }
-
         if (hotkeyId == ReadDocumentHotkeyId)
         {
             ReadDocumentHotkeyPressed?.Invoke(this, EventArgs.Empty);
@@ -153,12 +144,6 @@ public sealed class WindowsGlobalHotkeyService : IGlobalHotkeyService
             _registeredHotkeys.Add(ReadSelectedHotkeyId);
         }
 
-        var readParagraphRegistered = HotKeyInterop.RegisterHotKey(_windowHandle, ReadParagraphHotkeyId, (uint)configuration.Modifiers, configuration.ReadParagraphVirtualKey);
-        if (readParagraphRegistered)
-        {
-            _registeredHotkeys.Add(ReadParagraphHotkeyId);
-        }
-
         var readDocumentRegistered = HotKeyInterop.RegisterHotKey(_windowHandle, ReadDocumentHotkeyId, (uint)configuration.Modifiers, configuration.ReadDocumentVirtualKey);
         if (readDocumentRegistered)
         {
@@ -171,8 +156,8 @@ public sealed class WindowsGlobalHotkeyService : IGlobalHotkeyService
             _registeredHotkeys.Add(StopHotkeyId);
         }
 
-        LastRegistrationStatus = BuildRegistrationStatusMessage(configuration, readSelectedRegistered, readParagraphRegistered, readDocumentRegistered, stopRegistered);
-        if (readSelectedRegistered && readParagraphRegistered && readDocumentRegistered && stopRegistered)
+        LastRegistrationStatus = BuildRegistrationStatusMessage(configuration, readSelectedRegistered, readDocumentRegistered, stopRegistered);
+        if (readSelectedRegistered && readDocumentRegistered && stopRegistered)
         {
             AppDiagnostics.Info(
                 "hotkey_registration_success",
@@ -191,7 +176,7 @@ public sealed class WindowsGlobalHotkeyService : IGlobalHotkeyService
                 });
         }
 
-        return readSelectedRegistered && readParagraphRegistered && readDocumentRegistered && stopRegistered;
+        return readSelectedRegistered && readDocumentRegistered && stopRegistered;
     }
 
     private void UnregisterRegisteredHotkeys()
@@ -212,14 +197,13 @@ public sealed class WindowsGlobalHotkeyService : IGlobalHotkeyService
     private static string BuildRegistrationStatusMessage(
         HotkeyConfiguration configuration,
         bool readSelectedRegistered,
-        bool readParagraphRegistered,
         bool readDocumentRegistered,
         bool stopRegistered)
     {
-        if (readSelectedRegistered && readParagraphRegistered && readDocumentRegistered && stopRegistered)
+        if (readSelectedRegistered && readDocumentRegistered && stopRegistered)
         {
             var modifierLabel = GetModifierLabel(configuration.Modifiers);
-            return $"Hotkeys registered: selected {modifierLabel}+{(char)configuration.ReadSelectedVirtualKey}, paragraph {modifierLabel}+{(char)configuration.ReadParagraphVirtualKey}, document {modifierLabel}+{(char)configuration.ReadDocumentVirtualKey}, stop {modifierLabel}+{(char)configuration.StopVirtualKey}.";
+            return $"Hotkeys registered: selected {modifierLabel}+{(char)configuration.ReadSelectedVirtualKey}, document {modifierLabel}+{(char)configuration.ReadDocumentVirtualKey}, stop {modifierLabel}+{(char)configuration.StopVirtualKey}.";
         }
 
         var failures = new StringBuilder("Hotkey registration partial failure:");

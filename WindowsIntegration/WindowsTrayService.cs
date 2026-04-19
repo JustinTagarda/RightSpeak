@@ -42,7 +42,6 @@ public sealed class WindowsTrayService : ITrayService
     private ContextMenuStrip? _contextMenu;
     private System.Windows.Forms.Timer? _foregroundWindowTrackerTimer;
     private ToolStripMenuItem? _readSelectedMenuItem;
-    private ToolStripMenuItem? _readParagraphMenuItem;
     private ToolStripMenuItem? _readDocumentMenuItem;
     private ToolStripMenuItem? _stopMenuItem;
     private WindowFocusInterop.WinEventProc? _foregroundChangedCallback;
@@ -55,13 +54,13 @@ public sealed class WindowsTrayService : ITrayService
     private bool _disposed;
 
     public event EventHandler? ReadSelectedRequested;
-    public event EventHandler? ReadParagraphRequested;
     public event EventHandler? ReadDocumentRequested;
     public event EventHandler? StopRequested;
     public event EventHandler? ShowRequested;
     public event EventHandler? ExitRequested;
     public event EventHandler? ForegroundWindowChanged;
 
+    public nint LastExternalForegroundWindow => _lastExternalForegroundWindow;
     public string CurrentForegroundWindowTitle => _currentForegroundWindowTitle;
     public bool HasExternalForegroundWindow => _hasExternalForegroundWindow;
 
@@ -78,11 +77,9 @@ public sealed class WindowsTrayService : ITrayService
         menu.Opening += OnMenuOpening;
         menu.Closed += OnMenuClosed;
         _readSelectedMenuItem = new ToolStripMenuItem("Read Selected Text", null, (_, _) => QueueMenuAction(menu, () => ReadSelectedRequested?.Invoke(this, EventArgs.Empty)));
-        _readParagraphMenuItem = new ToolStripMenuItem("Read Paragraph", null, (_, _) => QueueMenuAction(menu, () => ReadParagraphRequested?.Invoke(this, EventArgs.Empty)));
         _readDocumentMenuItem = new ToolStripMenuItem("Read Document", null, (_, _) => QueueMenuAction(menu, () => ReadDocumentRequested?.Invoke(this, EventArgs.Empty)));
         _stopMenuItem = new ToolStripMenuItem("Stop Reading", null, (_, _) => QueueMenuAction(menu, () => StopRequested?.Invoke(this, EventArgs.Empty)));
         menu.Items.Add(_readSelectedMenuItem);
-        menu.Items.Add(_readParagraphMenuItem);
         menu.Items.Add(_readDocumentMenuItem);
         menu.Items.Add(_stopMenuItem);
         menu.Items.Add(new ToolStripSeparator());
@@ -118,11 +115,6 @@ public sealed class WindowsTrayService : ITrayService
         if (_readSelectedMenuItem is not null)
         {
             _readSelectedMenuItem.Text = $"Read Selected Text ({normalizedModifier}+{NormalizeKey(readSelectedKey)})";
-        }
-
-        if (_readParagraphMenuItem is not null)
-        {
-            _readParagraphMenuItem.Text = $"Read Paragraph ({normalizedModifier}+{NormalizeKey(readParagraphKey)})";
         }
 
         if (_readDocumentMenuItem is not null)

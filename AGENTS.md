@@ -154,6 +154,11 @@ Validated paragraph-read reliability notes:
 - The fix depends on routing these UI-triggered external reads through the same focus-sensitive restore path used by tray reads.
 - Do not simplify paragraph retrieval back to raw `GetSelection().GetText(-1)` only, and do not bypass focus restore for UI paragraph/document triggers without rerunning manual Notepad tests for tray and app-button paths.
 
+Validated production-scope note for paragraph read:
+- For the current production-facing surface, `Read Paragraph` is intentionally excluded from UI, tray menu, and global hotkey registration because browser behavior remains inconsistent.
+- Paragraph retrieval code remains in the codebase for diagnostics and future hardening, but it is not a user-facing command in the current production surface.
+- Do not re-enable `Read Paragraph` in UI/tray/hotkeys without explicit instruction and a fresh cross-app reliability pass.
+
 Validated selected-text scope reliability notes:
 - A confirmed regression occurred in VS Code where selected-text read spoke unrelated editor content (for example text with many slashes) because focused-control retrieval accepted full control value/document text instead of true selection.
 - The fix depends on keeping `FocusedControlSelectedTextProvider` selection-only for selected-text flow (read from `TextPattern.GetSelection()` ranges only).

@@ -900,6 +900,13 @@ public sealed class ReadingService : IReadingService
     {
         if (retrieval.Source == TextRetrievalSource.ClipboardFallback &&
             !string.IsNullOrWhiteSpace(retrieval.Message) &&
+            retrieval.Message.Contains("stayed on selected text", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Read Document stayed on selected text and could not confirm full-document capture. Clear selection, click in the document body, then try Read Document again.";
+        }
+
+        if (retrieval.Source == TextRetrievalSource.ClipboardFallback &&
+            !string.IsNullOrWhiteSpace(retrieval.Message) &&
             retrieval.Message.Contains("Browser PDF viewer blocked document copy to clipboard", StringComparison.OrdinalIgnoreCase))
         {
             return "Couldn't copy document text from the browser PDF viewer. Enable PDF accessibility text access and try again, or open the PDF in an external reader.";

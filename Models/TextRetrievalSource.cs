@@ -6,5 +6,6 @@ public enum TextRetrievalSource
     UiAutomationParagraph,
     FocusedControl,
     FocusedControlDocument,
+    WebpageMainContext,
     ClipboardFallback
 }

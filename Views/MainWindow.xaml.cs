@@ -1,12 +1,12 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Forms;
 using System.Windows.Interop;
 using System.Windows.Input;
+using RightSpeak.Interop;
 using Rect = System.Windows.Rect;
 using RightSpeak.Services;
 using RightSpeak.ViewModels;
@@ -18,6 +18,8 @@ public partial class MainWindow : Window
     private static readonly string AppVersionTextValue = BuildVersionText();
     private readonly MainViewModel _viewModel;
     private readonly IGlobalHotkeyService _hotkeyService;
+    private readonly IWebpageMainContextAnalyzer _webpageMainContextAnalyzer;
+    private readonly Func<nint>? _getExternalWindowHandle;
     private readonly Func<string, string, Func<Task>, Task>? _executeFocusSensitiveReadAsync;
     private readonly uint _activateWindowMessageId;
     private readonly bool _placeOnStartup;
@@ -27,6 +29,8 @@ public partial class MainWindow : Window
     public MainWindow(
         MainViewModel viewModel,
         IGlobalHotkeyService hotkeyService,
+        IWebpageMainContextAnalyzer webpageMainContextAnalyzer,
+        Func<nint>? getExternalWindowHandle,
         uint activateWindowMessageId,
         Func<string, string, Func<Task>, Task>? executeFocusSensitiveReadAsync = null,
         bool placeOnStartup = false)
@@ -34,6 +38,8 @@ public partial class MainWindow : Window
         InitializeComponent();
         _viewModel = viewModel;
         _hotkeyService = hotkeyService;
+        _webpageMainContextAnalyzer = webpageMainContextAnalyzer;
+        _getExternalWindowHandle = getExternalWindowHandle;
         _executeFocusSensitiveReadAsync = executeFocusSensitiveReadAsync;
         _activateWindowMessageId = activateWindowMessageId;
         _placeOnStartup = placeOnStartup;
@@ -54,7 +60,6 @@ public partial class MainWindow : Window
 
         var registered = _hotkeyService.RegisterHotkeys(handle);
         _hotkeyService.ReadSelectedHotkeyPressed += OnReadSelectedHotkeyPressed;
-        _hotkeyService.ReadParagraphHotkeyPressed += OnReadParagraphHotkeyPressed;
         _hotkeyService.ReadDocumentHotkeyPressed += OnReadDocumentHotkeyPressed;
         _hotkeyService.StopHotkeyPressed += OnStopHotkeyPressed;
 
@@ -68,7 +73,6 @@ public partial class MainWindow : Window
     {
         Loaded -= OnLoaded;
         _hotkeyService.ReadSelectedHotkeyPressed -= OnReadSelectedHotkeyPressed;
-        _hotkeyService.ReadParagraphHotkeyPressed -= OnReadParagraphHotkeyPressed;
         _hotkeyService.ReadDocumentHotkeyPressed -= OnReadDocumentHotkeyPressed;
         _hotkeyService.StopHotkeyPressed -= OnStopHotkeyPressed;
         _hotkeyService.Dispose();
@@ -171,25 +175,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void OnReadParagraphHotkeyPressed(object? sender, System.EventArgs e)
-    {
-        if (!_viewModel.ReadParagraphCommand.CanExecute(null))
-        {
-            return;
-        }
-
-        if (_executeFocusSensitiveReadAsync is not null)
-        {
-            await _executeFocusSensitiveReadAsync(
-                "read_paragraph_external",
-                "hotkey",
-                ExecuteReadParagraphAsync).ConfigureAwait(true);
-            return;
-        }
-
-        await ExecuteReadParagraphAsync().ConfigureAwait(true);
-    }
-
     private async void OnReadDocumentHotkeyPressed(object? sender, System.EventArgs e)
     {
         if (!_viewModel.ReadDocumentCommand.CanExecute(null))
@@ -207,25 +192,6 @@ public partial class MainWindow : Window
         }
 
         await ExecuteReadDocumentAsync().ConfigureAwait(true);
-    }
-
-    private async void OnReadParagraphButtonClick(object sender, RoutedEventArgs e)
-    {
-        if (!_viewModel.ReadParagraphCommand.CanExecute(null))
-        {
-            return;
-        }
-
-        if (_executeFocusSensitiveReadAsync is not null)
-        {
-            await _executeFocusSensitiveReadAsync(
-                "read_paragraph_external",
-                "main_window_button",
-                ExecuteReadParagraphAsync).ConfigureAwait(true);
-            return;
-        }
-
-        await ExecuteReadParagraphAsync().ConfigureAwait(true);
     }
 
     private async void OnReadSelectedTextButtonClick(object sender, RoutedEventArgs e)
@@ -296,6 +262,32 @@ public partial class MainWindow : Window
         await ExecuteReadDocumentAsync().ConfigureAwait(true);
     }
 
+    private async void OnAnalyzeExternalAppButtonClick(object sender, RoutedEventArgs e)
+    {
+        if (!BuildConfiguration.IsDebugDiagnosticsEnabled)
+        {
+            _viewModel.SetStatusMessage("Analyze is available in debug builds only.");
+            return;
+        }
+
+        if (!_viewModel.IsExternalReadsEnabled)
+        {
+            _viewModel.SetStatusMessage("No external app is focused. Click the target app first, then try Analyze.");
+            return;
+        }
+
+        if (_executeFocusSensitiveReadAsync is not null)
+        {
+            await _executeFocusSensitiveReadAsync(
+                "analyze_external_app",
+                "main_window_button",
+                ExecuteAnalyzeExternalAppAsync).ConfigureAwait(true);
+            return;
+        }
+
+        await ExecuteAnalyzeExternalAppAsync().ConfigureAwait(true);
+    }
+
     private nint WndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
     {
         if ((uint)msg != _activateWindowMessageId)
@@ -326,16 +318,6 @@ public partial class MainWindow : Window
         Topmost = false;
     }
 
-    private Task ExecuteReadParagraphAsync()
-    {
-        if (_viewModel.ReadParagraphCommand.CanExecute(null))
-        {
-            return ExecuteCommandAsync(_viewModel.ReadParagraphCommand);
-        }
-
-        return Task.CompletedTask;
-    }
-
     private Task ExecuteReadSelectedTextAsync()
     {
         if (_viewModel.ReadSelectedTextCommand.CanExecute(null))
@@ -351,6 +333,127 @@ public partial class MainWindow : Window
         if (_viewModel.ReadDocumentCommand.CanExecute(null))
         {
             return ExecuteCommandAsync(_viewModel.ReadDocumentCommand);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private Task ExecuteAnalyzeExternalAppAsync()
+    {
+        var operationId = Guid.NewGuid().ToString("N");
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        _viewModel.SetStatusMessage("Analyzing external app...");
+
+        try
+        {
+            var targetWindow = _getExternalWindowHandle?.Invoke() ?? nint.Zero;
+            var analysis = targetWindow != nint.Zero
+                ? _webpageMainContextAnalyzer.AnalyzeWindow(targetWindow)
+                : _webpageMainContextAnalyzer.AnalyzeForegroundWindow();
+            var report = analysis.Report;
+            AppDiagnostics.Info(
+                "analyze_external_app_report",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["targetWindowHandle"] = targetWindow == nint.Zero ? null : $"0x{targetWindow.ToInt64():X}",
+                    ["report"] = report,
+                    ["reportLength"] = report.Length.ToString(),
+                    ["reportLineCount"] = report.Split(Environment.NewLine, StringSplitOptions.None).Length.ToString()
+                });
+
+            foreach (var node in analysis.TopDocumentCandidatesForLog)
+            {
+                AppDiagnostics.Info(
+                    "analyze_external_app_document_node_content",
+                    new Dictionary<string, string?>
+                    {
+                        ["operationId"] = operationId,
+                        ["rank"] = node.Rank.ToString(),
+                        ["score"] = node.Score.ToString(),
+                        ["name"] = node.Name,
+                        ["className"] = node.ClassName,
+                        ["containsFocus"] = node.ContainsFocus.ToString(),
+                        ["isOffscreen"] = node.IsOffscreen.ToString(),
+                        ["descendantCount"] = node.DescendantCount.ToString(),
+                        ["textNodeCount"] = node.TextNodeCount.ToString(),
+                        ["buttonNodeCount"] = node.ButtonNodeCount.ToString(),
+                        ["contentSource"] = node.ContentSource,
+                        ["contentLength"] = node.ContentLength.ToString(),
+                        ["contentWasTruncated"] = node.ContentWasTruncated.ToString(),
+                        ["content"] = node.ContentForLog
+                    });
+            }
+
+            if (analysis.MainContextCoreLogEntry is not null)
+            {
+                AppDiagnostics.Info(
+                    "analyze_external_app_main_context_core",
+                    new Dictionary<string, string?>
+                    {
+                        ["operationId"] = operationId,
+                        ["selectedClusterHash"] = analysis.MainContextCoreLogEntry.ClusterHash,
+                        ["selectedCandidateName"] = analysis.MainContextCoreLogEntry.CandidateName,
+                        ["selectedCandidateScore"] = analysis.MainContextCoreLogEntry.CandidateScore.ToString(),
+                        ["pageType"] = analysis.MainContextCoreLogEntry.PageType,
+                        ["extractionMode"] = analysis.MainContextCoreLogEntry.ExtractionMode,
+                        ["normalizedLength"] = analysis.MainContextCoreLogEntry.NormalizedLength.ToString(),
+                        ["coreLength"] = analysis.MainContextCoreLogEntry.CoreLength.ToString(),
+                        ["noiseLineCount"] = analysis.MainContextCoreLogEntry.NoiseLineCount.ToString(),
+                        ["keptLineCount"] = analysis.MainContextCoreLogEntry.KeptLineCount.ToString(),
+                        ["conversationBlockCount"] = analysis.MainContextCoreLogEntry.ConversationBlockCount.ToString(),
+                        ["chunkCount"] = analysis.MainContextCoreLogEntry.ChunkCount.ToString(),
+                        ["content"] = analysis.MainContextCoreLogEntry.CoreContent
+                    });
+
+                foreach (var chunk in analysis.MainContextCoreLogEntry.Chunks)
+                {
+                    AppDiagnostics.Info(
+                        "analyze_external_app_main_context_chunk",
+                        new Dictionary<string, string?>
+                        {
+                            ["operationId"] = operationId,
+                            ["selectedClusterHash"] = analysis.MainContextCoreLogEntry.ClusterHash,
+                            ["pageType"] = analysis.MainContextCoreLogEntry.PageType,
+                            ["extractionMode"] = analysis.MainContextCoreLogEntry.ExtractionMode,
+                            ["chunkIndex"] = chunk.ChunkIndex.ToString(),
+                            ["chunkType"] = chunk.ChunkType,
+                            ["sectionType"] = chunk.SectionType,
+                            ["speaker"] = chunk.Speaker,
+                            ["lineCount"] = chunk.LineCount.ToString(),
+                            ["characterCount"] = chunk.CharacterCount.ToString(),
+                            ["confidenceScore"] = chunk.ConfidenceScore.ToString(),
+                            ["isHeadingLike"] = chunk.IsHeadingLike.ToString(),
+                            ["includeByDefault"] = chunk.IncludeByDefault.ToString(),
+                            ["contentWasTruncated"] = chunk.ContentWasTruncated.ToString(),
+                            ["contentPreview"] = chunk.ContentPreview,
+                            ["content"] = chunk.ContentForLog
+                        });
+                }
+            }
+
+            stopwatch.Stop();
+            AppDiagnostics.Info(
+                "analyze_external_app_completed",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
+                });
+            _viewModel.SetStatusMessage("External app analysis captured in logs.");
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            AppDiagnostics.Error(
+                "analyze_external_app_failed",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString(),
+                    ["message"] = ex.Message
+                });
+            _viewModel.SetStatusMessage($"Analyze failed: {ex.Message}");
         }
 
         return Task.CompletedTask;

@@ -22,6 +22,10 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
     private const int BrowserPdfSelectionLeakMaxCandidateLength = 1200;
     private const double BrowserPdfSelectionLeakSimilarityThreshold = 0.92;
     private const int BrowserPdfSelectAllSettleMilliseconds = 140;
+    private const int BrowserPdfSelectionResetSettleMilliseconds = 60;
+    private const int BrowserPdfSelectionLeakBreakThreshold = 2;
+    private const int BrowserPdfRepeatedShortCaptureThreshold = 2;
+    private const int BrowserPdfTinyCaptureLengthThreshold = 120;
     private const int ClipboardAccessRetries = 8;
     private const int ClipboardAccessRetryDelayMilliseconds = 40;
     private static readonly string[] BrowserPdfViewerUiLineMarkers =
@@ -107,10 +111,17 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
         string? selectionBaselineText = null;
         string? selectionBaselineFingerprint = null;
         double latestSelectionOverlap = 0;
+        var selectionLeakCycles = 0;
+        var repeatedShortCaptureCount = 0;
+        string? lastShortCaptureFingerprint = null;
+        var forceAutomationFallback = false;
+        string? automationFallbackReason = null;
+        var temporarySelectAllSent = false;
+        var foregroundWindow = nint.Zero;
 
         try
         {
-            var foregroundWindow = ClipboardInterop.GetForegroundWindow();
+            foregroundWindow = ClipboardInterop.GetForegroundWindow();
             if (foregroundWindow == nint.Zero)
             {
                 AppDiagnostics.Warn("clipboard_document_no_foreground_window_for_copy");
@@ -217,7 +228,22 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
                     }
                 }
 
+                if (isBrowserPdfContext)
+                {
+                    ClipboardInterop.SendEscapeKey();
+                    Thread.Sleep(BrowserPdfSelectionResetSettleMilliseconds);
+                    AppDiagnostics.Info(
+                        "clipboard_document_capture_cycle_selection_reset",
+                        new Dictionary<string, string?>
+                        {
+                            ["copyCycle"] = cycle.ToString(),
+                            ["copyCycles"] = copyCycles.ToString(),
+                            ["action"] = "escape_before_select_all"
+                        });
+                }
+
                 ClipboardInterop.SendSelectAllShortcut();
+                temporarySelectAllSent = true;
                 Thread.Sleep(isBrowserPdfContext ? BrowserPdfSelectAllSettleMilliseconds : 120);
                 ClipboardInterop.SendCopyShortcut();
                 AppDiagnostics.Info(
@@ -349,6 +375,7 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
                                 out var overlap))
                         {
                             latestSelectionOverlap = overlap;
+                            selectionLeakCycles++;
                             AppDiagnostics.Warn(
                                 "document_scope_selection_leak_detected",
                                 new Dictionary<string, string?>
@@ -360,9 +387,29 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
                                     ["candidateLength"] = cycleCapturedText.Length.ToString(),
                                     ["similarity"] = overlap.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture),
                                     ["threshold"] = BrowserPdfSelectionLeakSimilarityThreshold.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture),
+                                    ["selectionLeakCycles"] = selectionLeakCycles.ToString(),
                                     ["candidatePreview"] = BuildPreview(cycleCapturedText)
                                 });
                             cycleCapturedText = string.Empty;
+
+                            if (selectionLeakCycles >= BrowserPdfSelectionLeakBreakThreshold)
+                            {
+                                forceAutomationFallback = true;
+                                automationFallbackReason = "selection_leak_detected";
+                                AppDiagnostics.Warn(
+                                    "clipboard_document_escalating_to_automation_fallback",
+                                    new Dictionary<string, string?>
+                                    {
+                                        ["copyCycle"] = cycle.ToString(),
+                                        ["copyCycles"] = copyCycles.ToString(),
+                                        ["reason"] = automationFallbackReason,
+                                        ["selectionLeakCycles"] = selectionLeakCycles.ToString()
+                                    });
+                            }
+                        }
+                        else
+                        {
+                            selectionLeakCycles = 0;
                         }
                     }
 
@@ -371,6 +418,63 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
                     {
                         documentText = cycleCapturedText;
                     }
+
+                    if (isBrowserPdfContext && !string.IsNullOrWhiteSpace(cycleCapturedText))
+                    {
+                        if (cycleCapturedText.Length <= BrowserPdfTinyCaptureLengthThreshold)
+                        {
+                            var fingerprint = BuildScopeFingerprint(cycleCapturedText);
+                            if (!string.IsNullOrWhiteSpace(fingerprint) &&
+                                string.Equals(fingerprint, lastShortCaptureFingerprint, StringComparison.Ordinal))
+                            {
+                                repeatedShortCaptureCount++;
+                            }
+                            else
+                            {
+                                repeatedShortCaptureCount = 1;
+                                lastShortCaptureFingerprint = fingerprint;
+                            }
+
+                            AppDiagnostics.Warn(
+                                "clipboard_document_tiny_capture_detected",
+                                new Dictionary<string, string?>
+                                {
+                                    ["copyCycle"] = cycle.ToString(),
+                                    ["copyCycles"] = copyCycles.ToString(),
+                                    ["length"] = cycleCapturedText.Length.ToString(),
+                                    ["repeatCount"] = repeatedShortCaptureCount.ToString(),
+                                    ["threshold"] = BrowserPdfRepeatedShortCaptureThreshold.ToString(),
+                                    ["preview"] = BuildPreview(cycleCapturedText)
+                                });
+
+                            if (repeatedShortCaptureCount >= BrowserPdfRepeatedShortCaptureThreshold)
+                            {
+                                forceAutomationFallback = true;
+                                automationFallbackReason = "repeated_tiny_capture";
+                                cycleCapturedText = string.Empty;
+                                documentText = null;
+                                AppDiagnostics.Warn(
+                                    "clipboard_document_escalating_to_automation_fallback",
+                                    new Dictionary<string, string?>
+                                    {
+                                        ["copyCycle"] = cycle.ToString(),
+                                        ["copyCycles"] = copyCycles.ToString(),
+                                        ["reason"] = automationFallbackReason,
+                                        ["repeatCount"] = repeatedShortCaptureCount.ToString()
+                                    });
+                            }
+                        }
+                        else
+                        {
+                            repeatedShortCaptureCount = 0;
+                            lastShortCaptureFingerprint = null;
+                        }
+                    }
+                }
+
+                if (isBrowserPdfContext && forceAutomationFallback)
+                {
+                    break;
                 }
 
                 if (!isBrowserPdfContext || !ShouldRetryBrowserPdfCopy(cycle, copyCycles, documentText))
@@ -391,8 +495,17 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
 
             if (string.IsNullOrWhiteSpace(documentText))
             {
-                if (isBrowserPdfContext && copySequenceTransitions == 0)
+                if (isBrowserPdfContext)
                 {
+                    AppDiagnostics.Info(
+                        "clipboard_document_browser_pdf_automation_fallback_started",
+                        new Dictionary<string, string?>
+                        {
+                            ["reason"] = automationFallbackReason ?? "clipboard_capture_exhausted",
+                            ["copySequenceTransitions"] = copySequenceTransitions.ToString(),
+                            ["pollCount"] = pollCount.ToString()
+                        });
+
                     if (TryCaptureBrowserPdfViaAutomationFallback(
                             foregroundWindow,
                             cancellationToken,
@@ -418,21 +531,32 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
                                     ["threshold"] = BrowserPdfSelectionLeakSimilarityThreshold.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture),
                                     ["candidatePreview"] = BuildPreview(automationFallbackText ?? string.Empty)
                                 });
+                            failureCode = "selection_leak_detected";
+                            failureMessage = "Document capture stayed on selected text after full-document retries.";
                         }
                         else
                         {
-                        documentText = automationFallbackText;
-                        captureStrategy = "browser_pdf_automation_fallback";
-                        AppDiagnostics.Info(
-                            "clipboard_document_browser_pdf_automation_fallback_succeeded",
-                            automationFallbackDiagnostics);
+                            documentText = automationFallbackText;
+                            captureStrategy = "browser_pdf_automation_fallback";
+                            AppDiagnostics.Info(
+                                "clipboard_document_browser_pdf_automation_fallback_succeeded",
+                                automationFallbackDiagnostics);
                         }
                     }
                     else
                     {
                         failureCode = BrowserPdfCopyBlockedFailureCode;
                         shouldRetry = false;
-                        failureMessage = "Browser PDF viewer blocked document copy to clipboard. Try enabling PDF accessibility text access, then retry. If it still fails, open the PDF in an external reader and run Read Document there.";
+                        if (string.Equals(automationFallbackReason, "selection_leak_detected", StringComparison.Ordinal) ||
+                            string.Equals(automationFallbackReason, "repeated_tiny_capture", StringComparison.Ordinal))
+                        {
+                            failureMessage = "Document capture stayed on selected text and full-document fallback was unavailable. Clear selection, click inside document body, then try Read Document again.";
+                        }
+                        else
+                        {
+                            failureMessage = "Browser PDF viewer blocked document copy to clipboard. Try enabling PDF accessibility text access, then retry. If it still fails, open the PDF in an external reader and run Read Document there.";
+                        }
+
                         AppDiagnostics.Warn(
                             "clipboard_document_browser_pdf_copy_blocked",
                             new Dictionary<string, string?>
@@ -483,6 +607,11 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
 
         if (observedCopySequence != 0)
         {
+            if (temporarySelectAllSent && !string.IsNullOrWhiteSpace(documentText))
+            {
+                ClearDocumentTemporarySelection(foregroundWindow, focusedElement, "before_clipboard_restore");
+            }
+
             var currentSequence = ClipboardInterop.GetClipboardSequenceNumber();
             if (currentSequence == observedCopySequence && !TryRestoreClipboard(originalClipboard))
             {
@@ -549,6 +678,7 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
                 ["pollCount"] = pollCount.ToString(),
                 ["copySequenceTransitions"] = copySequenceTransitions.ToString(),
                 ["failureCode"] = failureCode,
+                ["automationFallbackReason"] = automationFallbackReason,
                 ["shouldRetry"] = shouldRetry.ToString(),
                 ["failureMessage"] = failureMessage,
                 ["selectionLeakSimilarity"] = latestSelectionOverlap <= 0
@@ -1044,6 +1174,55 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
         }
 
         return windowTitle.IndexOf(".pdf", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static void ClearDocumentTemporarySelection(
+        nint foregroundWindow,
+        System.Windows.Automation.AutomationElement? focusedElement,
+        string phase)
+    {
+        try
+        {
+            var activationResult = WindowFocusInterop.TryActivateWindow(foregroundWindow);
+            try
+            {
+                focusedElement?.SetFocus();
+            }
+            catch (Exception ex)
+            {
+                AppDiagnostics.Warn(
+                    "clipboard_document_selection_clear_refocus_failed",
+                    new Dictionary<string, string?>
+                    {
+                        ["phase"] = phase,
+                        ["message"] = ex.Message
+                    });
+            }
+
+            ClipboardInterop.SendEscapeKey();
+            Thread.Sleep(BrowserPdfSelectionResetSettleMilliseconds);
+            ClipboardInterop.SendLeftArrowKey();
+            Thread.Sleep(BrowserPdfSelectionResetSettleMilliseconds);
+            AppDiagnostics.Info(
+                "clipboard_document_selection_clear_sent",
+                new Dictionary<string, string?>
+                {
+                    ["phase"] = phase,
+                    ["activationResult"] = activationResult.ToString(),
+                    ["clearSequence"] = "escape,left_arrow",
+                    ["focusedElementSnapshot"] = BuildFocusedElementSnapshot()
+                });
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Warn(
+                "clipboard_document_selection_clear_failed",
+                new Dictionary<string, string?>
+                {
+                    ["phase"] = phase,
+                    ["message"] = ex.Message
+                });
+        }
     }
 
     private static bool ShouldRetryBrowserPdfCopy(int cycle, int maxCycles, string? capturedText)

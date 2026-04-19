@@ -26,7 +26,10 @@ public sealed class ParagraphTextRetrievalService : IParagraphTextRetrievalServi
         "open in",
         "show thumbnails",
         "find in file",
-        "page "
+        "page ",
+        "show tabs",
+        "outlines",
+        "document content"
     };
 
     private readonly IReadOnlyList<IParagraphTextProvider> _providers;
@@ -131,6 +134,7 @@ public sealed class ParagraphTextRetrievalService : IParagraphTextRetrievalServi
                         ["source"] = result.Source?.ToString(),
                         ["textLength"] = result.Text?.Length.ToString(),
                         ["textPreview"] = BuildPreview(result.Text),
+                        ["text"] = result.Text,
                         ["elapsedMs"] = overallStopwatch.ElapsedMilliseconds.ToString()
                     });
                 return result;
@@ -141,17 +145,25 @@ public sealed class ParagraphTextRetrievalService : IParagraphTextRetrievalServi
             var source = result.Source?.ToString() ?? provider.GetType().Name;
             var message = string.IsNullOrWhiteSpace(result.Message) ? "No details." : result.Message;
             failureDetails.Add($"{source}: {message}");
-            AppDiagnostics.Warn(
-                "paragraph_retrieval_provider_failed",
-                new Dictionary<string, string?>
-                {
-                    ["provider"] = provider.GetType().Name,
-                    ["providerIndex"] = providerIndex.ToString(),
-                    ["source"] = result.Source?.ToString(),
-                    ["message"] = message,
-                    ["shouldRetry"] = result.ShouldRetry.ToString(),
-                    ["retryableByHeuristic"] = IsRetryableParagraphFailure(result).ToString()
-                });
+            var providerFailureData = new Dictionary<string, string?>
+            {
+                ["provider"] = provider.GetType().Name,
+                ["providerIndex"] = providerIndex.ToString(),
+                ["source"] = result.Source?.ToString(),
+                ["message"] = message,
+                ["shouldRetry"] = result.ShouldRetry.ToString(),
+                ["retryableByHeuristic"] = IsRetryableParagraphFailure(result).ToString()
+            };
+            var isExpectedDeferral = message.IndexOf("trying clipboard fallback", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (isExpectedDeferral)
+            {
+                providerFailureData["deferReason"] = "expected_provider_deferral_to_clipboard";
+                AppDiagnostics.Info("paragraph_retrieval_provider_deferred", providerFailureData);
+            }
+            else
+            {
+                AppDiagnostics.Warn("paragraph_retrieval_provider_failed", providerFailureData);
+            }
         }
 
         overallStopwatch.Stop();
@@ -257,6 +269,12 @@ public sealed class ParagraphTextRetrievalService : IParagraphTextRetrievalServi
         if (viewerMarkerHitCount >= 3 && normalized.Length < 400)
         {
             return new ParagraphCandidateAnalysis(false, normalized.Length, lines.Length, viewerMarkerHitCount, "paragraph_candidate_looks_like_viewer_ui", preview);
+        }
+
+        if (normalized.IndexOf("show tabs", StringComparison.OrdinalIgnoreCase) >= 0 &&
+            normalized.IndexOf("document content", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return new ParagraphCandidateAnalysis(false, normalized.Length, lines.Length, viewerMarkerHitCount, "paragraph_candidate_looks_like_google_docs_editor_shell", preview);
         }
 
         return new ParagraphCandidateAnalysis(true, normalized.Length, lines.Length, viewerMarkerHitCount, null, preview);

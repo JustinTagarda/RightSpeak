@@ -50,15 +50,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _appliedReadParagraphHotkeyKey = DefaultReadParagraphHotkeyKey;
     private string _appliedReadDocumentHotkeyKey = DefaultReadDocumentHotkeyKey;
     private string _appliedStopHotkeyKey = DefaultStopHotkeyKey;
+    private readonly bool _isAnalyzeAvailable;
 
     public MainViewModel(
         IReadingService readingService,
         IHotkeySettingsService hotkeySettingsService,
-        Func<(bool Success, string StatusMessage)>? applyHotkeysRegistration = null)
+        Func<(bool Success, string StatusMessage)>? applyHotkeysRegistration = null,
+        bool isAnalyzeAvailable = false)
     {
         _readingService = readingService ?? throw new ArgumentNullException(nameof(readingService));
         _hotkeySettingsService = hotkeySettingsService ?? throw new ArgumentNullException(nameof(hotkeySettingsService));
         _applyHotkeysRegistration = applyHotkeysRegistration;
+        _isAnalyzeAvailable = isAnalyzeAvailable;
 
         _speechRate = _readingService.SpeechRate;
         _inputText = _readingService.TypedTextDraft ?? string.Empty;
@@ -245,6 +248,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool IsManualReadSpeaking => _isManualReadSpeaking;
     public bool IsManualReadEnabled => !_isExternalReadActive;
     public bool IsExternalReadsEnabled => !_isManualReadSpeaking && !_isSpeaking && _hasExternalFocusedWindow;
+    public bool IsAnalyzeAvailable => _isAnalyzeAvailable;
 
     public ICommand ReadCommand { get; }
     public ICommand ClearCommand { get; }
