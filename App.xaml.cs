@@ -6,7 +6,9 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
 using System.Windows.Input;
+using Microsoft.Win32;
 using RightSpeak.Interop;
+using RightSpeak.Models;
 using RightSpeak.Services;
 using RightSpeak.ViewModels;
 using RightSpeak.Views;
@@ -55,6 +57,12 @@ public partial class App : WpfApplication
 
         _speechService = new WindowsSpeechService();
         _appSettingsService = new JsonAppSettingsService();
+        if (!ApplyTheme(_appSettingsService.Current.Theme))
+        {
+            _appSettingsService.Current.Theme = AppThemes.Light;
+            ApplyTheme(AppThemes.Light);
+        }
+
         _hotkeySettingsService = new HotkeySettingsService(_appSettingsService);
         _hotkeyService = new WindowsGlobalHotkeyService(_hotkeySettingsService);
         var selectedTextRetrievalService = new SelectedTextRetrievalService(
@@ -89,7 +97,9 @@ public partial class App : WpfApplication
             _readingService,
             _hotkeySettingsService,
             ApplyHotkeysAndRefreshTray,
-            BuildConfiguration.IsDebugDiagnosticsEnabled);
+            BuildConfiguration.IsDebugDiagnosticsEnabled,
+            _appSettingsService,
+            ApplyTheme);
 
         _trayService = new WindowsTrayService();
         _trayService.ReadSelectedRequested += OnTrayReadSelectedRequested;
@@ -390,5 +400,95 @@ public partial class App : WpfApplication
             ["hasExternalForegroundWindow"] = _trayService?.HasExternalForegroundWindow.ToString(),
             ["currentForegroundWindowTitle"] = _trayService?.CurrentForegroundWindowTitle
         };
+    }
+
+    private bool ApplyTheme(string? requestedTheme)
+    {
+        var normalizedTheme = AppThemes.Normalize(requestedTheme);
+        var resolvedTheme = ResolveTheme(normalizedTheme);
+        var themePath = string.Equals(resolvedTheme, AppThemes.Dark, StringComparison.Ordinal)
+            ? "Resources/Themes/DarkTheme.xaml"
+            : "Resources/Themes/LightTheme.xaml";
+
+        try
+        {
+            var dictionaries = Resources.MergedDictionaries;
+            for (var index = dictionaries.Count - 1; index >= 0; index--)
+            {
+                var source = dictionaries[index].Source?.OriginalString;
+                if (string.IsNullOrWhiteSpace(source))
+                {
+                    continue;
+                }
+
+                if (source.Contains("Resources/Themes/", StringComparison.OrdinalIgnoreCase))
+                {
+                    dictionaries.RemoveAt(index);
+                }
+            }
+
+            dictionaries.Add(new ResourceDictionary
+            {
+                Source = new Uri(themePath, UriKind.Relative)
+            });
+
+            if (_appSettingsService is not null &&
+                !string.Equals(_appSettingsService.Current.Theme, normalizedTheme, StringComparison.Ordinal))
+            {
+                _appSettingsService.Current.Theme = normalizedTheme;
+                _appSettingsService.Save();
+            }
+
+            AppDiagnostics.Info(
+                "theme_applied",
+                new Dictionary<string, string?>
+                {
+                    ["theme"] = normalizedTheme,
+                    ["resolvedTheme"] = resolvedTheme
+                });
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "theme_apply_failed",
+                new Dictionary<string, string?>
+                {
+                    ["theme"] = normalizedTheme,
+                    ["message"] = ex.Message
+                });
+            return false;
+        }
+    }
+
+    private static string ResolveTheme(string normalizedTheme)
+    {
+        if (!string.Equals(normalizedTheme, AppThemes.WindowsSettings, StringComparison.Ordinal))
+        {
+            return normalizedTheme;
+        }
+
+        return IsWindowsLightTheme() ? AppThemes.Light : AppThemes.Dark;
+    }
+
+    private static bool IsWindowsLightTheme()
+    {
+        const string personalizeKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
+        const string appsUseLightThemeValueName = "AppsUseLightTheme";
+
+        try
+        {
+            using var personalizeKey = Registry.CurrentUser.OpenSubKey(personalizeKeyPath, writable: false);
+            if (personalizeKey?.GetValue(appsUseLightThemeValueName) is int appsUseLightTheme)
+            {
+                return appsUseLightTheme != 0;
+            }
+        }
+        catch
+        {
+            // Fall through to light theme default when registry reads fail.
+        }
+
+        return true;
     }
 }

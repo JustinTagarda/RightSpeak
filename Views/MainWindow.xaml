@@ -3,13 +3,13 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="RightSpeak"
         Icon="/Resources/Icons/RightSpeak.ico"
-        Width="700"
+        Width="600"
         WindowStartupLocation="Manual"
         Height="700"
-        MinWidth="700"
+        MinWidth="600"
         MinHeight="700"
-        Background="#F4F6F8"
-        Foreground="#1F2937"
+        Background="{DynamicResource WindowBackgroundBrush}"
+        Foreground="{DynamicResource WindowForegroundBrush}"
         FontFamily="Segoe UI"
         FontSize="13">
     <Window.Resources>
@@ -22,31 +22,23 @@
         </Style>
 
         <Style x:Key="SubtleTextStyle" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#6B7280" />
+            <Setter Property="Foreground" Value="{DynamicResource SubtleTextBrush}" />
         </Style>
 
         <Style x:Key="CardStyle" TargetType="Border">
-            <Setter Property="Background" Value="#FFFFFF" />
-            <Setter Property="BorderBrush" Value="#D7DDE5" />
+            <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="6" />
             <Setter Property="Padding" Value="10" />
         </Style>
 
-        <Style x:Key="PrimaryButtonStyle" TargetType="Button">
-            <Setter Property="MinHeight" Value="32" />
-            <Setter Property="Padding" Value="14,6" />
-            <Setter Property="Margin" Value="0,0,8,0" />
-            <Setter Property="Background" Value="#2563EB" />
-            <Setter Property="Foreground" Value="White" />
-            <Setter Property="BorderBrush" Value="#1D4ED8" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-        </Style>
-
-        <Style x:Key="SecondaryButtonStyle" TargetType="Button">
-            <Setter Property="MinHeight" Value="32" />
-            <Setter Property="Padding" Value="14,6" />
-            <Setter Property="Margin" Value="0,0,8,0" />
+        <Style x:Key="InputTextBoxStyle" TargetType="TextBox">
+            <Setter Property="Background" Value="{DynamicResource InputBackgroundBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource InputBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource InputForegroundBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="6,4" />
         </Style>
 
         <Style x:Key="CollapsibleTextStyle" TargetType="TextBlock">
@@ -92,6 +84,7 @@
                          AcceptsReturn="True"
                          VerticalScrollBarVisibility="Auto"
                          TextWrapping="Wrap"
+                         Style="{StaticResource InputTextBoxStyle}"
                          VerticalAlignment="Stretch"
                          Text="{Binding InputText, UpdateSourceTrigger=PropertyChanged}" />
 
@@ -102,15 +95,15 @@
                     <Button Width="146"
                             Content="Read Manual Text"
                             Command="{Binding ReadCommand}"
-                            Style="{StaticResource PrimaryButtonStyle}" />
+                            Style="{DynamicResource PrimaryButtonStyle}" />
                     <Button Width="78"
                             Content="Clear"
                             Command="{Binding ClearCommand}"
-                            Style="{StaticResource SecondaryButtonStyle}" />
+                            Style="{DynamicResource SecondaryButtonStyle}" />
                     <Button Width="88"
                             Content="Stop"
                             Click="OnManualStopButtonClick"
-                            Style="{StaticResource SecondaryButtonStyle}" />
+                            Style="{DynamicResource SecondaryButtonStyle}" />
                 </StackPanel>
             </Grid>
         </Border>
@@ -146,17 +139,17 @@
                             Content="Read Selected Text"
                             IsEnabled="{Binding IsExternalReadsEnabled}"
                             Click="OnReadSelectedTextButtonClick"
-                            Style="{StaticResource SecondaryButtonStyle}" />
+                            Style="{DynamicResource SecondaryButtonStyle}" />
                     <Button Width="128"
                             Margin="0,0,8,0"
                             Content="Read Document"
                             IsEnabled="{Binding IsExternalReadsEnabled}"
                             Click="OnReadDocumentButtonClick"
-                            Style="{StaticResource SecondaryButtonStyle}" />
+                            Style="{DynamicResource SecondaryButtonStyle}" />
                     <Button Width="128"
                             Content="Stop Reading"
                             Click="OnExternalStopButtonClick"
-                            Style="{StaticResource SecondaryButtonStyle}" />
+                            Style="{DynamicResource SecondaryButtonStyle}" />
                 </StackPanel>
             </StackPanel>
         </Border>
@@ -168,60 +161,91 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
-            <Border Grid.Column="0"
-                    Style="{StaticResource CardStyle}"
-                    Margin="0,0,8,0">
-                <StackPanel>
-                    <TextBlock Text="Voice and rate"
-                               Style="{StaticResource SectionHeaderStyle}" />
-                    <TextBlock Text="Choose a voice, then adjust speech speed."
-                               Margin="0,0,0,6"
-                               Style="{StaticResource SubtleTextStyle}" />
+            <Grid Grid.Column="0"
+                  Margin="0,0,8,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
 
-                    <Grid Margin="0,0,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
+                    <Border Grid.Row="0"
+                            Margin="0,0,0,8"
+                            Style="{StaticResource CardStyle}">
+                        <StackPanel>
+                            <TextBlock Text="Voice model"
+                                       Style="{StaticResource SectionHeaderStyle}" />
 
-                        <ComboBox Height="30"
-                                  VerticalContentAlignment="Center"
-                                  ItemsSource="{Binding VoiceOptions}"
-                                  SelectedItem="{Binding SelectedVoiceOption, UpdateSourceTrigger=PropertyChanged}" />
-                    </Grid>
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
 
-                    <Grid Margin="0,0,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
+                                <ComboBox Height="30"
+                                          VerticalContentAlignment="Center"
+                                          Style="{DynamicResource InputComboBoxStyle}"
+                                          ItemsSource="{Binding VoiceOptions}"
+                                          SelectedItem="{Binding SelectedVoiceOption, UpdateSourceTrigger=PropertyChanged}" />
+                            </Grid>
 
-                        <TextBlock VerticalAlignment="Center"
-                                   Text="Rate"
-                                   Margin="0,0,8,0" />
-                        <Slider Grid.Column="1"
-                                Minimum="-10"
-                                Maximum="10"
-                                TickFrequency="1"
-                                IsSnapToTickEnabled="True"
-                                Value="{Binding SpeechRate, UpdateSourceTrigger=PropertyChanged}" />
-                        <TextBlock Grid.Column="2"
-                                   Width="24"
-                                   Margin="8,0,0,0"
-                                   VerticalAlignment="Center"
-                                   Text="{Binding SpeechRate}" />
-                    </Grid>
+                            <Grid Margin="0,0,0,8"
+                                  VerticalAlignment="Center">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
 
-                    <StackPanel Orientation="Horizontal"
-                                HorizontalAlignment="Right"
-                                Margin="0,2,0,0">
-                        <Button Width="84"
-                                Content="Preview"
-                                Command="{Binding PreviewVoiceCommand}"
-                                Style="{StaticResource SecondaryButtonStyle}" />
-                    </StackPanel>
-                </StackPanel>
-            </Border>
+                                <TextBlock VerticalAlignment="Center"
+                                           Text="Rate"
+                                           Margin="0,0,8,0" />
+                                <Slider Grid.Column="1"
+                                        Height="22"
+                                        VerticalAlignment="Bottom"
+                                        Minimum="-10"
+                                        Maximum="10"
+                                        TickFrequency="1"
+                                        IsSnapToTickEnabled="True"
+                                        Value="{Binding SpeechRate, UpdateSourceTrigger=PropertyChanged}" />
+                                <TextBlock Grid.Column="2"
+                                           Width="24"
+                                           Margin="8,0,0,0"
+                                           VerticalAlignment="Center"
+                                           TextAlignment="Center"
+                                           Text="{Binding SpeechRate}" />
+                                <Button Grid.Column="3"
+                                        Width="84"
+                                        Margin="8,0,0,0"
+                                        Content="Preview"
+                                        Command="{Binding PreviewVoiceCommand}"
+                                        Style="{DynamicResource SecondaryButtonStyle}" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Row="1"
+                            Style="{StaticResource CardStyle}">
+                        <Grid HorizontalAlignment="Left">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock VerticalAlignment="Center"
+                                       Text="Theme"
+                                       Margin="0,0,8,0" />
+                            <ComboBox Grid.Column="1"
+                                      Width="120"
+                                      Height="30"
+                                      VerticalContentAlignment="Center"
+                                      Style="{DynamicResource InputComboBoxStyle}"
+                                      ItemsSource="{Binding ThemeOptions}"
+                                      SelectedItem="{Binding SelectedTheme, UpdateSourceTrigger=PropertyChanged}" />
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Grid>
 
             <Border Grid.Column="1"
                     Style="{StaticResource CardStyle}"
@@ -235,19 +259,18 @@
                         <TextBlock Text="Hotkeys"
                                    Style="{StaticResource SectionHeaderStyle}" />
                         <Button Grid.Column="1"
-                                Width="28"
-                                Height="28"
+                                Width="18"
+                                Height="18"
+                                MinHeight="0"
                                 Padding="0"
-                                Margin="0,0,0,2"
-                                HorizontalAlignment="Right"
-                                VerticalAlignment="Center"
+                                Margin="0"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Top"
                                 Content="↺"
+                                Style="{DynamicResource SecondaryButtonStyle}"
                                 Command="{Binding ResetHotkeysCommand}"
                                 ToolTip="Reset hotkeys to defaults" />
                     </Grid>
-                    <TextBlock Text="Choose a modifier, then assign one key per action."
-                               Margin="0,0,0,4"
-                               Style="{StaticResource SubtleTextStyle}" />
                     <StackPanel Orientation="Horizontal"
                                 Margin="0,0,0,6">
                         <RadioButton Content="Alt+Shift"
@@ -275,35 +298,39 @@
                         <TextBlock Grid.Row="0"
                                    VerticalAlignment="Center"
                                    Text="Read selected"
-                                   Margin="0,0,6,4" />
+                                   Margin="0,0,6,2" />
                         <ComboBox Grid.Row="0"
                                   Grid.Column="2"
                                   Height="30"
+                                  Margin="0,0,0,2"
                                   VerticalContentAlignment="Center"
+                                  Style="{DynamicResource InputComboBoxStyle}"
                                   ItemsSource="{Binding HotkeyKeyOptions}"
                                   SelectedItem="{Binding ReadSelectedHotkeyKey, UpdateSourceTrigger=PropertyChanged}" />
                         <TextBlock Grid.Row="0"
                                    Grid.Column="1"
                                    VerticalAlignment="Center"
                                    Text="{Binding HotkeyModifierLabel, StringFormat={}{0}+}"
-                                   Margin="0,0,4,4"
+                                   Margin="0,0,4,2"
                                    Style="{StaticResource SubtleTextStyle}" />
 
                         <TextBlock Grid.Row="1"
                                    VerticalAlignment="Center"
                                    Text="Read document"
-                                   Margin="0,0,6,4" />
+                                   Margin="0,0,6,2" />
                         <ComboBox Grid.Row="1"
                                   Grid.Column="2"
                                   Height="30"
+                                  Margin="0,0,0,2"
                                   VerticalContentAlignment="Center"
+                                  Style="{DynamicResource InputComboBoxStyle}"
                                   ItemsSource="{Binding HotkeyKeyOptions}"
                                   SelectedItem="{Binding ReadDocumentHotkeyKey, UpdateSourceTrigger=PropertyChanged}" />
                         <TextBlock Grid.Row="1"
                                    Grid.Column="1"
                                    VerticalAlignment="Center"
                                    Text="{Binding HotkeyModifierLabel, StringFormat={}{0}+}"
-                                   Margin="0,0,4,4"
+                                   Margin="0,0,4,2"
                                    Style="{StaticResource SubtleTextStyle}" />
 
                         <TextBlock Grid.Row="2"
@@ -314,6 +341,7 @@
                                   Grid.Column="2"
                                   Height="30"
                                   VerticalContentAlignment="Center"
+                                  Style="{DynamicResource InputComboBoxStyle}"
                                   ItemsSource="{Binding HotkeyKeyOptions}"
                                   SelectedItem="{Binding StopHotkeyKey, UpdateSourceTrigger=PropertyChanged}" />
                         <TextBlock Grid.Row="2"
@@ -329,18 +357,25 @@
         </Grid>
 
         <Border Grid.Row="4"
-                Background="#E8F1FF"
-                BorderBrush="#C7D7FE"
+                Background="{DynamicResource StatusBackgroundBrush}"
+                BorderBrush="{DynamicResource StatusBorderBrush}"
                 BorderThickness="1"
                 CornerRadius="6"
                 Padding="12,5"
                 VerticalAlignment="Center">
             <Grid VerticalAlignment="Center">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
                 <TextBlock Text="{Binding StatusMessage}"
+                           Grid.Row="0"
+                           Foreground="{DynamicResource StatusForegroundBrush}"
                            TextWrapping="Wrap" />
-                <TextBlock Text="{Binding HotkeyModifierWarningMessage}"
+                <TextBlock Grid.Row="1"
+                           Text="{Binding HotkeyModifierWarningMessage}"
                            Margin="0,2,0,0"
-                           Foreground="#9A3412"
+                           Foreground="{DynamicResource WarningTextBrush}"
                            TextWrapping="Wrap"
                            Style="{StaticResource CollapsibleTextStyle}" />
             </Grid>
@@ -354,12 +389,12 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Text="© 2026 JustinTagarda. All rights reserved."
-                       Foreground="#6B7280"
+                       Foreground="{DynamicResource FooterTextBrush}"
                        FontSize="12"
                        VerticalAlignment="Bottom" />
             <TextBlock Grid.Column="1"
                        Text="{Binding AppVersionText, RelativeSource={RelativeSource AncestorType=Window}}"
-                       Foreground="#6B7280"
+                       Foreground="{DynamicResource FooterTextBrush}"
                        FontSize="12"
                        VerticalAlignment="Bottom"
                        HorizontalAlignment="Right" />

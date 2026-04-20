@@ -23,10 +23,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private readonly IReadingService _readingService;
     private readonly IHotkeySettingsService _hotkeySettingsService;
+    private readonly IAppSettingsService _appSettingsService;
     private readonly IReadOnlyList<string> _voiceOptions;
     private readonly Dictionary<string, string?> _voiceNameByOptionLabel;
     private readonly Dictionary<string, string> _voiceOptionLabelByName;
     private readonly Func<(bool Success, string StatusMessage)>? _applyHotkeysRegistration;
+    private readonly Func<string, bool>? _applyTheme;
     private CancellationTokenSource? _hotkeyModifierWarningCts;
 
     private string _inputText = string.Empty;
@@ -40,6 +42,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _hotkeyModifierWarningMessage = string.Empty;
     private int _speechRate;
     private string _selectedVoiceOption = SystemDefaultVoiceOption;
+    private string _selectedTheme = AppThemes.Light;
     private HotkeyModifierPreset _hotkeyModifierPreset = HotkeyModifierPreset.AltShift;
     private HotkeyModifierPreset _appliedHotkeyModifierPreset = HotkeyModifierPreset.AltShift;
     private string _readSelectedHotkeyKey = DefaultReadSelectedHotkeyKey;
@@ -56,15 +59,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
         IReadingService readingService,
         IHotkeySettingsService hotkeySettingsService,
         Func<(bool Success, string StatusMessage)>? applyHotkeysRegistration = null,
-        bool isAnalyzeAvailable = false)
+        bool isAnalyzeAvailable = false,
+        IAppSettingsService? appSettingsService = null,
+        Func<string, bool>? applyTheme = null)
     {
         _readingService = readingService ?? throw new ArgumentNullException(nameof(readingService));
         _hotkeySettingsService = hotkeySettingsService ?? throw new ArgumentNullException(nameof(hotkeySettingsService));
+        _appSettingsService = appSettingsService ?? throw new ArgumentNullException(nameof(appSettingsService));
         _applyHotkeysRegistration = applyHotkeysRegistration;
         _isAnalyzeAvailable = isAnalyzeAvailable;
+        _applyTheme = applyTheme;
 
         _speechRate = _readingService.SpeechRate;
         _inputText = _readingService.TypedTextDraft ?? string.Empty;
+        _selectedTheme = AppThemes.Normalize(_appSettingsService.Current.Theme);
         (_voiceOptions, _voiceNameByOptionLabel, _voiceOptionLabelByName) = BuildVoiceOptions(_readingService.AvailableVoices);
         _selectedVoiceOption = GetVoiceOptionLabel(_readingService.SelectedVoiceName);
         _hotkeyModifierPreset = _hotkeySettingsService.ModifierPreset;
@@ -142,6 +150,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 
     public IReadOnlyList<string> VoiceOptions => _voiceOptions;
+    public IReadOnlyList<string> ThemeOptions => AppThemes.Options;
 
     public string SelectedVoiceOption
     {
@@ -160,6 +169,31 @@ public sealed class MainViewModel : INotifyPropertyChanged
             SetStatusMessage(string.Equals(_selectedVoiceOption, SystemDefaultVoiceOption, StringComparison.Ordinal)
                 ? "Voice set to system default."
                 : $"Voice set to {_selectedVoiceOption}.");
+        }
+    }
+
+    public string SelectedTheme
+    {
+        get => _selectedTheme;
+        set
+        {
+            var normalized = AppThemes.Normalize(value);
+            if (string.Equals(_selectedTheme, normalized, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            if (_applyTheme is not null && !_applyTheme(normalized))
+            {
+                SetStatusMessage("Couldn't apply that theme right now.");
+                return;
+            }
+
+            _selectedTheme = normalized;
+            _appSettingsService.Current.Theme = normalized;
+            _appSettingsService.Save();
+            OnPropertyChanged();
+            SetStatusMessage($"Theme set to {normalized}.");
         }
     }
 

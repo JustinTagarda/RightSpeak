@@ -2,6 +2,7 @@ namespace RightSpeak.Models;
 
 public sealed class AppSettings
 {
+    public string Theme { get; set; } = AppThemes.Light;
     public int SpeechRate { get; set; } = 0;
     public string? VoiceName { get; set; }
     public string TypedTextDraft { get; set; } = string.Empty;
