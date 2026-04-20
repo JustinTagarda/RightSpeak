@@ -412,6 +412,15 @@ public partial class App : WpfApplication
 
         try
         {
+            string themeModeText;
+#pragma warning disable WPF0001
+            ThemeMode = string.Equals(normalizedTheme, AppThemes.WindowsSettings, StringComparison.Ordinal)
+                ? ThemeMode.System
+                : string.Equals(normalizedTheme, AppThemes.Dark, StringComparison.Ordinal)
+                    ? ThemeMode.Dark
+                    : ThemeMode.Light;
+            themeModeText = ThemeMode.ToString();
+#pragma warning restore WPF0001
             var dictionaries = Resources.MergedDictionaries;
             for (var index = dictionaries.Count - 1; index >= 0; index--)
             {
@@ -444,7 +453,8 @@ public partial class App : WpfApplication
                 new Dictionary<string, string?>
                 {
                     ["theme"] = normalizedTheme,
-                    ["resolvedTheme"] = resolvedTheme
+                    ["resolvedTheme"] = resolvedTheme,
+                    ["themeMode"] = themeModeText
                 });
             return true;
         }

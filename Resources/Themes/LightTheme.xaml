@@ -1,6 +1,15 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#F4F6F8" />
+    <SolidColorBrush x:Key="WindowBorderBrush" Color="Transparent" />
+    <SolidColorBrush x:Key="TitleBarBackgroundBrush" Color="Transparent" />
+    <SolidColorBrush x:Key="TitleBarBorderBrush" Color="Transparent" />
+    <SolidColorBrush x:Key="TitleBarForegroundBrush" Color="#1F2937" />
+    <SolidColorBrush x:Key="TitleBarButtonHoverBackgroundBrush" Color="#15000000" />
+    <SolidColorBrush x:Key="TitleBarButtonPressedBackgroundBrush" Color="#24000000" />
+    <SolidColorBrush x:Key="TitleBarCloseButtonHoverBackgroundBrush" Color="#C42B1C" />
+    <SolidColorBrush x:Key="TitleBarCloseButtonPressedBackgroundBrush" Color="#A72317" />
+    <SolidColorBrush x:Key="TitleBarCloseButtonForegroundBrush" Color="#FFFFFF" />
     <SolidColorBrush x:Key="WindowForegroundBrush" Color="#1F2937" />
     <SolidColorBrush x:Key="SubtleTextBrush" Color="#6B7280" />
     <SolidColorBrush x:Key="FooterTextBrush" Color="#6B7280" />

@@ -95,6 +95,47 @@ public partial class MainWindow : Window
         _hasPlacedOnStartup = true;
     }
 
+    private void TitleBar_OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        _ = sender;
+
+        if (e.ClickCount == 2)
+        {
+            ToggleMaximizeRestore();
+            return;
+        }
+
+        DragMove();
+    }
+
+    private void MinimizeButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        WindowState = WindowState.Minimized;
+    }
+
+    private void MaximizeRestoreButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        ToggleMaximizeRestore();
+    }
+
+    private void CloseButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        Close();
+    }
+
+    private void ToggleMaximizeRestore()
+    {
+        WindowState = WindowState == WindowState.Maximized
+            ? WindowState.Normal
+            : WindowState.Maximized;
+    }
+
     public void EnsureVisibleOnScreen()
     {
         var source = PresentationSource.FromVisual(this);

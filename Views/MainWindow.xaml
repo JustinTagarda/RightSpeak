@@ -1,6 +1,7 @@
 <Window x:Class="RightSpeak.Views.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="RightSpeak"
         Icon="/Resources/Icons/RightSpeak.ico"
         Width="600"
@@ -8,10 +9,20 @@
         Height="700"
         MinWidth="600"
         MinHeight="700"
+        WindowStyle="None"
+        ResizeMode="CanResize"
+        AllowsTransparency="False"
         Background="{DynamicResource WindowBackgroundBrush}"
         Foreground="{DynamicResource WindowForegroundBrush}"
         FontFamily="Segoe UI"
         FontSize="13">
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="0"
+                            ResizeBorderThickness="6"
+                            CornerRadius="0"
+                            GlassFrameThickness="0"
+                            UseAeroCaptionButtons="False" />
+    </shell:WindowChrome.WindowChrome>
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
 
@@ -48,9 +59,134 @@
                 </Trigger>
             </Style.Triggers>
         </Style>
+
+        <Style x:Key="TitleBarButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="46" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TitleBarForegroundBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Root"
+                                Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource TitleBarButtonHoverBackgroundBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource TitleBarButtonPressedBackgroundBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="TitleBarCloseButtonStyle" TargetType="Button" BasedOn="{StaticResource TitleBarButtonStyle}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Root"
+                                Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource TitleBarCloseButtonHoverBackgroundBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource TitleBarCloseButtonForegroundBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource TitleBarCloseButtonPressedBackgroundBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource TitleBarCloseButtonForegroundBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
-    <Grid Margin="12">
+    <Border BorderBrush="{DynamicResource WindowBorderBrush}"
+            BorderThickness="0"
+            Background="{DynamicResource WindowBackgroundBrush}">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0"
+                    Height="32"
+                    BorderBrush="{DynamicResource TitleBarBorderBrush}"
+                    BorderThickness="0"
+                    Background="{DynamicResource TitleBarBackgroundBrush}"
+                    MouseLeftButtonDown="TitleBar_OnMouseLeftButtonDown">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <Image Grid.Column="0"
+                           Width="16"
+                           Height="16"
+                           Margin="10,0,8,0"
+                           VerticalAlignment="Center"
+                           Source="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=Icon}" />
+                    <TextBlock Grid.Column="1"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource TitleBarForegroundBrush}"
+                               Text="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=Title}" />
+
+                    <Button Grid.Column="2"
+                            Style="{StaticResource TitleBarButtonStyle}"
+                            Click="MinimizeButton_OnClick"
+                            ToolTip="Minimize">
+                        <TextBlock FontFamily="Segoe MDL2 Assets"
+                                   FontSize="10"
+                                   Text="&#xE921;" />
+                    </Button>
+                    <Button Grid.Column="3"
+                            Style="{StaticResource TitleBarButtonStyle}"
+                            Click="MaximizeRestoreButton_OnClick"
+                            ToolTip="Maximize or restore">
+                        <TextBlock FontFamily="Segoe MDL2 Assets"
+                                   FontSize="10">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Text" Value="&#xE922;" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=WindowState}" Value="Maximized">
+                                            <Setter Property="Text" Value="&#xE923;" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Button>
+                    <Button Grid.Column="4"
+                            Style="{StaticResource TitleBarCloseButtonStyle}"
+                            Click="CloseButton_OnClick"
+                            ToolTip="Close">
+                        <TextBlock FontFamily="Segoe MDL2 Assets"
+                                   FontSize="10"
+                                   Text="&#xE8BB;" />
+                    </Button>
+                </Grid>
+            </Border>
+
+            <Grid Grid.Row="1"
+                  Margin="12,6,12,12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -201,8 +337,7 @@
                                            Text="Rate"
                                            Margin="0,0,8,0" />
                                 <Slider Grid.Column="1"
-                                        Height="22"
-                                        VerticalAlignment="Bottom"
+                                        VerticalAlignment="Center"
                                         Minimum="-10"
                                         Maximum="10"
                                         TickFrequency="1"
@@ -251,7 +386,7 @@
                     Style="{StaticResource CardStyle}"
                     Margin="8,0,0,0">
                 <StackPanel>
-                    <Grid Margin="0,0,0,2">
+                    <Grid Margin="0,0,0,8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
@@ -272,7 +407,7 @@
                                 ToolTip="Reset hotkeys to defaults" />
                     </Grid>
                     <StackPanel Orientation="Horizontal"
-                                Margin="0,0,0,6">
+                                Margin="0,0,0,10">
                         <RadioButton Content="Alt+Shift"
                                      Margin="0,0,10,0"
                                      IsChecked="{Binding IsAltShiftModifierSelected}" />
@@ -399,5 +534,7 @@
                        VerticalAlignment="Bottom"
                        HorizontalAlignment="Right" />
         </Grid>
-    </Grid>
+            </Grid>
+        </Grid>
+    </Border>
 </Window>
