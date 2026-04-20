@@ -1,0 +1,2 @@
+MainPackage=D:\Projects\RightSpeak\RightSpeak.Package\bin\x64\Release\RightSpeak.Package_1.0.0.0_x64.msix
+SymbolPackage=D:\Projects\RightSpeak\RightSpeak.Package\obj\x64\Release\Symbols\RightSpeak.Package_1.0.0.0_x64.appxsym

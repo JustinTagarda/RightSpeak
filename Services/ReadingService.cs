@@ -18,15 +18,12 @@ public sealed class ReadingService : IReadingService
     private const int ContinuationChunkTargetCharacters = 280;
     private const int ContinuationChunkMaxCharacters = 380;
     private const int TextRetrievalRetryDelayMilliseconds = 220;
-    private const string PiperEngineName = "Piper";
-    private const string PreferredPiperLjspeechVoiceName = "piper:en_US-ljspeech-high";
-
     private readonly ISpeechService _speechService;
     private readonly ISelectedTextRetrievalService _selectedTextRetrievalService;
     private readonly IParagraphTextRetrievalService _paragraphTextRetrievalService;
     private readonly IDocumentTextRetrievalService _documentTextRetrievalService;
     private readonly IAppSettingsService _settingsService;
-    private readonly IReadOnlyList<SpeechVoice> _availableVoices;
+    private IReadOnlyList<SpeechVoice> _availableVoices;
 
     public ReadingService(
         ISpeechService speechService,
@@ -42,7 +39,6 @@ public sealed class ReadingService : IReadingService
         _settingsService = settingsService;
         _availableVoices = _speechService.GetInstalledVoices();
         NormalizeSavedVoiceSetting();
-        EnsureDefaultVoiceSelectionForEmptyStorage();
     }
 
     public bool IsReading => _speechService.IsSpeaking;
@@ -91,6 +87,17 @@ public sealed class ReadingService : IReadingService
 
             _settingsService.Current.TypedTextDraft = normalized;
         }
+    }
+
+    public void RefreshAvailableVoices()
+    {
+        if (_speechService is WindowsSpeechService windowsSpeechService)
+        {
+            windowsSpeechService.RefreshInstalledVoices();
+        }
+
+        _availableVoices = _speechService.GetInstalledVoices();
+        NormalizeSavedVoiceSetting();
     }
 
     public Task<SpeechResult> ReadTextAsync(string text, CancellationToken cancellationToken = default)
@@ -752,76 +759,6 @@ public sealed class ReadingService : IReadingService
 
         _settingsService.Current.VoiceName = normalized;
         _settingsService.Save();
-    }
-
-    private void EnsureDefaultVoiceSelectionForEmptyStorage()
-    {
-        if (!string.IsNullOrWhiteSpace(_settingsService.Current.VoiceName))
-        {
-            return;
-        }
-
-        try
-        {
-            var selectedDefaultVoiceName = SelectDefaultVoiceForEmptyStorage();
-            if (string.IsNullOrWhiteSpace(selectedDefaultVoiceName))
-            {
-                return;
-            }
-
-            _settingsService.Current.VoiceName = selectedDefaultVoiceName;
-            _settingsService.Save();
-        }
-        catch (Exception ex)
-        {
-            AppDiagnostics.Warn(
-                "voice_default_selection_failed",
-                new Dictionary<string, string?>
-                {
-                    ["message"] = ex.Message
-                });
-            _settingsService.Current.VoiceName = null;
-            _settingsService.Save();
-        }
-    }
-
-    private string? SelectDefaultVoiceForEmptyStorage()
-    {
-        var hasAnyPiperVoice = _availableVoices.Any(voice =>
-            string.Equals(voice.Engine, PiperEngineName, StringComparison.Ordinal));
-        if (hasAnyPiperVoice)
-        {
-            var piperLjspeechVoice = _availableVoices.FirstOrDefault(voice =>
-                string.Equals(voice.Engine, PiperEngineName, StringComparison.Ordinal) &&
-                string.Equals(voice.Name, PreferredPiperLjspeechVoiceName, StringComparison.OrdinalIgnoreCase));
-            if (piperLjspeechVoice is not null)
-            {
-                return piperLjspeechVoice.Name;
-            }
-
-            var piperLjspeechByFragment = _availableVoices.FirstOrDefault(voice =>
-                string.Equals(voice.Engine, PiperEngineName, StringComparison.Ordinal) &&
-                voice.Name.Contains("ljspeech", StringComparison.OrdinalIgnoreCase));
-            if (piperLjspeechByFragment is not null)
-            {
-                return piperLjspeechByFragment.Name;
-            }
-
-            return null;
-        }
-
-        var microsoftDavidVoice = _availableVoices
-            .Where(voice =>
-                !string.Equals(voice.Engine, PiperEngineName, StringComparison.Ordinal) &&
-                (voice.Name.Contains("Microsoft David", StringComparison.OrdinalIgnoreCase) ||
-                 voice.DisplayName.Contains("Microsoft David", StringComparison.OrdinalIgnoreCase) ||
-                 voice.Name.Contains("David", StringComparison.OrdinalIgnoreCase) ||
-                 voice.DisplayName.Contains("David", StringComparison.OrdinalIgnoreCase)))
-            .OrderBy(voice => voice.Engine, StringComparer.Ordinal)
-            .ThenBy(voice => voice.DisplayName, StringComparer.OrdinalIgnoreCase)
-            .FirstOrDefault();
-
-        return microsoftDavidVoice?.Name;
     }
 
     private string? NormalizeVoiceName(string? voiceName)

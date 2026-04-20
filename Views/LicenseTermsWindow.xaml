@@ -1,0 +1,48 @@
+<Window x:Class="RightSpeak.Views.LicenseTermsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Voice Download Terms"
+        Width="520"
+        Height="260"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize"
+        WindowStyle="SingleBorderWindow"
+        ShowInTaskbar="False"
+        Background="{DynamicResource WindowBackgroundBrush}"
+        Foreground="{DynamicResource WindowForegroundBrush}"
+        FontFamily="Segoe UI"
+        FontSize="13">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0"
+                   Text="License Terms Required"
+                   FontWeight="SemiBold"
+                   FontSize="16"
+                   Margin="0,0,0,10" />
+
+        <TextBlock Grid.Row="1"
+                   TextWrapping="Wrap"
+                   Text="To install or update this voice, you must accept the Piper runtime and voice model license terms. RightSpeak will download files from upstream open-source sources and verify checksums before activation."
+                   VerticalAlignment="Top" />
+
+        <StackPanel Grid.Row="2"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Margin="0,14,0,0">
+            <Button Width="96"
+                    Margin="0,0,8,0"
+                    Content="Accept"
+                    Click="AcceptButton_OnClick"
+                    Style="{DynamicResource SecondaryButtonStyle}" />
+            <Button Width="96"
+                    Content="Cancel"
+                    Click="CancelButton_OnClick"
+                    Style="{DynamicResource SecondaryButtonStyle}" />
+        </StackPanel>
+    </Grid>
+</Window>

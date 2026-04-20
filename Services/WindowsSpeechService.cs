@@ -59,10 +59,10 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
     private const int ChunkRenderRetryDelayMilliseconds = 45;
 
     private readonly SemaphoreSlim _gate;
-    private readonly PiperSpeechService _piperSpeechService;
+    private PiperSpeechService _piperSpeechService;
     private readonly WindowsNeuralSpeechService _preferredSpeechService;
     private readonly SystemSpeechService _fallbackSpeechService;
-    private readonly SpeechVoice[] _installedVoices;
+    private SpeechVoice[] _installedVoices;
     private CancellationTokenSource? _continuousChunkPlaybackCancellationTokenSource;
     private ContinuousWaveOutPlayer? _continuousChunkPlaybackPlayer;
     private bool _isContinuousChunkPlaybackActive;
@@ -74,7 +74,25 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
         _piperSpeechService = new PiperSpeechService();
         _preferredSpeechService = new WindowsNeuralSpeechService();
         _fallbackSpeechService = new SystemSpeechService();
-        _installedVoices = _piperSpeechService
+        _installedVoices = BuildInstalledVoices();
+    }
+
+    public void RefreshInstalledVoices()
+    {
+        ThrowIfDisposed();
+        if (IsSpeaking)
+        {
+            return;
+        }
+
+        _piperSpeechService.Dispose();
+        _piperSpeechService = new PiperSpeechService();
+        _installedVoices = BuildInstalledVoices();
+    }
+
+    private SpeechVoice[] BuildInstalledVoices()
+    {
+        return _piperSpeechService
             .GetInstalledVoices()
             .Concat(_preferredSpeechService.GetInstalledVoices())
             .Concat(_fallbackSpeechService.GetInstalledVoices())

@@ -46,13 +46,13 @@
                 <ControlTemplate TargetType="Thumb">
                     <Border x:Name="ThumbBorder"
                             CornerRadius="4"
-                            Background="#475569" />
+                            Background="{DynamicResource ScrollBarThumbBrush}" />
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="ThumbBorder" Property="Background" Value="#60738C" />
+                            <Setter TargetName="ThumbBorder" Property="Background" Value="{DynamicResource ScrollBarThumbHoverBrush}" />
                         </Trigger>
                         <Trigger Property="IsDragging" Value="True">
-                            <Setter TargetName="ThumbBorder" Property="Background" Value="#7B90AA" />
+                            <Setter TargetName="ThumbBorder" Property="Background" Value="{DynamicResource ScrollBarThumbPressedBrush}" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -61,12 +61,17 @@
     </Style>
 
     <ControlTemplate x:Key="ModernVerticalScrollBarTemplate" TargetType="ScrollBar">
-        <Grid Background="#172136"
+        <Grid Background="{DynamicResource ScrollBarTrackBrush}"
               Width="{TemplateBinding Width}">
             <Track x:Name="PART_Track"
+                   Minimum="{TemplateBinding Minimum}"
+                   Maximum="{TemplateBinding Maximum}"
+                   Value="{TemplateBinding Value}"
+                   ViewportSize="{TemplateBinding ViewportSize}"
                    IsDirectionReversed="True">
                 <Track.DecreaseRepeatButton>
                     <RepeatButton Command="ScrollBar.PageUpCommand"
+                                  CommandTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}"
                                   Background="Transparent"
                                   BorderThickness="0" />
                 </Track.DecreaseRepeatButton>
@@ -75,6 +80,7 @@
                 </Track.Thumb>
                 <Track.IncreaseRepeatButton>
                     <RepeatButton Command="ScrollBar.PageDownCommand"
+                                  CommandTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}"
                                   Background="Transparent"
                                   BorderThickness="0" />
                 </Track.IncreaseRepeatButton>
@@ -83,11 +89,16 @@
     </ControlTemplate>
 
     <ControlTemplate x:Key="ModernHorizontalScrollBarTemplate" TargetType="ScrollBar">
-        <Grid Background="#172136"
+        <Grid Background="{DynamicResource ScrollBarTrackBrush}"
               Height="{TemplateBinding Height}">
-            <Track x:Name="PART_Track">
+            <Track x:Name="PART_Track"
+                   Minimum="{TemplateBinding Minimum}"
+                   Maximum="{TemplateBinding Maximum}"
+                   Value="{TemplateBinding Value}"
+                   ViewportSize="{TemplateBinding ViewportSize}">
                 <Track.DecreaseRepeatButton>
                     <RepeatButton Command="ScrollBar.PageLeftCommand"
+                                  CommandTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}"
                                   Background="Transparent"
                                   BorderThickness="0" />
                 </Track.DecreaseRepeatButton>
@@ -96,6 +107,7 @@
                 </Track.Thumb>
                 <Track.IncreaseRepeatButton>
                     <RepeatButton Command="ScrollBar.PageRightCommand"
+                                  CommandTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}"
                                   Background="Transparent"
                                   BorderThickness="0" />
                 </Track.IncreaseRepeatButton>
@@ -106,7 +118,7 @@
     <Style TargetType="ScrollBar">
         <Setter Property="Width" Value="10" />
         <Setter Property="Height" Value="10" />
-        <Setter Property="Background" Value="#172136" />
+        <Setter Property="Background" Value="{DynamicResource ScrollBarTrackBrush}" />
         <Setter Property="Template" Value="{StaticResource ModernVerticalScrollBarTemplate}" />
         <Style.Triggers>
             <Trigger Property="Orientation" Value="Horizontal">

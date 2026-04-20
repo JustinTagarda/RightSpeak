@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Reflection;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Forms;
@@ -15,14 +14,15 @@ namespace RightSpeak.Views;
 
 public partial class MainWindow : Window
 {
-    private static readonly string AppVersionTextValue = BuildVersionText();
     private readonly MainViewModel _viewModel;
     private readonly IGlobalHotkeyService _hotkeyService;
     private readonly IWebpageMainContextAnalyzer _webpageMainContextAnalyzer;
     private readonly Func<nint>? _getExternalWindowHandle;
     private readonly Func<string, string, Func<Task>, Task>? _executeFocusSensitiveReadAsync;
+    private readonly Func<VoiceManagerViewModel>? _createVoiceManagerViewModel;
     private readonly uint _activateWindowMessageId;
     private readonly bool _placeOnStartup;
+    private readonly string _appVersionText;
     private bool _hasPlacedOnStartup;
     private HwndSource? _windowSource;
 
@@ -32,7 +32,9 @@ public partial class MainWindow : Window
         IWebpageMainContextAnalyzer webpageMainContextAnalyzer,
         Func<nint>? getExternalWindowHandle,
         uint activateWindowMessageId,
+        string appVersionText,
         Func<string, string, Func<Task>, Task>? executeFocusSensitiveReadAsync = null,
+        Func<VoiceManagerViewModel>? createVoiceManagerViewModel = null,
         bool placeOnStartup = false)
     {
         InitializeComponent();
@@ -43,6 +45,8 @@ public partial class MainWindow : Window
         _executeFocusSensitiveReadAsync = executeFocusSensitiveReadAsync;
         _activateWindowMessageId = activateWindowMessageId;
         _placeOnStartup = placeOnStartup;
+        _createVoiceManagerViewModel = createVoiceManagerViewModel;
+        _appVersionText = appVersionText;
         DataContext = _viewModel;
 
         SourceInitialized += OnSourceInitialized;
@@ -50,7 +54,7 @@ public partial class MainWindow : Window
         Closed += OnClosed;
     }
 
-    public string AppVersionText => AppVersionTextValue;
+    public string AppVersionText => _appVersionText;
 
     private void OnSourceInitialized(object? sender, System.EventArgs e)
     {
@@ -282,6 +286,18 @@ public partial class MainWindow : Window
                 });
             _viewModel.StopCommand.Execute(null);
         }
+    }
+
+    private void OnManageVoicesButtonClick(object sender, RoutedEventArgs e)
+    {
+        if (_createVoiceManagerViewModel is null)
+        {
+            _viewModel.SetStatusMessage("Voice manager isn't available right now.");
+            return;
+        }
+
+        var window = new VoiceManagerWindow(_createVoiceManagerViewModel());
+        window.ShowDialog();
     }
 
     private async void OnReadDocumentButtonClick(object sender, RoutedEventArgs e)
@@ -547,16 +563,5 @@ public partial class MainWindow : Window
         {
             Top = topLeft.Y + edgePaddingDip;
         }
-    }
-
-    private static string BuildVersionText()
-    {
-        var version = Assembly.GetEntryAssembly()?.GetName().Version;
-        if (version is null)
-        {
-            return "Version: 0.0.0";
-        }
-
-        return $"Version: {version.Major}.{version.Minor}.{version.Build}";
     }
 }

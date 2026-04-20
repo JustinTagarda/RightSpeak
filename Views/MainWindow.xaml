@@ -16,6 +16,10 @@
         Foreground="{DynamicResource WindowForegroundBrush}"
         FontFamily="Segoe UI"
         FontSize="13">
+    <Window.TaskbarItemInfo>
+        <shell:TaskbarItemInfo ProgressState="{Binding TaskbarProgressState}"
+                               ProgressValue="{Binding TaskbarProgressValue}" />
+    </Window.TaskbarItemInfo>
     <shell:WindowChrome.WindowChrome>
         <shell:WindowChrome CaptionHeight="0"
                             ResizeBorderThickness="6"
@@ -238,6 +242,7 @@
                             Style="{DynamicResource SecondaryButtonStyle}" />
                     <Button Width="88"
                             Content="Stop"
+                            IsEnabled="{Binding IsStopEnabled}"
                             Click="OnManualStopButtonClick"
                             Style="{DynamicResource SecondaryButtonStyle}" />
                 </StackPanel>
@@ -284,6 +289,7 @@
                             Style="{DynamicResource SecondaryButtonStyle}" />
                     <Button Width="128"
                             Content="Stop Reading"
+                            IsEnabled="{Binding IsStopEnabled}"
                             Click="OnExternalStopButtonClick"
                             Style="{DynamicResource SecondaryButtonStyle}" />
                 </StackPanel>
@@ -315,6 +321,7 @@
                             <Grid Margin="0,0,0,8">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
 
                                 <ComboBox Height="30"
@@ -322,6 +329,12 @@
                                           Style="{DynamicResource InputComboBoxStyle}"
                                           ItemsSource="{Binding VoiceOptions}"
                                           SelectedItem="{Binding SelectedVoiceOption, UpdateSourceTrigger=PropertyChanged}" />
+                                <Button Grid.Column="1"
+                                        Width="84"
+                                        Margin="8,0,0,0"
+                                        Content="Manage"
+                                        Click="OnManageVoicesButtonClick"
+                                        Style="{DynamicResource SecondaryButtonStyle}" />
                             </Grid>
 
                             <Grid Margin="0,0,0,8"
@@ -371,7 +384,7 @@
                                        Text="Theme"
                                        Margin="0,0,8,0" />
                             <ComboBox Grid.Column="1"
-                                      Width="120"
+                                      Width="144"
                                       Height="30"
                                       VerticalContentAlignment="Center"
                                       Style="{DynamicResource InputComboBoxStyle}"
@@ -522,12 +535,40 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Text="© 2026 JustinTagarda. All rights reserved."
                        Foreground="{DynamicResource FooterTextBrush}"
                        FontSize="12"
                        VerticalAlignment="Bottom" />
-            <TextBlock Grid.Column="1"
+            <Border Grid.Column="1"
+                    Margin="18,0"
+                    Padding="10,4"
+                    VerticalAlignment="Bottom"
+                    Background="{DynamicResource CardBackgroundBrush}"
+                    BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="1"
+                    Visibility="{Binding IsUpdateVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <StackPanel Width="210">
+                    <TextBlock Text="{Binding UpdateStageText}"
+                               FontSize="11"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource FooterTextBrush}"
+                               TextTrimming="CharacterEllipsis" />
+                    <TextBlock Text="{Binding UpdateStatusMessage}"
+                               Margin="0,1,0,0"
+                               FontSize="11"
+                               Foreground="{DynamicResource SubtleTextBrush}"
+                               TextTrimming="CharacterEllipsis" />
+                    <ProgressBar Margin="0,4,0,0"
+                                 Height="4"
+                                 Minimum="0"
+                                 Maximum="100"
+                                 Value="{Binding UpdateProgressPercent, Mode=OneWay}"
+                                 Visibility="{Binding IsUpdateProgressVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                </StackPanel>
+            </Border>
+            <TextBlock Grid.Column="2"
                        Text="{Binding AppVersionText, RelativeSource={RelativeSource AncestorType=Window}}"
                        Foreground="{DynamicResource FooterTextBrush}"
                        FontSize="12"

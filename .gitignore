@@ -3,6 +3,7 @@ bin/
 obj/
 artifacts/
 .dotnet_cli_home/
+RightSpeak.Package/AppPackages/
 
 # Visual Studio
 .vs/
@@ -18,3 +19,6 @@ artifacts/
 # Generated QA run outputs
 Resources/QA/Results/*.json
 Resources/QA/Results/*.md
+
+# Local store packaging assets
+store-assets/

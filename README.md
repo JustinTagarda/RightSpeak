@@ -11,6 +11,7 @@ Current state:
 - WPF app scaffold exists
 - project targets `.NET 10` on Windows
 - core reading workflows are implemented and being hardened for reliability
+- manual text reading, selected-text reading, document reading, voice management, tray actions, hotkeys, themes, and background Store updates are implemented
 - external `Read Document` is enabled with browser-PDF-specific hardening and diagnostics
 - production-facing external commands are currently `Read Selected Text` and `Read Document` (`Read Paragraph` is intentionally hidden/disabled)
 
@@ -91,6 +92,36 @@ dotnet build .\RightSpeak.slnx
 dotnet run --project .\RightSpeak.csproj
 ```
 
+## Microsoft Store Packaging
+`RightSpeak.Package\RightSpeak.Package.wapproj` is the Windows Application Packaging Project for MSIX and Store submission.
+
+Before creating a real Store upload package:
+- verify the `Identity` values in `RightSpeak.Package\Package.appxmanifest` match the identity and publisher from Partner Center association
+- keep the WPF app project as the only application payload; the packaging project is deployment-only
+
+Create a Store upload package from the command line:
+```powershell
+$env:DOTNET_ROOT='C:\Program Files\dotnet'
+$env:DOTNET_MSBUILD_SDK_RESOLVER_CLI_DIR='C:\Program Files\dotnet'
+$env:DOTNET_MSBUILD_SDK_RESOLVER_SDKS_DIR='C:\Program Files\dotnet\sdk\10.0.202\Sdks'
+$env:DOTNET_MSBUILD_SDK_RESOLVER_SDKS_VER='10.0.202'
+& 'C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe' .\RightSpeak.Package\RightSpeak.Package.wapproj /restore /p:Configuration=Release /p:Platform=x64 /p:UapAppxPackageBuildMode=StoreUpload
+& 'C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe' .\RightSpeak.Package\RightSpeak.Package.wapproj /restore /p:Configuration=Release /p:Platform=ARM64 /p:UapAppxPackageBuildMode=StoreUpload
+```
+
+Expected output:
+- `.msixupload` or `.appxupload` under `RightSpeak.Package\AppPackages\`
+- install/test artifacts for local validation in the same output folder
+- build `Platform=x64` for an x64-only upload package
+- build `Platform=ARM64` for an ARM64-only upload package
+- upload the architecture-specific files, not any older `_x64_ARM64_bundle.msixupload` or `_bundle.msixupload` artifacts
+
+Runtime update behavior for packaged installs:
+- RightSpeak checks Store updates asynchronously after startup
+- silent background download/install is attempted only when Store automatic app updates are allowed
+- update progress is shown in the footer center and on the Windows taskbar button
+- the footer-right version text shows the installed packaged version when the app has package identity
+
 ## Current Implementation
 - local speech engine abstraction with Windows OneCore, `System.Speech`, and Piper support
 - manual text input with `Read` and `Stop`
@@ -109,6 +140,9 @@ dotnet run --project .\RightSpeak.csproj
   - short and long Piper reads both use continuous stream playback
   - single-chunk Piper reads are routed through the same stream path as multi-chunk reads
   - direct Piper `SoundPlayer` playback is not the normal read path
+- Piper voice management with downloadable voice models and runtime installation
+- voice selection, speech-rate control, and voice preview
+- theme switching with light, dark, and Windows settings support
 - speech diagnostics include stream and engine routing events (for example `speech_single_chunk_stream_routed`, `speech_chunk_stream_*`, `piper_continuous_playback_*`)
 - global hotkeys:
   - read selected text
@@ -121,6 +155,8 @@ dotnet run --project .\RightSpeak.csproj
   - stop reading
   - show app / exit
   - menu items display current hotkey hints
+- background Microsoft Store update checks with footer and taskbar progress
+- packaged version display in the footer for Store installs
 
 ## Current Project Shape
 The repository currently starts as a single WPF project. As features are added, code should stay organized so it can later split cleanly into dedicated layers for UI, core logic, and Windows-specific integration.

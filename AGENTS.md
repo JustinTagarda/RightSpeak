@@ -15,10 +15,6 @@ Its core job is simple:
 
 Planned expansion may include:
 - paragraph reading
-- full control or document reading
-- global hotkeys
-- tray behavior
-- voice and speed settings
 - reading queue or history
 - optional AI-assisted features later
 
@@ -40,7 +36,7 @@ This is a utility app first, not a showcase UI.
 ---
 
 ## Current Implementation Baseline
-The current repository is an early single-project WPF app.
+The current repository is still organized as a single-project WPF app plus a deployment-only Store packaging project.
 
 Until the codebase clearly needs more separation:
 - keep the solution as one project
@@ -58,11 +54,13 @@ Preferred in-project folders:
 - `Resources/`
 
 Current implementation target:
-1. basic app shell
-2. local text-to-speech from app-provided text
-3. selected-text retrieval pipeline
-4. global hotkey
-5. settings and tray behavior
+1. manual text reading, selected-text reading, and document reading
+2. local text-to-speech with Windows OneCore, `System.Speech`, and Piper support
+3. voice selection, speed control, and Piper voice downloads
+4. global hotkeys and tray quick actions
+5. theme switching and background Store update handling
+6. browser-specific retrieval hardening, especially PDF fallback paths
+7. package/build support for Microsoft Store submission
 
 ---
 

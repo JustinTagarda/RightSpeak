@@ -13,6 +13,8 @@ public interface IReadingService
     string? SelectedVoiceName { get; set; }
     string TypedTextDraft { get; set; }
 
+    void RefreshAvailableVoices();
+
     Task<SpeechResult> ReadTextAsync(string text, CancellationToken cancellationToken = default);
 
     Task<SpeechResult> ReadSelectedTextAsync(CancellationToken cancellationToken = default);

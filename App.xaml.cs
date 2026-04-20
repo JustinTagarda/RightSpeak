@@ -13,6 +13,7 @@ using RightSpeak.Services;
 using RightSpeak.ViewModels;
 using RightSpeak.Views;
 using RightSpeak.WindowsIntegration;
+using Windows.Services.Store;
 using WpfApplication = System.Windows.Application;
 
 namespace RightSpeak;
@@ -27,12 +28,17 @@ public partial class App : WpfApplication
     private WindowsTrayService? _trayService;
     private JsonAppSettingsService? _appSettingsService;
     private IHotkeySettingsService? _hotkeySettingsService;
+    private IVoiceCatalogService? _voiceCatalogService;
+    private IVoiceDownloadService? _voiceDownloadService;
+    private IAppVersionProvider? _appVersionProvider;
+    private IAppUpdateService? _appUpdateService;
     private MainViewModel? _mainViewModel;
     private IReadingService? _readingService;
     private MainWindow? _mainWindow;
     private Mutex? _singleInstanceMutex;
     private uint _activateWindowMessageId;
     private bool _isShuttingDown;
+    private readonly CancellationTokenSource _updateCancellationTokenSource = new();
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -56,6 +62,7 @@ public partial class App : WpfApplication
         base.OnStartup(e);
 
         _speechService = new WindowsSpeechService();
+        _appVersionProvider = new PackageVersionProvider();
         _appSettingsService = new JsonAppSettingsService();
         if (!ApplyTheme(_appSettingsService.Current.Theme))
         {
@@ -64,6 +71,10 @@ public partial class App : WpfApplication
         }
 
         _hotkeySettingsService = new HotkeySettingsService(_appSettingsService);
+        var voiceInstallStore = new VoiceInstallStore();
+        _voiceCatalogService = new PiperVoiceCatalogService(voiceInstallStore);
+        var piperRuntimeInstaller = new PiperRuntimeInstaller(voiceInstallStore);
+        _voiceDownloadService = new VoiceDownloadService(voiceInstallStore, piperRuntimeInstaller);
         _hotkeyService = new WindowsGlobalHotkeyService(_hotkeySettingsService);
         var selectedTextRetrievalService = new SelectedTextRetrievalService(
             new List<ISelectedTextProvider>
@@ -93,6 +104,10 @@ public partial class App : WpfApplication
             paragraphTextRetrievalService,
             documentTextRetrievalService,
             _appSettingsService);
+        _appUpdateService = new StoreAppUpdateService(
+            CreateStoreUpdateClient(),
+            _appVersionProvider,
+            () => _readingService?.IsReading == true);
         _mainViewModel = new MainViewModel(
             _readingService,
             _hotkeySettingsService,
@@ -100,6 +115,8 @@ public partial class App : WpfApplication
             BuildConfiguration.IsDebugDiagnosticsEnabled,
             _appSettingsService,
             ApplyTheme);
+        _appUpdateService.SnapshotChanged += OnAppUpdateSnapshotChanged;
+        _mainViewModel.ApplyUpdateSnapshot(_appUpdateService.CurrentSnapshot);
 
         _trayService = new WindowsTrayService();
         _trayService.ReadSelectedRequested += OnTrayReadSelectedRequested;
@@ -118,7 +135,9 @@ public partial class App : WpfApplication
             webpageMainContextAnalyzer,
             () => _trayService?.LastExternalForegroundWindow ?? nint.Zero,
             _activateWindowMessageId,
+            _appVersionProvider.GetDisplayVersionText(),
             ExecuteTrayFocusSensitiveReadAsync,
+            CreateVoiceManagerViewModel,
             placeOnStartup: true);
         _mainWindow.Closing += OnMainWindowClosing;
         AppDiagnostics.Info("main_window_created");
@@ -148,10 +167,26 @@ public partial class App : WpfApplication
             AppDiagnostics.Warn("main_window_reveal_post_startup_retry");
             _mainWindow.RevealWindow();
         }, DispatcherPriority.ApplicationIdle);
+
+        _ = Dispatcher.BeginInvoke(async () =>
+        {
+            try
+            {
+                await Task.Delay(700, _updateCancellationTokenSource.Token).ConfigureAwait(true);
+                if (_appUpdateService is not null)
+                {
+                    await _appUpdateService.StartAsync(_updateCancellationTokenSource.Token).ConfigureAwait(true);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }, DispatcherPriority.Background);
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _updateCancellationTokenSource.Cancel();
         _hotkeyService?.Dispose();
         if (_trayService is not null)
         {
@@ -162,6 +197,11 @@ public partial class App : WpfApplication
             _trayService.ExitRequested -= OnTrayExitRequested;
             _trayService.ForegroundWindowChanged -= OnTrayForegroundWindowChanged;
             _trayService.Dispose();
+        }
+
+        if (_appUpdateService is not null)
+        {
+            _appUpdateService.SnapshotChanged -= OnAppUpdateSnapshotChanged;
         }
 
         _speechService?.Dispose();
@@ -297,6 +337,21 @@ public partial class App : WpfApplication
         return (refreshed, _hotkeyService.LastRegistrationStatus);
     }
 
+    private IStoreUpdateClient CreateStoreUpdateClient()
+    {
+        if (_appVersionProvider?.IsPackaged != true)
+        {
+            return new UnsupportedStoreUpdateClient();
+        }
+
+        return new StoreContextUpdateClient(StoreContext.GetDefault(), isSupported: true);
+    }
+
+    private void OnAppUpdateSnapshotChanged(object? sender, AppUpdateSnapshot snapshot)
+    {
+        _ = Dispatcher.InvokeAsync(() => _mainViewModel?.ApplyUpdateSnapshot(snapshot));
+    }
+
     private static string GetModifierLabel(RightSpeak.Models.HotkeyModifierPreset preset)
     {
         return preset switch
@@ -389,6 +444,23 @@ public partial class App : WpfApplication
 
         command.Execute(null);
         return Task.CompletedTask;
+    }
+
+    private VoiceManagerViewModel CreateVoiceManagerViewModel()
+    {
+        if (_voiceCatalogService is null ||
+            _voiceDownloadService is null ||
+            _readingService is null ||
+            _mainViewModel is null)
+        {
+            throw new InvalidOperationException("Voice manager services are not available.");
+        }
+
+        return new VoiceManagerViewModel(
+            _voiceCatalogService,
+            _voiceDownloadService,
+            _readingService,
+            _mainViewModel.RefreshVoiceOptions);
     }
 
     private Dictionary<string, string?> BuildFocusRestoreDiagnostics(string trigger)

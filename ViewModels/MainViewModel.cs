@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
+using System.Windows.Shell;
 using RightSpeak.Models;
 using RightSpeak.Services;
 
@@ -24,9 +25,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly IReadingService _readingService;
     private readonly IHotkeySettingsService _hotkeySettingsService;
     private readonly IAppSettingsService _appSettingsService;
-    private readonly IReadOnlyList<string> _voiceOptions;
-    private readonly Dictionary<string, string?> _voiceNameByOptionLabel;
-    private readonly Dictionary<string, string> _voiceOptionLabelByName;
+    private IReadOnlyList<string> _voiceOptions;
+    private Dictionary<string, string?> _voiceNameByOptionLabel;
+    private Dictionary<string, string> _voiceOptionLabelByName;
     private readonly Func<(bool Success, string StatusMessage)>? _applyHotkeysRegistration;
     private readonly Func<string, bool>? _applyTheme;
     private CancellationTokenSource? _hotkeyModifierWarningCts;
@@ -40,6 +41,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _suppressHotkeyAutoApply;
     private string _focusedWindowText = "Current app";
     private string _hotkeyModifierWarningMessage = string.Empty;
+    private string _updateStageText = string.Empty;
+    private string _updateStatusMessage = string.Empty;
+    private bool _isUpdateVisible;
+    private bool _isUpdateProgressVisible;
+    private bool _isMandatoryUpdateAvailable;
+    private double _updateProgressValue;
     private int _speechRate;
     private string _selectedVoiceOption = SystemDefaultVoiceOption;
     private string _selectedTheme = AppThemes.Light;
@@ -146,6 +153,123 @@ public sealed class MainViewModel : INotifyPropertyChanged
             _readingService.SpeechRate = clamped;
             OnPropertyChanged();
             SetStatusMessage($"Speech rate set to {_speechRate}.");
+        }
+    }
+
+    public bool IsUpdateVisible
+    {
+        get => _isUpdateVisible;
+        private set
+        {
+            if (_isUpdateVisible == value)
+            {
+                return;
+            }
+
+            _isUpdateVisible = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(TaskbarProgressState));
+        }
+    }
+
+    public string UpdateStageText
+    {
+        get => _updateStageText;
+        private set
+        {
+            if (string.Equals(_updateStageText, value, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _updateStageText = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(TaskbarProgressState));
+        }
+    }
+
+    public string UpdateStatusMessage
+    {
+        get => _updateStatusMessage;
+        private set
+        {
+            if (string.Equals(_updateStatusMessage, value, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _updateStatusMessage = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public bool IsUpdateProgressVisible
+    {
+        get => _isUpdateProgressVisible;
+        private set
+        {
+            if (_isUpdateProgressVisible == value)
+            {
+                return;
+            }
+
+            _isUpdateProgressVisible = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(TaskbarProgressState));
+        }
+    }
+
+    public bool IsMandatoryUpdateAvailable
+    {
+        get => _isMandatoryUpdateAvailable;
+        private set
+        {
+            if (_isMandatoryUpdateAvailable == value)
+            {
+                return;
+            }
+
+            _isMandatoryUpdateAvailable = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(TaskbarProgressState));
+        }
+    }
+
+    public double UpdateProgressPercent
+    {
+        get => _updateProgressValue * 100d;
+        private set
+        {
+            var normalized = value < 0d ? 0d : value > 100d ? 100d : value;
+            var progressValue = normalized / 100d;
+            if (Math.Abs(_updateProgressValue - progressValue) < 0.0001d)
+            {
+                return;
+            }
+
+            _updateProgressValue = progressValue;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(TaskbarProgressValue));
+        }
+    }
+
+    public double TaskbarProgressValue => _updateProgressValue;
+
+    public TaskbarItemProgressState TaskbarProgressState
+    {
+        get
+        {
+            if (_isUpdateProgressVisible)
+            {
+                return TaskbarItemProgressState.Normal;
+            }
+
+            if (_isUpdateVisible || _isMandatoryUpdateAvailable)
+            {
+                return TaskbarItemProgressState.Paused;
+            }
+
+            return TaskbarItemProgressState.None;
         }
     }
 
@@ -282,6 +406,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool IsManualReadSpeaking => _isManualReadSpeaking;
     public bool IsManualReadEnabled => !_isExternalReadActive;
     public bool IsExternalReadsEnabled => !_isManualReadSpeaking && !_isSpeaking && _hasExternalFocusedWindow;
+    public bool IsStopEnabled => _isSpeaking || _isManualReadSpeaking || _isExternalReadActive;
     public bool IsAnalyzeAvailable => _isAnalyzeAvailable;
 
     public ICommand ReadCommand { get; }
@@ -323,6 +448,34 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _hasExternalFocusedWindow = hasExternalFocusedWindow;
         OnPropertyChanged(nameof(IsExternalReadsEnabled));
         UpdateCommandStates();
+    }
+
+    public void RefreshVoiceOptions()
+    {
+        _readingService.RefreshAvailableVoices();
+        (_voiceOptions, _voiceNameByOptionLabel, _voiceOptionLabelByName) = BuildVoiceOptions(_readingService.AvailableVoices);
+        _selectedVoiceOption = GetVoiceOptionLabel(_readingService.SelectedVoiceName);
+        OnPropertyChanged(nameof(VoiceOptions));
+        OnPropertyChanged(nameof(SelectedVoiceOption));
+        SetStatusMessage("Voice list refreshed.");
+    }
+
+    public void ApplyUpdateSnapshot(AppUpdateSnapshot snapshot)
+    {
+        if (snapshot is null)
+        {
+            return;
+        }
+
+        UpdateStageText = snapshot.StageText;
+        UpdateStatusMessage = snapshot.StatusMessage;
+        IsMandatoryUpdateAvailable = snapshot.IsMandatoryUpdateAvailable;
+        IsUpdateProgressVisible = snapshot.IsProgressVisible;
+        UpdateProgressPercent = snapshot.ProgressValue * 100d;
+        IsUpdateVisible =
+            !string.IsNullOrWhiteSpace(snapshot.StageText) ||
+            !string.IsNullOrWhiteSpace(snapshot.StatusMessage) ||
+            snapshot.IsProgressVisible;
     }
 
     private static string FormatFocusedWindowTitle(string title)
@@ -379,7 +532,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private bool CanStop()
     {
-        return _isSpeaking;
+        return IsStopEnabled;
     }
 
     private async Task ReadAsync()
@@ -1011,6 +1164,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _isManualReadSpeaking = isSpeaking;
         OnPropertyChanged(nameof(IsManualReadSpeaking));
         OnPropertyChanged(nameof(IsExternalReadsEnabled));
+        OnPropertyChanged(nameof(IsStopEnabled));
     }
 
     private void SetSpeakingState(bool isSpeaking)
@@ -1022,6 +1176,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         _isSpeaking = isSpeaking;
         OnPropertyChanged(nameof(IsExternalReadsEnabled));
+        OnPropertyChanged(nameof(IsStopEnabled));
     }
 
     private void SetExternalReadActive(bool isActive)
@@ -1033,6 +1188,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         _isExternalReadActive = isActive;
         OnPropertyChanged(nameof(IsManualReadEnabled));
+        OnPropertyChanged(nameof(IsStopEnabled));
     }
 
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
