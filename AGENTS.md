@@ -127,6 +127,7 @@ Preferred acquisition order:
 
 Preferred interfaces:
 - `ISelectedTextProvider`
+- `IParagraphTextProvider`
 - `IDocumentTextProvider`
 
 Potential concrete classes:
@@ -182,6 +183,8 @@ Rules:
 
 Likely initial defaults:
 - read selected text
+- read paragraph
+- read document
 - stop reading
 
 ---

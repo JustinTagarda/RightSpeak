@@ -73,6 +73,49 @@ public sealed class ClipboardSelectedTextProvider : ISelectedTextProvider
             var copyCycles = isBrowserPdfContext ? BrowserPdfMaxCopyCycles : 1;
             for (var cycle = 1; cycle <= copyCycles; cycle++)
             {
+                if (!WindowFocusInterop.IsValidWindow(foregroundWindow))
+                {
+                    failureMessage = "Clipboard fallback stopped because the target window is no longer available.";
+                    AppDiagnostics.Warn(
+                        "clipboard_fallback_target_window_invalid",
+                        new Dictionary<string, string?>
+                        {
+                            ["foregroundWindowHwnd"] = $"0x{foregroundWindow.ToInt64():X}",
+                            ["copyCycle"] = cycle.ToString(),
+                            ["copyCycles"] = copyCycles.ToString()
+                        });
+                    break;
+                }
+
+                if (isBrowserPdfContext)
+                {
+                    var activationResult = WindowFocusInterop.TryActivateWindow(foregroundWindow);
+                    AppDiagnostics.Info(
+                        "clipboard_fallback_pdf_activation_attempted",
+                        new Dictionary<string, string?>
+                        {
+                            ["foregroundWindowHwnd"] = $"0x{foregroundWindow.ToInt64():X}",
+                            ["copyCycle"] = cycle.ToString(),
+                            ["copyCycles"] = copyCycles.ToString(),
+                            ["activationResult"] = activationResult.ToString()
+                        });
+
+                    if (!activationResult)
+                    {
+                        failureMessage = "Clipboard fallback could not restore focus to the target PDF window.";
+                        AppDiagnostics.Warn(
+                            "clipboard_fallback_pdf_activation_failed",
+                            new Dictionary<string, string?>
+                            {
+                                ["foregroundWindowHwnd"] = $"0x{foregroundWindow.ToInt64():X}",
+                                ["copyCycle"] = cycle.ToString(),
+                                ["copyCycles"] = copyCycles.ToString(),
+                                ["currentForegroundWindowHwnd"] = $"0x{ClipboardInterop.GetForegroundWindow().ToInt64():X}"
+                            });
+                        break;
+                    }
+                }
+
                 ClipboardInterop.SendCopyShortcut();
 
                 var cycleDeadline = DateTime.UtcNow.AddMilliseconds(PollTimeoutMilliseconds);

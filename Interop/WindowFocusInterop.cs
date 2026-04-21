@@ -63,9 +63,18 @@ internal static class WindowFocusInterop
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool UnhookWinEvent(nint hWinEventHook);
 
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindow(nint hWnd);
+
+    public static bool IsValidWindow(nint hWnd)
+    {
+        return hWnd != nint.Zero && IsWindow(hWnd);
+    }
+
     public static bool TryActivateWindow(nint hWnd)
     {
-        if (hWnd == nint.Zero)
+        if (!IsValidWindow(hWnd))
         {
             return false;
         }

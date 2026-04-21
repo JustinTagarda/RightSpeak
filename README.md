@@ -13,7 +13,9 @@ Current state:
 - core reading workflows are implemented and being hardened for reliability
 - manual text reading, paragraph reading, selected-text reading, document reading, pause/resume, always-on-top window behavior, voice management, tray actions, hotkeys, themes, and background Store updates are implemented
 - external `Read Document` is enabled with browser-PDF-specific hardening and diagnostics
-- production-facing external commands are currently `Read Selected Text`, `Read Paragraph`, and `Read Document`
+- production-facing external commands are:
+  - app/tray: `Read Selected Text` and `Read Document`
+  - global hotkey: `Read Selected Text`, `Read Paragraph`, `Read Document`, and `Stop`
 
 The current focus is getting the MVP path working reliably:
 1. local text-to-speech and playback controls

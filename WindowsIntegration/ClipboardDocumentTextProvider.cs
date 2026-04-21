@@ -605,13 +605,18 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
                 });
         }
 
+        if (temporarySelectAllSent && foregroundWindow != nint.Zero)
+        {
+            var clearPhase = canceled
+                ? "after_capture_cancelled"
+                : string.IsNullOrWhiteSpace(documentText)
+                    ? "after_capture_failed"
+                    : "after_capture_succeeded";
+            ClearDocumentTemporarySelection(foregroundWindow, focusedElement, clearPhase);
+        }
+
         if (observedCopySequence != 0)
         {
-            if (temporarySelectAllSent && !string.IsNullOrWhiteSpace(documentText))
-            {
-                ClearDocumentTemporarySelection(foregroundWindow, focusedElement, "before_clipboard_restore");
-            }
-
             var currentSequence = ClipboardInterop.GetClipboardSequenceNumber();
             if (currentSequence == observedCopySequence && !TryRestoreClipboard(originalClipboard))
             {
@@ -1183,7 +1188,32 @@ public sealed class ClipboardDocumentTextProvider : IDocumentTextProvider
     {
         try
         {
+            if (!WindowFocusInterop.IsValidWindow(foregroundWindow))
+            {
+                AppDiagnostics.Info(
+                    "clipboard_document_selection_clear_skipped_invalid_window",
+                    new Dictionary<string, string?>
+                    {
+                        ["phase"] = phase,
+                        ["foregroundWindowHwnd"] = $"0x{foregroundWindow.ToInt64():X}"
+                    });
+                return;
+            }
+
             var activationResult = WindowFocusInterop.TryActivateWindow(foregroundWindow);
+            if (!activationResult)
+            {
+                AppDiagnostics.Info(
+                    "clipboard_document_selection_clear_skipped_activation_failed",
+                    new Dictionary<string, string?>
+                    {
+                        ["phase"] = phase,
+                        ["foregroundWindowHwnd"] = $"0x{foregroundWindow.ToInt64():X}",
+                        ["currentForegroundWindowHwnd"] = $"0x{ClipboardInterop.GetForegroundWindow().ToInt64():X}"
+                    });
+                return;
+            }
+
             try
             {
                 focusedElement?.SetFocus();
