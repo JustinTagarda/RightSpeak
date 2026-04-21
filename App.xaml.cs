@@ -37,8 +37,15 @@ public partial class App : WpfApplication
     private MainWindow? _mainWindow;
     private Mutex? _singleInstanceMutex;
     private uint _activateWindowMessageId;
-    private bool _isShuttingDown;
+    private bool _isExiting;
     private readonly CancellationTokenSource _updateCancellationTokenSource = new();
+
+    public App()
+    {
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
+        AppDomain.CurrentDomain.UnhandledException += OnAppDomainUnhandledException;
+        TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+    }
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -136,10 +143,10 @@ public partial class App : WpfApplication
             () => _trayService?.LastExternalForegroundWindow ?? nint.Zero,
             _activateWindowMessageId,
             _appVersionProvider.GetDisplayVersionText(),
+            _appSettingsService,
             ExecuteTrayFocusSensitiveReadAsync,
             CreateVoiceManagerViewModel,
             placeOnStartup: true);
-        _mainWindow.Closing += OnMainWindowClosing;
         AppDiagnostics.Info("main_window_created");
         _mainWindow.RevealWindow();
         AppDiagnostics.Info(
@@ -150,25 +157,39 @@ public partial class App : WpfApplication
                 ["windowState"] = _mainWindow.WindowState.ToString()
             });
 
-        _ = Dispatcher.BeginInvoke(async () =>
+        var revealOperation = Dispatcher.BeginInvoke(async () =>
         {
-            await Task.Delay(350).ConfigureAwait(true);
-            if (_mainWindow is null)
+            try
             {
-                return;
-            }
+                await Task.Delay(350).ConfigureAwait(true);
+                if (_mainWindow is null)
+                {
+                    return;
+                }
 
-            if (_mainWindow.IsVisible)
+                if (_mainWindow.IsVisible)
+                {
+                    AppDiagnostics.Info("main_window_reveal_post_startup_visible");
+                    return;
+                }
+
+                AppDiagnostics.Warn("main_window_reveal_post_startup_retry");
+                _mainWindow.RevealWindow();
+            }
+            catch (Exception ex)
             {
-                AppDiagnostics.Info("main_window_reveal_post_startup_visible");
-                return;
+                AppDiagnostics.Error(
+                    "main_window_reveal_post_startup_failed",
+                    new Dictionary<string, string?>
+                    {
+                        ["exceptionType"] = ex.GetType().FullName,
+                        ["message"] = ex.Message
+                    });
             }
-
-            AppDiagnostics.Warn("main_window_reveal_post_startup_retry");
-            _mainWindow.RevealWindow();
         }, DispatcherPriority.ApplicationIdle);
+        ObserveBackgroundTask(revealOperation.Task, "main_window_reveal_post_startup");
 
-        _ = Dispatcher.BeginInvoke(async () =>
+        var updateOperation = Dispatcher.BeginInvoke(async () =>
         {
             try
             {
@@ -182,14 +203,24 @@ public partial class App : WpfApplication
             {
             }
         }, DispatcherPriority.Background);
+        ObserveBackgroundTask(updateOperation.Task, "app_update_startup");
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
-        _updateCancellationTokenSource.Cancel();
-        _hotkeyService?.Dispose();
-        if (_trayService is not null)
+        _isExiting = true;
+        TryRunCleanup("app_exit_cancel_updates", () => _updateCancellationTokenSource.Cancel());
+        TryRunCleanup("app_exit_unsubscribe_dispatcher_unhandled", () => DispatcherUnhandledException -= OnDispatcherUnhandledException);
+        TryRunCleanup("app_exit_unsubscribe_domain_unhandled", () => AppDomain.CurrentDomain.UnhandledException -= OnAppDomainUnhandledException);
+        TryRunCleanup("app_exit_unsubscribe_task_unobserved", () => TaskScheduler.UnobservedTaskException -= OnUnobservedTaskException);
+        TryRunCleanup("app_exit_dispose_hotkeys", () => _hotkeyService?.Dispose());
+        TryRunCleanup("app_exit_dispose_tray", () =>
         {
+            if (_trayService is null)
+            {
+                return;
+            }
+
             _trayService.ReadSelectedRequested -= OnTrayReadSelectedRequested;
             _trayService.ReadDocumentRequested -= OnTrayReadDocumentRequested;
             _trayService.StopRequested -= OnTrayStopRequested;
@@ -197,16 +228,17 @@ public partial class App : WpfApplication
             _trayService.ExitRequested -= OnTrayExitRequested;
             _trayService.ForegroundWindowChanged -= OnTrayForegroundWindowChanged;
             _trayService.Dispose();
-        }
-
-        if (_appUpdateService is not null)
+        });
+        TryRunCleanup("app_exit_unsubscribe_update_snapshot", () =>
         {
-            _appUpdateService.SnapshotChanged -= OnAppUpdateSnapshotChanged;
-        }
-
-        _speechService?.Dispose();
-        _appSettingsService?.Save();
-        _singleInstanceMutex?.Dispose();
+            if (_appUpdateService is not null)
+            {
+                _appUpdateService.SnapshotChanged -= OnAppUpdateSnapshotChanged;
+            }
+        });
+        TryRunCleanup("app_exit_dispose_speech", () => _speechService?.Dispose());
+        TryRunCleanup("app_exit_save_settings", () => _appSettingsService?.Save());
+        TryRunCleanup("app_exit_dispose_single_instance_mutex", () => _singleInstanceMutex?.Dispose());
         base.OnExit(e);
     }
 
@@ -233,15 +265,17 @@ public partial class App : WpfApplication
             return;
         }
 
-        _ = ExecuteTrayFocusSensitiveReadAsync("read_selected_text_external", "tray_menu", () =>
-        {
-            if (_mainViewModel?.ReadSelectedTextCommand.CanExecute(null) == true)
+        ObserveBackgroundTask(
+            ExecuteTrayFocusSensitiveReadAsync("read_selected_text_external", "tray_menu", () =>
             {
-                return ExecuteCommandAsync(_mainViewModel.ReadSelectedTextCommand);
-            }
+                if (_mainViewModel?.ReadSelectedTextCommand.CanExecute(null) == true)
+                {
+                    return ExecuteCommandAsync(_mainViewModel.ReadSelectedTextCommand);
+                }
 
-            return Task.CompletedTask;
-        });
+                return Task.CompletedTask;
+            }),
+            "tray_read_selected_text");
     }
 
     private void OnTrayReadDocumentRequested(object? sender, EventArgs e)
@@ -251,15 +285,17 @@ public partial class App : WpfApplication
             return;
         }
 
-        _ = ExecuteTrayFocusSensitiveReadAsync("read_document_external", "tray_menu", () =>
-        {
-            if (_mainViewModel?.ReadDocumentCommand.CanExecute(null) == true)
+        ObserveBackgroundTask(
+            ExecuteTrayFocusSensitiveReadAsync("read_document_external", "tray_menu", () =>
             {
-                return ExecuteCommandAsync(_mainViewModel.ReadDocumentCommand);
-            }
+                if (_mainViewModel?.ReadDocumentCommand.CanExecute(null) == true)
+                {
+                    return ExecuteCommandAsync(_mainViewModel.ReadDocumentCommand);
+                }
 
-            return Task.CompletedTask;
-        });
+                return Task.CompletedTask;
+            }),
+            "tray_read_document");
     }
 
     private void OnTrayStopRequested(object? sender, EventArgs e)
@@ -289,25 +325,17 @@ public partial class App : WpfApplication
 
     private void OnTrayExitRequested(object? sender, EventArgs e)
     {
-        _isShuttingDown = true;
+        if (_isExiting || Dispatcher.HasShutdownStarted)
+        {
+            return;
+        }
+
         Shutdown();
     }
 
     private void OnTrayForegroundWindowChanged(object? sender, EventArgs e)
     {
         UpdateFocusedWindowText();
-    }
-
-    private void OnMainWindowClosing(object? sender, System.ComponentModel.CancelEventArgs e)
-    {
-        if (_isShuttingDown)
-        {
-            return;
-        }
-
-        e.Cancel = true;
-        _mainWindow?.Hide();
-        _mainViewModel?.SetStatusMessage("RightSpeak is running in the system tray.");
     }
 
     private void ApplyTrayHotkeyHints()
@@ -349,7 +377,9 @@ public partial class App : WpfApplication
 
     private void OnAppUpdateSnapshotChanged(object? sender, AppUpdateSnapshot snapshot)
     {
-        _ = Dispatcher.InvokeAsync(() => _mainViewModel?.ApplyUpdateSnapshot(snapshot));
+        ObserveBackgroundTask(
+            Dispatcher.InvokeAsync(() => _mainViewModel?.ApplyUpdateSnapshot(snapshot)).Task,
+            "app_update_snapshot_changed");
     }
 
     private static string GetModifierLabel(RightSpeak.Models.HotkeyModifierPreset preset)
@@ -384,55 +414,86 @@ public partial class App : WpfApplication
             ["trigger"] = trigger
         });
 
-        var stopwatch = Stopwatch.StartNew();
-        AppDiagnostics.Info(
-            "focused_read_focus_restore_started",
-            BuildFocusRestoreDiagnostics(trigger));
-
-        if (_trayService is not null)
+        try
         {
-            var restored = _trayService.TryRestoreLastExternalForegroundWindow();
-            if (!restored)
+            var stopwatch = Stopwatch.StartNew();
+            await Dispatcher.InvokeAsync(() => _mainViewModel?.SetExternalReadFocusStatus());
+            AppDiagnostics.Info(
+                "focused_read_focus_restore_started",
+                BuildFocusRestoreDiagnostics(trigger));
+
+            if (_trayService is not null)
             {
-                stopwatch.Stop();
-                AppDiagnostics.Warn(
-                    "focused_read_focus_restore_failed",
-                    new Dictionary<string, string?>
+                var restored = _trayService.TryRestoreLastExternalForegroundWindow();
+                if (!restored)
+                {
+                    stopwatch.Stop();
+                    AppDiagnostics.Warn(
+                        "focused_read_focus_restore_failed",
+                        new Dictionary<string, string?>
+                        {
+                            ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString(),
+                            ["trigger"] = trigger,
+                            ["workflow"] = workflowName
+                        });
+                    await Dispatcher.InvokeAsync(() =>
                     {
-                        ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString(),
-                        ["trigger"] = trigger,
-                        ["workflow"] = workflowName
+                        _mainViewModel?.SetStatusMessage("Couldn't switch back to the other app. Click that app first, then try again.");
+                        _mainViewModel?.ClearExternalReadFocusStatus();
                     });
-                await Dispatcher.InvokeAsync(() =>
-                    _mainViewModel?.SetStatusMessage("Couldn't switch back to the other app. Click that app first, then try again."));
-                AppDiagnostics.Warn("tray_focus_read_aborted_restore_failed");
-                return;
+                    AppDiagnostics.Warn("tray_focus_read_aborted_restore_failed");
+                    return;
+                }
             }
+
+            stopwatch.Stop();
+            AppDiagnostics.Info(
+                "focused_read_focus_restore_succeeded",
+                new Dictionary<string, string?>
+                {
+                    ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString(),
+                    ["trigger"] = trigger,
+                    ["workflow"] = workflowName
+                });
+
+            var commandStopwatch = Stopwatch.StartNew();
+            var commandOperation = Dispatcher.InvokeAsync(executeCommandAsync);
+            var commandTask = await commandOperation.Task.ConfigureAwait(false);
+            await commandTask.ConfigureAwait(false);
+            commandStopwatch.Stop();
+            AppDiagnostics.Info(
+                "focused_read_command_dispatched",
+                new Dictionary<string, string?>
+                {
+                    ["elapsedMs"] = commandStopwatch.ElapsedMilliseconds.ToString(),
+                    ["trigger"] = trigger,
+                    ["workflow"] = workflowName
+                });
         }
-
-        stopwatch.Stop();
-        AppDiagnostics.Info(
-            "focused_read_focus_restore_succeeded",
-            new Dictionary<string, string?>
-            {
-                ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString(),
-                ["trigger"] = trigger,
-                ["workflow"] = workflowName
-            });
-
-        var commandStopwatch = Stopwatch.StartNew();
-        var commandOperation = Dispatcher.InvokeAsync(executeCommandAsync);
-        var commandTask = await commandOperation.Task.ConfigureAwait(false);
-        await commandTask.ConfigureAwait(false);
-        commandStopwatch.Stop();
-        AppDiagnostics.Info(
-            "focused_read_command_dispatched",
-            new Dictionary<string, string?>
-            {
-                ["elapsedMs"] = commandStopwatch.ElapsedMilliseconds.ToString(),
-                ["trigger"] = trigger,
-                ["workflow"] = workflowName
-            });
+        catch (OperationCanceledException)
+        {
+            AppDiagnostics.Info(
+                "focused_read_command_canceled",
+                new Dictionary<string, string?>
+                {
+                    ["trigger"] = trigger,
+                    ["workflow"] = workflowName
+                });
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "focused_read_command_failed",
+                new Dictionary<string, string?>
+                {
+                    ["trigger"] = trigger,
+                    ["workflow"] = workflowName,
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+            await Dispatcher.InvokeAsync(() =>
+                _mainViewModel?.SetStatusMessage("Couldn't read from the other app due to an internal error. Please try again."));
+        }
     }
 
     private static Task ExecuteCommandAsync(ICommand command)
@@ -472,6 +533,138 @@ public partial class App : WpfApplication
             ["hasExternalForegroundWindow"] = _trayService?.HasExternalForegroundWindow.ToString(),
             ["currentForegroundWindowTitle"] = _trayService?.CurrentForegroundWindowTitle
         };
+    }
+
+    private void ObserveBackgroundTask(Task task, string operationName)
+    {
+        if (task.IsCompletedSuccessfully || task.IsCanceled)
+        {
+            return;
+        }
+
+        _ = task.ContinueWith(
+            continuation =>
+            {
+                if (continuation.IsCanceled)
+                {
+                    return;
+                }
+
+                var exception = continuation.Exception?.GetBaseException();
+                if (exception is null)
+                {
+                    return;
+                }
+
+                AppDiagnostics.Error(
+                    "background_operation_failed",
+                    new Dictionary<string, string?>
+                    {
+                        ["operationName"] = operationName,
+                        ["exceptionType"] = exception.GetType().FullName,
+                        ["message"] = exception.Message
+                    });
+
+                if (_isExiting || Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+                {
+                    return;
+                }
+
+                try
+                {
+                    _ = Dispatcher.InvokeAsync(() =>
+                        _mainViewModel?.SetStatusMessage("An internal operation failed. Please try again."));
+                }
+                catch
+                {
+                    // Ignore UI update failures while reporting background exceptions.
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted,
+            TaskScheduler.Default);
+    }
+
+    private static void TryRunCleanup(string operationName, Action cleanup)
+    {
+        try
+        {
+            cleanup();
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "app_exit_cleanup_failed",
+                new Dictionary<string, string?>
+                {
+                    ["operationName"] = operationName,
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+        }
+    }
+
+    private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
+    {
+        AppDiagnostics.Error(
+            "dispatcher_unhandled_exception",
+            new Dictionary<string, string?>
+            {
+                ["exceptionType"] = e.Exception.GetType().FullName,
+                ["message"] = e.Exception.Message,
+                ["isCritical"] = IsCriticalException(e.Exception).ToString()
+            });
+
+        if (IsCriticalException(e.Exception))
+        {
+            return;
+        }
+
+        e.Handled = true;
+        if (_isExiting || Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+        {
+            return;
+        }
+
+        try
+        {
+            _mainViewModel?.SetStatusMessage("RightSpeak recovered from an internal error. Please try again.");
+        }
+        catch
+        {
+            // Ignore status update failures in unhandled exception path.
+        }
+    }
+
+    private static void OnAppDomainUnhandledException(object? sender, UnhandledExceptionEventArgs e)
+    {
+        var exception = e.ExceptionObject as Exception;
+        AppDiagnostics.Error(
+            "appdomain_unhandled_exception",
+            new Dictionary<string, string?>
+            {
+                ["exceptionType"] = exception?.GetType().FullName ?? e.ExceptionObject?.GetType().FullName,
+                ["message"] = exception?.Message ?? "Unknown unhandled exception",
+                ["isTerminating"] = e.IsTerminating.ToString()
+            });
+    }
+
+    private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
+    {
+        var exception = e.Exception.GetBaseException();
+        AppDiagnostics.Error(
+            "task_unobserved_exception",
+            new Dictionary<string, string?>
+            {
+                ["exceptionType"] = exception.GetType().FullName,
+                ["message"] = exception.Message
+            });
+        e.SetObserved();
+    }
+
+    private static bool IsCriticalException(Exception exception)
+    {
+        return exception is OutOfMemoryException or AccessViolationException or AppDomainUnloadedException or BadImageFormatException or CannotUnloadAppDomainException;
     }
 
     private bool ApplyTheme(string? requestedTheme)

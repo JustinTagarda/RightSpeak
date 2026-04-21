@@ -66,6 +66,7 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
     private CancellationTokenSource? _continuousChunkPlaybackCancellationTokenSource;
     private ContinuousWaveOutPlayer? _continuousChunkPlaybackPlayer;
     private bool _isContinuousChunkPlaybackActive;
+    private bool _isContinuousChunkPlaybackPaused;
     private bool _disposed;
 
     public WindowsSpeechService()
@@ -108,6 +109,12 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
         _piperSpeechService.IsSpeaking ||
         _preferredSpeechService.IsSpeaking ||
         _fallbackSpeechService.IsSpeaking;
+
+    public bool IsPaused =>
+        _isContinuousChunkPlaybackPaused ||
+        _piperSpeechService.IsPaused ||
+        _preferredSpeechService.IsPaused ||
+        _fallbackSpeechService.IsPaused;
 
     public IReadOnlyList<SpeechVoice> GetInstalledVoices() => _installedVoices;
 
@@ -187,6 +194,7 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
             _continuousChunkPlaybackCancellationTokenSource = playbackCancellationTokenSource;
             _continuousChunkPlaybackPlayer = playbackPlayer;
             _isContinuousChunkPlaybackActive = true;
+            _isContinuousChunkPlaybackPaused = false;
         }
         finally
         {
@@ -364,6 +372,7 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
                 }
 
                 _isContinuousChunkPlaybackActive = false;
+                _isContinuousChunkPlaybackPaused = false;
             }
             finally
             {
@@ -378,6 +387,90 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
     public Task<SpeechResult> StopAsync(CancellationToken cancellationToken = default)
     {
         return StopInternalAsync("explicit_stop", cancellationToken);
+    }
+
+    public async Task<SpeechResult> PauseAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+
+            if (_isContinuousChunkPlaybackActive && _continuousChunkPlaybackPlayer is not null)
+            {
+                if (_isContinuousChunkPlaybackPaused)
+                {
+                    return SpeechResult.Completed("Reading is already paused.");
+                }
+
+                _continuousChunkPlaybackPlayer.Pause();
+                _isContinuousChunkPlaybackPaused = true;
+                return SpeechResult.Completed("Reading paused.");
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        if (_piperSpeechService.IsSpeaking)
+        {
+            return await _piperSpeechService.PauseAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (_preferredSpeechService.IsSpeaking)
+        {
+            return await _preferredSpeechService.PauseAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (_fallbackSpeechService.IsSpeaking)
+        {
+            return await _fallbackSpeechService.PauseAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return SpeechResult.Completed("Speech is already stopped.");
+    }
+
+    public async Task<SpeechResult> ResumeAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+
+            if (_isContinuousChunkPlaybackActive && _continuousChunkPlaybackPlayer is not null)
+            {
+                if (!_isContinuousChunkPlaybackPaused)
+                {
+                    return SpeechResult.Completed("Reading is already playing.");
+                }
+
+                _continuousChunkPlaybackPlayer.Resume();
+                _isContinuousChunkPlaybackPaused = false;
+                return SpeechResult.Completed("Reading resumed.");
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        if (_piperSpeechService.IsSpeaking)
+        {
+            return await _piperSpeechService.ResumeAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (_preferredSpeechService.IsSpeaking)
+        {
+            return await _preferredSpeechService.ResumeAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (_fallbackSpeechService.IsSpeaking)
+        {
+            return await _fallbackSpeechService.ResumeAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return SpeechResult.Failed("Nothing is paused right now.");
     }
 
     private async Task<SpeechResult> StopInternalAsync(string reason, CancellationToken cancellationToken)
@@ -726,6 +819,7 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
             _continuousChunkPlaybackCancellationTokenSource = null;
             _continuousChunkPlaybackPlayer = null;
             _isContinuousChunkPlaybackActive = false;
+            _isContinuousChunkPlaybackPaused = false;
         }
         finally
         {
@@ -764,6 +858,7 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
             _continuousChunkPlaybackCancellationTokenSource = null;
             _continuousChunkPlaybackPlayer = null;
             _isContinuousChunkPlaybackActive = false;
+            _isContinuousChunkPlaybackPaused = false;
         }
         finally
         {

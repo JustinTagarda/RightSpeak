@@ -99,6 +99,7 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
     }
 
     public bool IsSpeaking { get; private set; }
+    public bool IsPaused { get; private set; }
 
     public bool HasUsableInstallation => _availability.IsAvailable;
     public string? AvailabilityFailureReason => _availability.FailureReason;
@@ -190,6 +191,7 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
             playbackCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             _playbackCancellationTokenSource = playbackCancellationTokenSource;
             IsSpeaking = true;
+            IsPaused = false;
         }
         finally
         {
@@ -226,6 +228,7 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
                     ResetSessionForFreshReadUnsafe("read_end");
                 }
                 IsSpeaking = false;
+                IsPaused = false;
             }
             finally
             {
@@ -253,6 +256,7 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
                 ResetSessionForFreshReadUnsafe("stop_reading");
             }
             IsSpeaking = false;
+            IsPaused = false;
             return SpeechResult.Stopped();
         }
         catch (Exception ex)
@@ -397,6 +401,7 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
             playbackCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             _playbackCancellationTokenSource = playbackCancellationTokenSource;
             IsSpeaking = true;
+            IsPaused = false;
         }
         finally
         {
@@ -429,6 +434,7 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
             {
                 CleanupPlaybackStateUnsafe();
                 IsSpeaking = false;
+                IsPaused = false;
             }
             finally
             {
@@ -453,6 +459,58 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
         DisposeWarmPiperProcessUnsafe();
         _gate.Dispose();
         _disposed = true;
+    }
+
+    public async Task<SpeechResult> PauseAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            if (!IsSpeaking)
+            {
+                return SpeechResult.Completed("Speech is already stopped.");
+            }
+
+            if (IsPaused)
+            {
+                return SpeechResult.Completed("Reading is already paused.");
+            }
+
+            _currentContinuousPlaybackPlayer?.Pause();
+            IsPaused = true;
+            return SpeechResult.Completed("Reading paused.");
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<SpeechResult> ResumeAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            if (!IsSpeaking)
+            {
+                return SpeechResult.Failed("Nothing is paused right now.");
+            }
+
+            if (!IsPaused)
+            {
+                return SpeechResult.Completed("Reading is already playing.");
+            }
+
+            _currentContinuousPlaybackPlayer?.Resume();
+            IsPaused = false;
+            return SpeechResult.Completed("Reading resumed.");
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     private async Task<SpeechResult> PlayRenderedAudioAsync(string text, SpeechOptions options, PiperVoiceDefinition voice, CancellationToken cancellationToken)

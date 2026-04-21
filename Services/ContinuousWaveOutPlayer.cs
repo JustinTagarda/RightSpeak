@@ -30,6 +30,7 @@ internal sealed class ContinuousWaveOutPlayer : IDisposable
     private int _pendingBufferCount;
     private bool _stopRequested;
     private bool _resetIssued;
+    private bool _isPaused;
     private bool _disposed;
 
     public ContinuousWaveOutPlayer(string? streamId = null)
@@ -197,6 +198,42 @@ internal sealed class ContinuousWaveOutPlayer : IDisposable
         }
     }
 
+    public void Pause()
+    {
+        nint waveOutHandle;
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            if (_stopRequested || _isPaused || _waveOutHandle == nint.Zero)
+            {
+                return;
+            }
+
+            waveOutHandle = _waveOutHandle;
+            _isPaused = true;
+        }
+
+        _ = waveOutPause(waveOutHandle);
+    }
+
+    public void Resume()
+    {
+        nint waveOutHandle;
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            if (_stopRequested || !_isPaused || _waveOutHandle == nint.Zero)
+            {
+                return;
+            }
+
+            waveOutHandle = _waveOutHandle;
+            _isPaused = false;
+        }
+
+        _ = waveOutRestart(waveOutHandle);
+    }
+
     public void Dispose()
     {
         nint waveOutHandle;
@@ -213,6 +250,7 @@ internal sealed class ContinuousWaveOutPlayer : IDisposable
             }
 
             _stopRequested = true;
+            _isPaused = false;
             waveOutHandle = _waveOutHandle;
             shouldReset = waveOutHandle != nint.Zero && !_resetIssued;
             if (shouldReset)
@@ -698,6 +736,12 @@ internal sealed class ContinuousWaveOutPlayer : IDisposable
 
     [DllImport("winmm.dll", CallingConvention = CallingConvention.StdCall)]
     private static extern int waveOutReset(nint waveOutHandle);
+
+    [DllImport("winmm.dll", CallingConvention = CallingConvention.StdCall)]
+    private static extern int waveOutPause(nint waveOutHandle);
+
+    [DllImport("winmm.dll", CallingConvention = CallingConvention.StdCall)]
+    private static extern int waveOutRestart(nint waveOutHandle);
 
     [DllImport("winmm.dll", CallingConvention = CallingConvention.StdCall)]
     private static extern int waveOutClose(nint waveOutHandle);

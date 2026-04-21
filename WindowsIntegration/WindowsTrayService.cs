@@ -230,14 +230,14 @@ public sealed class WindowsTrayService : ITrayService
     private void OnMenuOpening(object? sender, System.ComponentModel.CancelEventArgs e)
     {
         _isContextMenuOpen = true;
-        CaptureExternalForegroundWindow();
+        TryCaptureExternalForegroundWindow("menu_opening");
     }
 
     private void OnNotifyIconMouseClick(object? sender, MouseEventArgs e)
     {
         if (e.Button == MouseButtons.Right || e.Button == MouseButtons.Left)
         {
-            CaptureExternalForegroundWindow();
+            TryCaptureExternalForegroundWindow("notify_icon_mouse_click");
         }
     }
 
@@ -248,12 +248,51 @@ public sealed class WindowsTrayService : ITrayService
             return;
         }
 
-        CaptureExternalForegroundWindow();
+        TryCaptureExternalForegroundWindow("timer");
     }
 
     private void CaptureExternalForegroundWindow()
     {
         CaptureExternalForegroundWindow(WindowFocusInterop.GetForegroundWindow());
+    }
+
+    private void TryCaptureExternalForegroundWindow(string trigger)
+    {
+        try
+        {
+            CaptureExternalForegroundWindow();
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "foreground_capture_failed",
+                new Dictionary<string, string?>
+                {
+                    ["trigger"] = trigger,
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+        }
+    }
+
+    private void TryCaptureExternalForegroundWindow(nint foregroundWindow, string trigger)
+    {
+        try
+        {
+            CaptureExternalForegroundWindow(foregroundWindow);
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "foreground_capture_failed",
+                new Dictionary<string, string?>
+                {
+                    ["trigger"] = trigger,
+                    ["foregroundWindowHwnd"] = $"0x{foregroundWindow.ToInt64():X}",
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+        }
     }
 
     private void CaptureExternalForegroundWindow(nint foregroundWindow)
@@ -418,7 +457,7 @@ public sealed class WindowsTrayService : ITrayService
                 ["previousHasExternalForegroundWindow"] = previousHasExternalForegroundWindow.ToString(),
                 ["hasExternalForegroundWindow"] = _hasExternalForegroundWindow.ToString()
             });
-        ForegroundWindowChanged?.Invoke(this, EventArgs.Empty);
+        RaiseTrayEvent(ForegroundWindowChanged, "foreground_window_changed");
     }
 
     private void OnForegroundWindowChanged(
@@ -435,7 +474,7 @@ public sealed class WindowsTrayService : ITrayService
             return;
         }
 
-        CaptureExternalForegroundWindow(hwnd);
+        TryCaptureExternalForegroundWindow(hwnd, "win_event");
     }
 
     private void OnMenuClosed(object? sender, ToolStripDropDownClosedEventArgs e)
@@ -445,13 +484,69 @@ public sealed class WindowsTrayService : ITrayService
 
     private void OnNotifyIconDoubleClick(object? sender, EventArgs e)
     {
-        ShowRequested?.Invoke(this, EventArgs.Empty);
+        RaiseTrayEvent(ShowRequested, "show_requested");
+    }
+
+    private void RaiseTrayEvent(EventHandler? handler, string eventName)
+    {
+        if (handler is null)
+        {
+            return;
+        }
+
+        try
+        {
+            handler.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "tray_event_handler_failed",
+                new Dictionary<string, string?>
+                {
+                    ["eventName"] = eventName,
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+        }
     }
 
     private static void QueueMenuAction(ContextMenuStrip menu, Action action)
     {
-        menu.Close();
-        menu.BeginInvoke(action);
+        try
+        {
+            menu.Close();
+            menu.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    action();
+                }
+                catch (Exception ex)
+                {
+                    AppDiagnostics.Error(
+                        "tray_menu_action_failed",
+                        new Dictionary<string, string?>
+                        {
+                            ["exceptionType"] = ex.GetType().FullName,
+                            ["message"] = ex.Message
+                        });
+                }
+            }));
+        }
+        catch (ObjectDisposedException)
+        {
+            AppDiagnostics.Warn("tray_menu_action_skipped_disposed");
+        }
+        catch (InvalidOperationException ex)
+        {
+            AppDiagnostics.Warn(
+                "tray_menu_action_skipped_invalid_operation",
+                new Dictionary<string, string?>
+                {
+                    ["message"] = ex.Message
+                });
+        }
     }
 
     private void ThrowIfDisposed()

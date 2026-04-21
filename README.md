@@ -1,8 +1,8 @@
 # RightSpeak
 
-RightSpeak is a Windows desktop utility for reading selected text aloud.
+RightSpeak is a Windows desktop utility for reading text aloud.
 
-The goal is low-friction text-to-speech for text the user has already selected in another application. The long-term direction is a lightweight Windows-first tool that can expand from selected-text reading into paragraph, control, and document reading without turning into a heavy desktop app.
+The goal is low-friction text-to-speech for text the user selects in another application, reads from a document, or pastes directly into the app. The app stays Windows-first and utility-focused without turning into a heavy desktop product.
 
 ## Status
 This repository is in early development.
@@ -11,15 +11,15 @@ Current state:
 - WPF app scaffold exists
 - project targets `.NET 10` on Windows
 - core reading workflows are implemented and being hardened for reliability
-- manual text reading, selected-text reading, document reading, voice management, tray actions, hotkeys, themes, and background Store updates are implemented
+- manual text reading, paragraph reading, selected-text reading, document reading, pause/resume, always-on-top window behavior, voice management, tray actions, hotkeys, themes, and background Store updates are implemented
 - external `Read Document` is enabled with browser-PDF-specific hardening and diagnostics
-- production-facing external commands are currently `Read Selected Text` and `Read Document` (`Read Paragraph` is intentionally hidden/disabled)
+- production-facing external commands are currently `Read Selected Text`, `Read Paragraph`, and `Read Document`
 
 The current focus is getting the MVP path working reliably:
-1. local text-to-speech
-2. selected-text retrieval
+1. local text-to-speech and playback controls
+2. selected-text, paragraph, and document retrieval
 3. global hotkey trigger
-4. basic settings and tray behavior
+4. basic settings, tray behavior, and window state
 
 ## Product Goal
 RightSpeak is intended to:
@@ -32,13 +32,15 @@ Reliability matters more than UI polish.
 
 ## Planned Capabilities
 Target capabilities include:
+- read paragraph text
 - read selected text
-- stop or pause reading
+- pause and resume reading
+- stop reading
 - choose voice and speech rate
-- read a paragraph when the target app exposes enough structure (currently not exposed in production UI)
 - read the current control or document content where possible
 - trigger reading from a global hotkey
 - expose quick actions from the tray
+- keep the app on top when needed
 
 ## Windows-First Design
 RightSpeak is intentionally Windows-specific.
@@ -124,9 +126,9 @@ Runtime update behavior for packaged installs:
 
 ## Current Implementation
 - local speech engine abstraction with Windows OneCore, `System.Speech`, and Piper support
-- manual text input with `Read` and `Stop`
+- manual text input with `Read`, `Pause/Resume`, and `Stop`
+- paragraph reading pipeline with UI Automation, focused-control, and clipboard fallback stages
 - selected-text reading pipeline with UI Automation, focused-control, and clipboard fallback stages
-- paragraph-reading pipeline retained in code for diagnostics/hardening, but excluded from production-facing commands
 - document reading (first path via focused-control UI Automation document or value patterns)
 - document browser-PDF fallback hardening:
   - multi-cycle clipboard capture and settle-window upgrade
@@ -143,9 +145,11 @@ Runtime update behavior for packaged installs:
 - Piper voice management with downloadable voice models and runtime installation
 - voice selection, speech-rate control, and voice preview
 - theme switching with light, dark, and Windows settings support
+- always-on-top window behavior
 - speech diagnostics include stream and engine routing events (for example `speech_single_chunk_stream_routed`, `speech_chunk_stream_*`, `piper_continuous_playback_*`)
 - global hotkeys:
   - read selected text
+  - read paragraph
   - read document
   - stop reading
   - modifier and keys are configurable in-app (`Alt+Shift`, `Ctrl+Shift`, `Ctrl+Alt`)

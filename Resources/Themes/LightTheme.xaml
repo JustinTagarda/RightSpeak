@@ -35,24 +35,68 @@
     <SolidColorBrush x:Key="StatusForegroundBrush" Color="#1F2937" />
     <SolidColorBrush x:Key="WarningTextBrush" Color="#9A3412" />
     <SolidColorBrush x:Key="HoverBorderBrush" Color="#7EB4EA" />
+    <SolidColorBrush x:Key="SliderActiveBrush" Color="#2563EB" />
+    <SolidColorBrush x:Key="SliderInactiveBrush" Color="#9CA3AF" />
+    <SolidColorBrush x:Key="SliderThumbBrush" Color="#2563EB" />
+    <SolidColorBrush x:Key="SliderThumbBorderBrush" Color="#FFFFFF" />
     <SolidColorBrush x:Key="ScrollBarTrackBrush" Color="#E5EAF1" />
     <SolidColorBrush x:Key="ScrollBarThumbBrush" Color="#A8B5C7" />
     <SolidColorBrush x:Key="ScrollBarThumbHoverBrush" Color="#8FA1B9" />
     <SolidColorBrush x:Key="ScrollBarThumbPressedBrush" Color="#7A8DA7" />
 
-    <Style x:Key="ModernScrollBarThumbStyle" TargetType="Thumb">
+    <Style TargetType="ScrollViewer">
+        <Setter Property="Padding" Value="0,0,1,0" />
+    </Style>
+
+    <Style TargetType="RadioButton">
+        <Setter Property="Foreground" Value="#1F2937" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
         <Setter Property="Template">
             <Setter.Value>
-                <ControlTemplate TargetType="Thumb">
-                    <Border x:Name="ThumbBorder"
-                            CornerRadius="4"
-                            Background="{DynamicResource ScrollBarThumbBrush}" />
+                <ControlTemplate TargetType="RadioButton">
+                    <Grid VerticalAlignment="Center" SnapsToDevicePixels="True">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="14" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <Border x:Name="OuterCircle"
+                                Grid.Column="0"
+                                Width="14"
+                                Height="14"
+                                CornerRadius="7"
+                                BorderThickness="1"
+                                BorderBrush="#94A3B8"
+                                Background="Transparent" />
+
+                        <Ellipse x:Name="InnerDot"
+                                 Grid.Column="0"
+                                 Width="6"
+                                 Height="6"
+                                 Fill="#2563EB"
+                                 Visibility="Collapsed"
+                                 HorizontalAlignment="Center"
+                                 VerticalAlignment="Center" />
+
+                        <ContentPresenter Grid.Column="1"
+                                          Margin="8,0,0,0"
+                                          VerticalAlignment="Center"
+                                          RecognizesAccessKey="True" />
+                    </Grid>
                     <ControlTemplate.Triggers>
-                        <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="ThumbBorder" Property="Background" Value="{DynamicResource ScrollBarThumbHoverBrush}" />
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="InnerDot" Property="Visibility" Value="Visible" />
+                            <Setter TargetName="OuterCircle" Property="BorderBrush" Value="#2563EB" />
                         </Trigger>
-                        <Trigger Property="IsDragging" Value="True">
-                            <Setter TargetName="ThumbBorder" Property="Background" Value="{DynamicResource ScrollBarThumbPressedBrush}" />
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="OuterCircle" Property="BorderBrush" Value="#7EB4EA" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="#9CA3AF" />
+                            <Setter TargetName="OuterCircle" Property="BorderBrush" Value="#CBD5E1" />
+                            <Setter TargetName="InnerDot" Property="Fill" Value="#9CA3AF" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -60,71 +104,74 @@
         </Setter>
     </Style>
 
-    <ControlTemplate x:Key="ModernVerticalScrollBarTemplate" TargetType="ScrollBar">
-        <Grid Background="{DynamicResource ScrollBarTrackBrush}"
-              Width="{TemplateBinding Width}">
-            <Track x:Name="PART_Track"
-                   Minimum="{TemplateBinding Minimum}"
-                   Maximum="{TemplateBinding Maximum}"
-                   Value="{TemplateBinding Value}"
-                   ViewportSize="{TemplateBinding ViewportSize}"
-                   IsDirectionReversed="True">
-                <Track.DecreaseRepeatButton>
-                    <RepeatButton Command="ScrollBar.PageUpCommand"
-                                  CommandTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}"
-                                  Background="Transparent"
-                                  BorderThickness="0" />
-                </Track.DecreaseRepeatButton>
-                <Track.Thumb>
-                    <Thumb Style="{StaticResource ModernScrollBarThumbStyle}" />
-                </Track.Thumb>
-                <Track.IncreaseRepeatButton>
-                    <RepeatButton Command="ScrollBar.PageDownCommand"
-                                  CommandTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}"
-                                  Background="Transparent"
-                                  BorderThickness="0" />
-                </Track.IncreaseRepeatButton>
-            </Track>
-        </Grid>
-    </ControlTemplate>
+    <Style x:Key="SliderThumbStyle" TargetType="Thumb">
+        <Setter Property="Width" Value="14" />
+        <Setter Property="Height" Value="14" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Thumb">
+                    <Ellipse Fill="{DynamicResource SliderThumbBrush}"
+                             Stroke="{DynamicResource SliderThumbBorderBrush}"
+                             StrokeThickness="2"
+                             SnapsToDevicePixels="True" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
 
-    <ControlTemplate x:Key="ModernHorizontalScrollBarTemplate" TargetType="ScrollBar">
-        <Grid Background="{DynamicResource ScrollBarTrackBrush}"
-              Height="{TemplateBinding Height}">
-            <Track x:Name="PART_Track"
-                   Minimum="{TemplateBinding Minimum}"
-                   Maximum="{TemplateBinding Maximum}"
-                   Value="{TemplateBinding Value}"
-                   ViewportSize="{TemplateBinding ViewportSize}">
-                <Track.DecreaseRepeatButton>
-                    <RepeatButton Command="ScrollBar.PageLeftCommand"
-                                  CommandTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}"
-                                  Background="Transparent"
-                                  BorderThickness="0" />
-                </Track.DecreaseRepeatButton>
-                <Track.Thumb>
-                    <Thumb Style="{StaticResource ModernScrollBarThumbStyle}" />
-                </Track.Thumb>
-                <Track.IncreaseRepeatButton>
-                    <RepeatButton Command="ScrollBar.PageRightCommand"
-                                  CommandTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}"
-                                  Background="Transparent"
-                                  BorderThickness="0" />
-                </Track.IncreaseRepeatButton>
-            </Track>
-        </Grid>
-    </ControlTemplate>
+    <Style x:Key="SliderTrackButtonStyle" TargetType="RepeatButton">
+        <Setter Property="OverridesDefaultStyle" Value="True" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RepeatButton">
+                    <Border Background="{TemplateBinding Background}"
+                            CornerRadius="2"
+                            Height="5"
+                            VerticalAlignment="Center" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
 
-    <Style TargetType="ScrollBar">
-        <Setter Property="Width" Value="10" />
-        <Setter Property="Height" Value="10" />
-        <Setter Property="Background" Value="{DynamicResource ScrollBarTrackBrush}" />
-        <Setter Property="Template" Value="{StaticResource ModernVerticalScrollBarTemplate}" />
-        <Style.Triggers>
-            <Trigger Property="Orientation" Value="Horizontal">
-                <Setter Property="Template" Value="{StaticResource ModernHorizontalScrollBarTemplate}" />
-            </Trigger>
-        </Style.Triggers>
+    <Style TargetType="Slider">
+        <Setter Property="Height" Value="20" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Slider">
+                    <Grid Margin="0,0,0,0" VerticalAlignment="Center">
+                        <Border Height="5"
+                                CornerRadius="2"
+                                Background="{DynamicResource SliderInactiveBrush}"
+                                VerticalAlignment="Center" />
+                        <Track x:Name="PART_Track"
+                               VerticalAlignment="Center"
+                               IsDirectionReversed="{TemplateBinding IsDirectionReversed}"
+                               Maximum="{TemplateBinding Maximum}"
+                               Minimum="{TemplateBinding Minimum}"
+                               Value="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=Value, Mode=TwoWay}">
+                            <Track.DecreaseRepeatButton>
+                                <RepeatButton Style="{StaticResource SliderTrackButtonStyle}"
+                                              Background="{DynamicResource SliderActiveBrush}" />
+                            </Track.DecreaseRepeatButton>
+                            <Track.Thumb>
+                                <Thumb Style="{StaticResource SliderThumbStyle}" />
+                            </Track.Thumb>
+                            <Track.IncreaseRepeatButton>
+                                <RepeatButton Style="{StaticResource SliderTrackButtonStyle}"
+                                              Background="Transparent" />
+                            </Track.IncreaseRepeatButton>
+                        </Track>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.55" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
 
     <Style x:Key="PrimaryButtonStyle" TargetType="Button">
@@ -144,6 +191,7 @@
                             Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="4"
                             SnapsToDevicePixels="True">
                         <ContentPresenter HorizontalAlignment="Center"
                                           VerticalAlignment="Center"
@@ -185,6 +233,7 @@
                             Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="4"
                             SnapsToDevicePixels="True">
                         <ContentPresenter HorizontalAlignment="Center"
                                           VerticalAlignment="Center"
@@ -219,6 +268,7 @@
                     <Border Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="4"
                             SnapsToDevicePixels="True">
                         <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                           VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
@@ -283,8 +333,10 @@
                                   SnapsToDevicePixels="True">
                                 <Border Background="#FFFFFF"
                                         BorderBrush="#D7DDE5"
-                                        BorderThickness="1" />
+                                        BorderThickness="1"
+                                        CornerRadius="4" />
                                 <ScrollViewer Margin="4"
+                                              Padding="0,0,1,0"
                                               SnapsToDevicePixels="True">
                                     <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained" />
                                 </ScrollViewer>

@@ -31,18 +31,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly Func<(bool Success, string StatusMessage)>? _applyHotkeysRegistration;
     private readonly Func<string, bool>? _applyTheme;
     private CancellationTokenSource? _hotkeyModifierWarningCts;
+    private CancellationTokenSource? _activeExternalReadCancellationTokenSource;
 
     private string _inputText = string.Empty;
     private string _statusMessage = "Select text in another app, then choose a read action.";
     private bool _isSpeaking;
+    private bool _isPaused;
     private bool _isExternalReadActive;
-    private bool _isManualReadSpeaking;
+    private ReadingProgressStage _externalReadStage = ReadingProgressStage.Idle;
+    private bool _isInputReadSpeaking;
     private bool _hasExternalFocusedWindow;
     private bool _suppressHotkeyAutoApply;
     private string _focusedWindowText = "Current app";
     private string _hotkeyModifierWarningMessage = string.Empty;
     private string _updateStageText = string.Empty;
     private string _updateStatusMessage = string.Empty;
+    private AppUpdateState _updateState = AppUpdateState.Idle;
     private bool _isUpdateVisible;
     private bool _isUpdateProgressVisible;
     private bool _isMandatoryUpdateAvailable;
@@ -101,6 +105,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ReadParagraphCommand = new AsyncCommand(ReadParagraphAsync, CanReadSelectedText);
         ReadDocumentCommand = new AsyncCommand(ReadDocumentAsync, CanReadSelectedText);
         StopCommand = new AsyncCommand(StopAsync, CanStop);
+        TogglePauseCommand = new AsyncCommand(TogglePauseAsync, CanPauseOrResume);
         ResetHotkeysCommand = new AsyncCommand(ResetHotkeysAsync, CanResetHotkeys);
     }
 
@@ -169,6 +174,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             _isUpdateVisible = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(TaskbarProgressState));
+            OnPropertyChanged(nameof(IsFooterUpdateCardVisible));
         }
     }
 
@@ -254,6 +260,43 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 
     public double TaskbarProgressValue => _updateProgressValue;
+
+    public bool IsFooterUpdateBannerVisible =>
+        _updateState is AppUpdateState.Downloading or AppUpdateState.Installing or AppUpdateState.Completed;
+
+    public bool IsFooterDefaultVisible => !IsFooterUpdateBannerVisible;
+
+    public bool IsUpdateInProgress => _updateState is AppUpdateState.Downloading or AppUpdateState.Installing;
+
+    public bool IsFooterStaticInfoVisible => !IsUpdateInProgress;
+
+    public bool IsFooterUpdateCardVisible => IsUpdateVisible;
+
+    public bool IsFooterUpdateProgressVisible =>
+        _updateState is AppUpdateState.Downloading or AppUpdateState.Installing && _isUpdateProgressVisible;
+
+    public string FooterUpdateBannerText
+    {
+        get
+        {
+            if (_updateState == AppUpdateState.Completed)
+            {
+                return "Updated - takes effect after restarting RightSpeak.";
+            }
+
+            if (string.IsNullOrWhiteSpace(_updateStatusMessage))
+            {
+                return _updateStageText;
+            }
+
+            if (string.IsNullOrWhiteSpace(_updateStageText))
+            {
+                return _updateStatusMessage;
+            }
+
+            return $"{_updateStageText}: {_updateStatusMessage}";
+        }
+    }
 
     public TaskbarItemProgressState TaskbarProgressState
     {
@@ -403,10 +446,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    public bool IsManualReadSpeaking => _isManualReadSpeaking;
-    public bool IsManualReadEnabled => !_isExternalReadActive;
-    public bool IsExternalReadsEnabled => !_isManualReadSpeaking && !_isSpeaking && _hasExternalFocusedWindow;
-    public bool IsStopEnabled => _isSpeaking || _isManualReadSpeaking || _isExternalReadActive;
+    public bool IsInputReadSpeaking => _isInputReadSpeaking;
+    public bool IsPaused => _isPaused;
+    public bool IsInputReadEnabled => !_isExternalReadActive;
+    public bool IsExternalReadSectionEnabled => !_isInputReadSpeaking;
+    public bool IsExternalReadsEnabled => !_isInputReadSpeaking && !_isSpeaking && _hasExternalFocusedWindow;
+    public bool IsVoiceModelButtonsEnabled => !_isInputReadSpeaking && !_isExternalReadActive;
+    public bool IsStopEnabled => _isSpeaking || _isInputReadSpeaking || _isExternalReadActive;
+    public bool IsPauseEnabled => _isInputReadSpeaking || _externalReadStage == ReadingProgressStage.Speaking;
+    public string PauseButtonText => _isPaused ? "Resume" : "Pause";
+    public string ExternalReadActionText => IsExternalReadCancellationStage ? "Cancel" : "Stop";
     public bool IsAnalyzeAvailable => _isAnalyzeAvailable;
 
     public ICommand ReadCommand { get; }
@@ -416,6 +465,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ICommand ReadParagraphCommand { get; }
     public ICommand ReadDocumentCommand { get; }
     public ICommand StopCommand { get; }
+    public ICommand TogglePauseCommand { get; }
     public ICommand ResetHotkeysCommand { get; }
 
     public void SetStatusMessage(string message)
@@ -450,6 +500,25 @@ public sealed class MainViewModel : INotifyPropertyChanged
         UpdateCommandStates();
     }
 
+    public void SetExternalReadFocusStatus()
+    {
+        if (_isExternalReadActive)
+        {
+            return;
+        }
+
+        SetExternalReadStage(ReadingProgressStage.Focusing);
+        StatusMessage = "Switching to target app...";
+    }
+
+    public void ClearExternalReadFocusStatus()
+    {
+        if (!_isExternalReadActive && _externalReadStage == ReadingProgressStage.Focusing)
+        {
+            SetExternalReadStage(ReadingProgressStage.Idle);
+        }
+    }
+
     public void RefreshVoiceOptions()
     {
         _readingService.RefreshAvailableVoices();
@@ -467,15 +536,21 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
+        _updateState = snapshot.State;
         UpdateStageText = snapshot.StageText;
         UpdateStatusMessage = snapshot.StatusMessage;
         IsMandatoryUpdateAvailable = snapshot.IsMandatoryUpdateAvailable;
-        IsUpdateProgressVisible = snapshot.IsProgressVisible;
+        IsUpdateProgressVisible = snapshot.IsProgressVisible &&
+                                  snapshot.State is AppUpdateState.Downloading or AppUpdateState.Installing;
         UpdateProgressPercent = snapshot.ProgressValue * 100d;
-        IsUpdateVisible =
-            !string.IsNullOrWhiteSpace(snapshot.StageText) ||
-            !string.IsNullOrWhiteSpace(snapshot.StatusMessage) ||
-            snapshot.IsProgressVisible;
+        IsUpdateVisible = snapshot.State is AppUpdateState.Downloading or AppUpdateState.Installing or AppUpdateState.Completed;
+        OnPropertyChanged(nameof(IsFooterUpdateBannerVisible));
+        OnPropertyChanged(nameof(IsFooterDefaultVisible));
+        OnPropertyChanged(nameof(IsFooterUpdateProgressVisible));
+        OnPropertyChanged(nameof(FooterUpdateBannerText));
+        OnPropertyChanged(nameof(IsUpdateInProgress));
+        OnPropertyChanged(nameof(IsFooterStaticInfoVisible));
+        OnPropertyChanged(nameof(IsFooterUpdateCardVisible));
     }
 
     private static string FormatFocusedWindowTitle(string title)
@@ -535,6 +610,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return IsStopEnabled;
     }
 
+    private bool CanPauseOrResume()
+    {
+        return IsPauseEnabled;
+    }
+
     private async Task ReadAsync()
     {
         var text = InputText?.Trim();
@@ -544,7 +624,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
-        SetManualReadSpeaking(true);
+        SetInputReadSpeaking(true);
         SetSpeakingState(true);
         UpdateCommandStates();
         StatusMessage = "Reading text...";
@@ -556,8 +636,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
         finally
         {
+            SetPausedState(false);
             SetSpeakingState(false);
-            SetManualReadSpeaking(false);
+            SetInputReadSpeaking(false);
             UpdateCommandStates();
         }
     }
@@ -565,29 +646,59 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private Task ClearAsync()
     {
         InputText = string.Empty;
-        StatusMessage = "Manual text cleared.";
+        StatusMessage = "Input text cleared.";
         return Task.CompletedTask;
     }
 
     private async Task StopAsync()
     {
         var operationId = Guid.NewGuid().ToString("N");
+        var cancelStage = _externalReadStage;
         AppDiagnostics.Info(
             "stop_command_started",
             new Dictionary<string, string?>
             {
                 ["operationId"] = operationId,
                 ["isSpeaking"] = _isSpeaking.ToString(),
-                ["isManualReadSpeaking"] = _isManualReadSpeaking.ToString(),
+                ["isInputReadSpeaking"] = _isInputReadSpeaking.ToString(),
                 ["isExternalReadActive"] = _isExternalReadActive.ToString(),
+                ["externalReadStage"] = _externalReadStage.ToString(),
                 ["hasExternalFocusedWindow"] = _hasExternalFocusedWindow.ToString(),
                 ["focusedWindowText"] = _focusedWindowText
             });
+
+        if (_activeExternalReadCancellationTokenSource is not null && IsExternalReadCancellationStage)
+        {
+            StatusMessage = "Canceling...";
+            _activeExternalReadCancellationTokenSource.Cancel();
+            SetPausedState(false);
+            AppDiagnostics.Info(
+                "external_read_cancel_requested",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["cancel_stage"] = GetCancelStageTag(cancelStage)
+                });
+            return;
+        }
+
+        _activeExternalReadCancellationTokenSource?.Cancel();
+        if (_isExternalReadActive)
+        {
+            AppDiagnostics.Info(
+                "external_read_stop_requested",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["cancel_stage"] = GetCancelStageTag(cancelStage)
+                });
+        }
 
         StatusMessage = "Stopping...";
         try
         {
             var result = await _readingService.StopAsync().ConfigureAwait(true);
+            SetPausedState(false);
             StatusMessage = result.Message;
             AppDiagnostics.Info(
                 "stop_command_completed",
@@ -596,6 +707,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     ["operationId"] = operationId,
                     ["success"] = result.Success.ToString(),
                     ["cancelled"] = result.WasCancelled.ToString(),
+                    ["cancel_stage"] = GetCancelStageTag(cancelStage),
                     ["message"] = result.Message
                 });
         }
@@ -612,10 +724,37 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    private async Task TogglePauseAsync()
+    {
+        if (_isPaused)
+        {
+            var resumeResult = await _readingService.ResumeAsync().ConfigureAwait(true);
+            if (resumeResult.Success)
+            {
+                SetPausedState(false);
+            }
+
+            StatusMessage = resumeResult.Message;
+            return;
+        }
+
+        var pauseResult = await _readingService.PauseAsync().ConfigureAwait(true);
+        if (pauseResult.Success)
+        {
+            SetPausedState(true);
+        }
+
+        StatusMessage = pauseResult.Message;
+    }
+
     private async Task ReadSelectedTextAsync()
     {
         var operationId = Guid.NewGuid().ToString("N");
         var stopwatch = Stopwatch.StartNew();
+        var cancellationTokenSource = BeginExternalReadOperation(
+            ReadingProgressStage.Retrieving,
+            "Capturing selected text...");
+        var progress = new Progress<ReadingProgressUpdate>(ApplyExternalReadProgress);
         AppDiagnostics.Info(
             "selected_workflow_command_started",
             new Dictionary<string, string?>
@@ -624,18 +763,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ["trigger"] = "read_selected_text_command",
                 ["hasExternalFocusedWindow"] = _hasExternalFocusedWindow.ToString(),
                 ["focusedWindowText"] = _focusedWindowText,
-                ["isManualReadSpeaking"] = _isManualReadSpeaking.ToString(),
+                ["isInputReadSpeaking"] = _isInputReadSpeaking.ToString(),
                 ["isSpeaking"] = _isSpeaking.ToString()
             });
 
-        SetExternalReadActive(true);
-        SetSpeakingState(true);
-        UpdateCommandStates();
-        StatusMessage = "Retrieving selected text...";
-
         try
         {
-            var result = await _readingService.ReadSelectedTextAsync().ConfigureAwait(true);
+            var result = await _readingService
+                .ReadSelectedTextAsync(cancellationTokenSource.Token, progress)
+                .ConfigureAwait(true);
             StatusMessage = result.Message;
             stopwatch.Stop();
             AppDiagnostics.Info(
@@ -652,14 +788,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
         catch (OperationCanceledException)
         {
             stopwatch.Stop();
+            var cancelStage = _externalReadStage;
+            StatusMessage = HasExternalReadReachedSpeech(cancelStage)
+                ? "Reading stopped."
+                : "Canceled before reading started.";
             AppDiagnostics.Warn(
                 "selected_workflow_command_cancelled",
                 new Dictionary<string, string?>
                 {
                     ["operationId"] = operationId,
+                    ["cancel_stage"] = GetCancelStageTag(cancelStage),
                     ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
                 });
-            throw;
         }
         catch (Exception ex)
         {
@@ -676,6 +816,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
         finally
         {
+            EndExternalReadOperation(cancellationTokenSource);
+            SetPausedState(false);
             SetSpeakingState(false);
             SetExternalReadActive(false);
             UpdateCommandStates();
@@ -700,7 +842,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ["trigger"] = "read_paragraph_command",
                 ["hasExternalFocusedWindow"] = _hasExternalFocusedWindow.ToString(),
                 ["focusedWindowText"] = _focusedWindowText,
-                ["isManualReadSpeaking"] = _isManualReadSpeaking.ToString(),
+                ["isInputReadSpeaking"] = _isInputReadSpeaking.ToString(),
                 ["isSpeaking"] = _isSpeaking.ToString()
             });
 
@@ -752,6 +894,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
         finally
         {
+            SetPausedState(false);
             SetSpeakingState(false);
             SetExternalReadActive(false);
             UpdateCommandStates();
@@ -762,6 +905,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         var operationId = Guid.NewGuid().ToString("N");
         var stopwatch = Stopwatch.StartNew();
+        var cancellationTokenSource = BeginExternalReadOperation(
+            ReadingProgressStage.Retrieving,
+            "Capturing document text...");
+        var progress = new Progress<ReadingProgressUpdate>(ApplyExternalReadProgress);
         AppDiagnostics.Info(
             "document_workflow_command_started",
             new Dictionary<string, string?>
@@ -770,18 +917,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ["trigger"] = "read_document_command",
                 ["hasExternalFocusedWindow"] = _hasExternalFocusedWindow.ToString(),
                 ["focusedWindowText"] = _focusedWindowText,
-                ["isManualReadSpeaking"] = _isManualReadSpeaking.ToString(),
+                ["isInputReadSpeaking"] = _isInputReadSpeaking.ToString(),
                 ["isSpeaking"] = _isSpeaking.ToString()
             });
 
-        SetExternalReadActive(true);
-        SetSpeakingState(true);
-        UpdateCommandStates();
-        StatusMessage = "Retrieving document text...";
-
         try
         {
-            var result = await _readingService.ReadDocumentAsync().ConfigureAwait(true);
+            var result = await _readingService
+                .ReadDocumentAsync(cancellationTokenSource.Token, progress)
+                .ConfigureAwait(true);
             StatusMessage = result.Message;
             stopwatch.Stop();
             AppDiagnostics.Info(
@@ -798,14 +942,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
         catch (OperationCanceledException)
         {
             stopwatch.Stop();
+            var cancelStage = _externalReadStage;
+            StatusMessage = HasExternalReadReachedSpeech(cancelStage)
+                ? "Reading stopped."
+                : "Canceled before reading started.";
             AppDiagnostics.Warn(
                 "document_workflow_command_cancelled",
                 new Dictionary<string, string?>
                 {
                     ["operationId"] = operationId,
+                    ["cancel_stage"] = GetCancelStageTag(cancelStage),
                     ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
                 });
-            throw;
         }
         catch (Exception ex)
         {
@@ -822,6 +970,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
         finally
         {
+            EndExternalReadOperation(cancellationTokenSource);
+            SetPausedState(false);
             SetSpeakingState(false);
             SetExternalReadActive(false);
             UpdateCommandStates();
@@ -841,6 +991,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
         finally
         {
+            SetPausedState(false);
             SetSpeakingState(false);
             UpdateCommandStates();
         }
@@ -888,6 +1039,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (StopCommand is AsyncCommand stopCommand)
         {
             stopCommand.RaiseCanExecuteChanged();
+        }
+
+        if (TogglePauseCommand is AsyncCommand togglePauseCommand)
+        {
+            togglePauseCommand.RaiseCanExecuteChanged();
         }
 
         if (ReadSelectedTextCommand is AsyncCommand readSelectedCommand)
@@ -1121,6 +1277,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             return;
         }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Warn(
+                "hotkey_modifier_warning_clear_failed",
+                new Dictionary<string, string?>
+                {
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+            return;
+        }
 
         if (_hotkeyModifierWarningCts is null || _hotkeyModifierWarningCts.Token != cancellationToken)
         {
@@ -1154,17 +1321,95 @@ public sealed class MainViewModel : INotifyPropertyChanged
         };
     }
 
-    private void SetManualReadSpeaking(bool isSpeaking)
+    private bool IsExternalReadCancellationStage =>
+        _isExternalReadActive &&
+        _externalReadStage is ReadingProgressStage.Focusing or ReadingProgressStage.Retrieving or ReadingProgressStage.PreparingAudio;
+
+    private CancellationTokenSource BeginExternalReadOperation(ReadingProgressStage initialStage, string statusMessage)
     {
-        if (_isManualReadSpeaking == isSpeaking)
+        _activeExternalReadCancellationTokenSource?.Dispose();
+        var cancellationTokenSource = new CancellationTokenSource();
+        _activeExternalReadCancellationTokenSource = cancellationTokenSource;
+
+        SetExternalReadActive(true);
+        SetSpeakingState(true);
+        SetExternalReadStage(initialStage);
+        StatusMessage = statusMessage;
+        UpdateCommandStates();
+        return cancellationTokenSource;
+    }
+
+    private void EndExternalReadOperation(CancellationTokenSource cancellationTokenSource)
+    {
+        if (ReferenceEquals(_activeExternalReadCancellationTokenSource, cancellationTokenSource))
+        {
+            _activeExternalReadCancellationTokenSource = null;
+        }
+
+        cancellationTokenSource.Dispose();
+        SetExternalReadStage(ReadingProgressStage.Idle);
+    }
+
+    private void ApplyExternalReadProgress(ReadingProgressUpdate update)
+    {
+        if (_activeExternalReadCancellationTokenSource is null)
         {
             return;
         }
 
-        _isManualReadSpeaking = isSpeaking;
-        OnPropertyChanged(nameof(IsManualReadSpeaking));
+        SetExternalReadStage(update.Stage);
+        if (!string.IsNullOrWhiteSpace(update.Message))
+        {
+            StatusMessage = update.Message;
+        }
+
+        UpdateCommandStates();
+    }
+
+    private void SetExternalReadStage(ReadingProgressStage stage)
+    {
+        if (_externalReadStage == stage)
+        {
+            return;
+        }
+
+        _externalReadStage = stage;
+        OnPropertyChanged(nameof(IsPauseEnabled));
+        OnPropertyChanged(nameof(ExternalReadActionText));
+    }
+
+    private static bool HasExternalReadReachedSpeech(ReadingProgressStage stage)
+    {
+        return stage == ReadingProgressStage.Speaking;
+    }
+
+    private static string GetCancelStageTag(ReadingProgressStage stage)
+    {
+        return stage switch
+        {
+            ReadingProgressStage.Focusing => "focusing",
+            ReadingProgressStage.Retrieving => "retrieval",
+            ReadingProgressStage.PreparingAudio => "preparing_audio",
+            ReadingProgressStage.Speaking => "speech",
+            _ => "idle"
+        };
+    }
+
+    private void SetInputReadSpeaking(bool isSpeaking)
+    {
+        if (_isInputReadSpeaking == isSpeaking)
+        {
+            return;
+        }
+
+        _isInputReadSpeaking = isSpeaking;
+        OnPropertyChanged(nameof(IsInputReadSpeaking));
+        OnPropertyChanged(nameof(IsExternalReadSectionEnabled));
         OnPropertyChanged(nameof(IsExternalReadsEnabled));
+        OnPropertyChanged(nameof(IsVoiceModelButtonsEnabled));
         OnPropertyChanged(nameof(IsStopEnabled));
+        OnPropertyChanged(nameof(IsPauseEnabled));
+        OnPropertyChanged(nameof(ExternalReadActionText));
     }
 
     private void SetSpeakingState(bool isSpeaking)
@@ -1177,6 +1422,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _isSpeaking = isSpeaking;
         OnPropertyChanged(nameof(IsExternalReadsEnabled));
         OnPropertyChanged(nameof(IsStopEnabled));
+        OnPropertyChanged(nameof(IsPauseEnabled));
+        OnPropertyChanged(nameof(ExternalReadActionText));
+    }
+
+    private void SetPausedState(bool isPaused)
+    {
+        if (_isPaused == isPaused)
+        {
+            return;
+        }
+
+        _isPaused = isPaused;
+        OnPropertyChanged(nameof(IsPaused));
+        OnPropertyChanged(nameof(PauseButtonText));
     }
 
     private void SetExternalReadActive(bool isActive)
@@ -1187,8 +1446,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
 
         _isExternalReadActive = isActive;
-        OnPropertyChanged(nameof(IsManualReadEnabled));
+        OnPropertyChanged(nameof(IsInputReadEnabled));
+        OnPropertyChanged(nameof(IsVoiceModelButtonsEnabled));
         OnPropertyChanged(nameof(IsStopEnabled));
+        OnPropertyChanged(nameof(IsPauseEnabled));
+        OnPropertyChanged(nameof(ExternalReadActionText));
     }
 
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null)

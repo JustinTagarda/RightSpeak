@@ -20,10 +20,12 @@ public partial class MainWindow : Window
     private readonly Func<nint>? _getExternalWindowHandle;
     private readonly Func<string, string, Func<Task>, Task>? _executeFocusSensitiveReadAsync;
     private readonly Func<VoiceManagerViewModel>? _createVoiceManagerViewModel;
+    private readonly IAppSettingsService? _appSettingsService;
     private readonly uint _activateWindowMessageId;
     private readonly bool _placeOnStartup;
     private readonly string _appVersionText;
     private bool _hasPlacedOnStartup;
+    private bool _suspendTopmostPersistence;
     private HwndSource? _windowSource;
 
     public MainWindow(
@@ -33,6 +35,7 @@ public partial class MainWindow : Window
         Func<nint>? getExternalWindowHandle,
         uint activateWindowMessageId,
         string appVersionText,
+        IAppSettingsService? appSettingsService = null,
         Func<string, string, Func<Task>, Task>? executeFocusSensitiveReadAsync = null,
         Func<VoiceManagerViewModel>? createVoiceManagerViewModel = null,
         bool placeOnStartup = false)
@@ -46,8 +49,10 @@ public partial class MainWindow : Window
         _activateWindowMessageId = activateWindowMessageId;
         _placeOnStartup = placeOnStartup;
         _createVoiceManagerViewModel = createVoiceManagerViewModel;
+        _appSettingsService = appSettingsService;
         _appVersionText = appVersionText;
         DataContext = _viewModel;
+        ApplyPersistedAlwaysOnTop();
 
         SourceInitialized += OnSourceInitialized;
         Loaded += OnLoaded;
@@ -58,32 +63,59 @@ public partial class MainWindow : Window
 
     private void OnSourceInitialized(object? sender, System.EventArgs e)
     {
-        var handle = new WindowInteropHelper(this).Handle;
-        _windowSource = HwndSource.FromHwnd(handle);
-        _windowSource?.AddHook(WndProc);
-
-        var registered = _hotkeyService.RegisterHotkeys(handle);
-        _hotkeyService.ReadSelectedHotkeyPressed += OnReadSelectedHotkeyPressed;
-        _hotkeyService.ReadDocumentHotkeyPressed += OnReadDocumentHotkeyPressed;
-        _hotkeyService.StopHotkeyPressed += OnStopHotkeyPressed;
-
-        if (!registered)
+        try
         {
-            _viewModel.SetStatusMessage(_hotkeyService.LastRegistrationStatus);
+            var handle = new WindowInteropHelper(this).Handle;
+            _windowSource = HwndSource.FromHwnd(handle);
+            _windowSource?.AddHook(WndProc);
+
+            var registered = _hotkeyService.RegisterHotkeys(handle);
+            _hotkeyService.ReadSelectedHotkeyPressed += OnReadSelectedHotkeyPressed;
+            _hotkeyService.ReadDocumentHotkeyPressed += OnReadDocumentHotkeyPressed;
+            _hotkeyService.StopHotkeyPressed += OnStopHotkeyPressed;
+
+            if (!registered)
+            {
+                _viewModel.SetStatusMessage(_hotkeyService.LastRegistrationStatus);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "main_window_source_initialized_failed",
+                new Dictionary<string, string?>
+                {
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+            _viewModel.SetStatusMessage("Hotkeys couldn't be initialized right now.");
         }
     }
 
     private void OnClosed(object? sender, System.EventArgs e)
     {
-        Loaded -= OnLoaded;
-        _hotkeyService.ReadSelectedHotkeyPressed -= OnReadSelectedHotkeyPressed;
-        _hotkeyService.ReadDocumentHotkeyPressed -= OnReadDocumentHotkeyPressed;
-        _hotkeyService.StopHotkeyPressed -= OnStopHotkeyPressed;
-        _hotkeyService.Dispose();
-        if (_windowSource is not null)
+        try
         {
-            _windowSource.RemoveHook(WndProc);
-            _windowSource = null;
+            Loaded -= OnLoaded;
+            _hotkeyService.ReadSelectedHotkeyPressed -= OnReadSelectedHotkeyPressed;
+            _hotkeyService.ReadDocumentHotkeyPressed -= OnReadDocumentHotkeyPressed;
+            _hotkeyService.StopHotkeyPressed -= OnStopHotkeyPressed;
+            _hotkeyService.Dispose();
+            if (_windowSource is not null)
+            {
+                _windowSource.RemoveHook(WndProc);
+                _windowSource = null;
+            }
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "main_window_closed_cleanup_failed",
+                new Dictionary<string, string?>
+                {
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
         }
     }
 
@@ -188,21 +220,26 @@ public partial class MainWindow : Window
 
     private async void OnReadSelectedHotkeyPressed(object? sender, System.EventArgs e)
     {
-        if (!_viewModel.ReadSelectedTextCommand.CanExecute(null))
+        _ = sender;
+        _ = e;
+        await RunSafeUiAsync("read_selected_hotkey", async () =>
         {
-            return;
-        }
+            if (!_viewModel.ReadSelectedTextCommand.CanExecute(null))
+            {
+                return;
+            }
 
-        if (_executeFocusSensitiveReadAsync is not null)
-        {
-            await _executeFocusSensitiveReadAsync(
-                "read_selected_text_external",
-                "hotkey",
-                ExecuteReadSelectedTextAsync).ConfigureAwait(true);
-            return;
-        }
+            if (_executeFocusSensitiveReadAsync is not null)
+            {
+                await _executeFocusSensitiveReadAsync(
+                    "read_selected_text_external",
+                    "hotkey",
+                    ExecuteReadSelectedTextAsync).ConfigureAwait(true);
+                return;
+            }
 
-        await ExecuteReadSelectedTextAsync().ConfigureAwait(true);
+            await ExecuteReadSelectedTextAsync().ConfigureAwait(true);
+        }).ConfigureAwait(true);
     }
 
     private void OnStopHotkeyPressed(object? sender, System.EventArgs e)
@@ -222,43 +259,53 @@ public partial class MainWindow : Window
 
     private async void OnReadDocumentHotkeyPressed(object? sender, System.EventArgs e)
     {
-        if (!_viewModel.ReadDocumentCommand.CanExecute(null))
+        _ = sender;
+        _ = e;
+        await RunSafeUiAsync("read_document_hotkey", async () =>
         {
-            return;
-        }
+            if (!_viewModel.ReadDocumentCommand.CanExecute(null))
+            {
+                return;
+            }
 
-        if (_executeFocusSensitiveReadAsync is not null)
-        {
-            await _executeFocusSensitiveReadAsync(
-                "read_document_external",
-                "hotkey",
-                ExecuteReadDocumentAsync).ConfigureAwait(true);
-            return;
-        }
+            if (_executeFocusSensitiveReadAsync is not null)
+            {
+                await _executeFocusSensitiveReadAsync(
+                    "read_document_external",
+                    "hotkey",
+                    ExecuteReadDocumentAsync).ConfigureAwait(true);
+                return;
+            }
 
-        await ExecuteReadDocumentAsync().ConfigureAwait(true);
+            await ExecuteReadDocumentAsync().ConfigureAwait(true);
+        }).ConfigureAwait(true);
     }
 
     private async void OnReadSelectedTextButtonClick(object sender, RoutedEventArgs e)
     {
-        if (!_viewModel.ReadSelectedTextCommand.CanExecute(null))
+        _ = sender;
+        _ = e;
+        await RunSafeUiAsync("read_selected_button", async () =>
         {
-            return;
-        }
+            if (!_viewModel.ReadSelectedTextCommand.CanExecute(null))
+            {
+                return;
+            }
 
-        if (_executeFocusSensitiveReadAsync is not null)
-        {
-            await _executeFocusSensitiveReadAsync(
-                "read_selected_text_external",
-                "main_window_button",
-                ExecuteReadSelectedTextAsync).ConfigureAwait(true);
-            return;
-        }
+            if (_executeFocusSensitiveReadAsync is not null)
+            {
+                await _executeFocusSensitiveReadAsync(
+                    "read_selected_text_external",
+                    "main_window_button",
+                    ExecuteReadSelectedTextAsync).ConfigureAwait(true);
+                return;
+            }
 
-        await ExecuteReadSelectedTextAsync().ConfigureAwait(true);
+            await ExecuteReadSelectedTextAsync().ConfigureAwait(true);
+        }).ConfigureAwait(true);
     }
 
-    private void OnManualStopButtonClick(object sender, RoutedEventArgs e)
+    private void OnInputStopButtonClick(object sender, RoutedEventArgs e)
     {
         if (_viewModel.StopCommand.CanExecute(null))
         {
@@ -266,11 +313,18 @@ public partial class MainWindow : Window
                 "stop_command_dispatch_requested",
                 new Dictionary<string, string?>
                 {
-                    ["trigger"] = "manual_stop_button",
+                    ["trigger"] = "input_stop_button",
                     ["source"] = nameof(MainWindow)
                 });
             _viewModel.StopCommand.Execute(null);
         }
+    }
+
+    private void OnInputPauseButtonClick(object sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        ExecutePauseToggle("input_pause_button");
     }
 
     private void OnExternalStopButtonClick(object sender, RoutedEventArgs e)
@@ -288,8 +342,33 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnExternalPauseButtonClick(object sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        ExecutePauseToggle("external_pause_button");
+    }
+
+    private void ExecutePauseToggle(string trigger)
+    {
+        if (!_viewModel.TogglePauseCommand.CanExecute(null))
+        {
+            return;
+        }
+
+        AppDiagnostics.Info(
+            "pause_toggle_dispatch_requested",
+            new Dictionary<string, string?>
+            {
+                ["trigger"] = trigger,
+                ["source"] = nameof(MainWindow)
+            });
+        _viewModel.TogglePauseCommand.Execute(null);
+    }
+
     private void OnManageVoicesButtonClick(object sender, RoutedEventArgs e)
     {
+        _ = sender;
         if (_createVoiceManagerViewModel is null)
         {
             _viewModel.SetStatusMessage("Voice manager isn't available right now.");
@@ -297,52 +376,65 @@ public partial class MainWindow : Window
         }
 
         var window = new VoiceManagerWindow(_createVoiceManagerViewModel());
+        window.Owner = this;
+        window.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        window.Topmost = Topmost;
         window.ShowDialog();
     }
 
     private async void OnReadDocumentButtonClick(object sender, RoutedEventArgs e)
     {
-        if (!_viewModel.ReadDocumentCommand.CanExecute(null))
+        _ = sender;
+        _ = e;
+        await RunSafeUiAsync("read_document_button", async () =>
         {
-            return;
-        }
+            if (!_viewModel.ReadDocumentCommand.CanExecute(null))
+            {
+                return;
+            }
 
-        if (_executeFocusSensitiveReadAsync is not null)
-        {
-            await _executeFocusSensitiveReadAsync(
-                "read_document_external",
-                "main_window_button",
-                ExecuteReadDocumentAsync).ConfigureAwait(true);
-            return;
-        }
+            if (_executeFocusSensitiveReadAsync is not null)
+            {
+                await _executeFocusSensitiveReadAsync(
+                    "read_document_external",
+                    "main_window_button",
+                    ExecuteReadDocumentAsync).ConfigureAwait(true);
+                return;
+            }
 
-        await ExecuteReadDocumentAsync().ConfigureAwait(true);
+            await ExecuteReadDocumentAsync().ConfigureAwait(true);
+        }).ConfigureAwait(true);
     }
 
     private async void OnAnalyzeExternalAppButtonClick(object sender, RoutedEventArgs e)
     {
-        if (!BuildConfiguration.IsDebugDiagnosticsEnabled)
+        _ = sender;
+        _ = e;
+        await RunSafeUiAsync("analyze_external_app_button", async () =>
         {
-            _viewModel.SetStatusMessage("Analyze is available in debug builds only.");
-            return;
-        }
+            if (!BuildConfiguration.IsDebugDiagnosticsEnabled)
+            {
+                _viewModel.SetStatusMessage("Analyze is available in debug builds only.");
+                return;
+            }
 
-        if (!_viewModel.IsExternalReadsEnabled)
-        {
-            _viewModel.SetStatusMessage("No external app is focused. Click the target app first, then try Analyze.");
-            return;
-        }
+            if (!_viewModel.IsExternalReadsEnabled)
+            {
+                _viewModel.SetStatusMessage("No external app is focused. Click the target app first, then try Analyze.");
+                return;
+            }
 
-        if (_executeFocusSensitiveReadAsync is not null)
-        {
-            await _executeFocusSensitiveReadAsync(
-                "analyze_external_app",
-                "main_window_button",
-                ExecuteAnalyzeExternalAppAsync).ConfigureAwait(true);
-            return;
-        }
+            if (_executeFocusSensitiveReadAsync is not null)
+            {
+                await _executeFocusSensitiveReadAsync(
+                    "analyze_external_app",
+                    "main_window_button",
+                    ExecuteAnalyzeExternalAppAsync).ConfigureAwait(true);
+                return;
+            }
 
-        await ExecuteAnalyzeExternalAppAsync().ConfigureAwait(true);
+            await ExecuteAnalyzeExternalAppAsync().ConfigureAwait(true);
+        }).ConfigureAwait(true);
     }
 
     private nint WndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
@@ -369,10 +461,51 @@ public partial class MainWindow : Window
         EnsureVisibleOnScreen();
 
         // Force z-order activation even when other apps are currently foreground.
-        Topmost = true;
-        Activate();
-        Focus();
-        Topmost = false;
+        var keepTopmost = Topmost;
+        _suspendTopmostPersistence = true;
+        try
+        {
+            Topmost = true;
+            Activate();
+            Focus();
+            Topmost = keepTopmost;
+        }
+        finally
+        {
+            _suspendTopmostPersistence = false;
+        }
+    }
+
+    private void AlwaysOnTopCheckBox_OnCheckedChanged(object sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (_suspendTopmostPersistence || _appSettingsService is null)
+        {
+            return;
+        }
+
+        _appSettingsService.Current.AlwaysOnTop = Topmost;
+        _appSettingsService.Save();
+    }
+
+    private void ApplyPersistedAlwaysOnTop()
+    {
+        if (_appSettingsService is null)
+        {
+            return;
+        }
+
+        _suspendTopmostPersistence = true;
+        try
+        {
+            Topmost = _appSettingsService.Current.AlwaysOnTop;
+        }
+        finally
+        {
+            _suspendTopmostPersistence = false;
+        }
     }
 
     private Task ExecuteReadSelectedTextAsync()
@@ -525,6 +658,46 @@ public partial class MainWindow : Window
 
         command.Execute(null);
         return Task.CompletedTask;
+    }
+
+    private async Task RunSafeUiAsync(string operationName, Func<Task> operation)
+    {
+        try
+        {
+            await operation().ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            AppDiagnostics.Info(
+                "main_window_operation_canceled",
+                new Dictionary<string, string?>
+                {
+                    ["operationName"] = operationName
+                });
+        }
+        catch (ObjectDisposedException ex)
+        {
+            AppDiagnostics.Warn(
+                "main_window_operation_ignored_disposed",
+                new Dictionary<string, string?>
+                {
+                    ["operationName"] = operationName,
+                    ["objectName"] = ex.ObjectName,
+                    ["message"] = ex.Message
+                });
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "main_window_operation_failed",
+                new Dictionary<string, string?>
+                {
+                    ["operationName"] = operationName,
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+            _viewModel.SetStatusMessage("Something went wrong. Please try again.");
+        }
     }
 
     private void PositionBottomRightOnActiveWorkingArea()

@@ -44,7 +44,7 @@ internal sealed class WindowsNeuralSpeechService : ISpeechService, IPrefetchSpee
     private readonly string? _defaultVoiceName;
     private CancellationTokenSource? _playbackCancellationTokenSource;
     private CancellationTokenSource? _prefetchCancellationTokenSource;
-    private SoundPlayer? _currentSoundPlayer;
+    private ContinuousWaveOutPlayer? _currentContinuousPlaybackPlayer;
     private bool _disposed;
 
     public WindowsNeuralSpeechService()
@@ -63,6 +63,7 @@ internal sealed class WindowsNeuralSpeechService : ISpeechService, IPrefetchSpee
     }
 
     public bool IsSpeaking { get; private set; }
+    public bool IsPaused { get; private set; }
 
     public IReadOnlyList<SpeechVoice> GetInstalledVoices()
     {
@@ -94,6 +95,7 @@ internal sealed class WindowsNeuralSpeechService : ISpeechService, IPrefetchSpee
             playbackCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             _playbackCancellationTokenSource = playbackCancellationTokenSource;
             IsSpeaking = true;
+            IsPaused = false;
         }
         finally
         {
@@ -123,13 +125,10 @@ internal sealed class WindowsNeuralSpeechService : ISpeechService, IPrefetchSpee
             await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
             try
             {
-                _currentSoundPlayer?.Stop();
-                _currentSoundPlayer?.Dispose();
-                _currentSoundPlayer = null;
-
                 _playbackCancellationTokenSource?.Dispose();
                 _playbackCancellationTokenSource = null;
                 IsSpeaking = false;
+                IsPaused = false;
             }
             finally
             {
@@ -153,6 +152,7 @@ internal sealed class WindowsNeuralSpeechService : ISpeechService, IPrefetchSpee
 
             CancelPlaybackUnsafe();
             IsSpeaking = false;
+            IsPaused = false;
             return SpeechResult.Stopped();
         }
         catch (Exception ex)
@@ -180,8 +180,8 @@ internal sealed class WindowsNeuralSpeechService : ISpeechService, IPrefetchSpee
 
         _playbackCancellationTokenSource?.Cancel();
         CancelPrefetchUnsafe();
-        _currentSoundPlayer?.Stop();
-        _currentSoundPlayer?.Dispose();
+        _currentContinuousPlaybackPlayer?.Stop();
+        _currentContinuousPlaybackPlayer?.Dispose();
         _playbackCancellationTokenSource?.Dispose();
         _gate.Dispose();
         _disposed = true;
@@ -294,6 +294,7 @@ internal sealed class WindowsNeuralSpeechService : ISpeechService, IPrefetchSpee
             playbackCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             _playbackCancellationTokenSource = playbackCancellationTokenSource;
             IsSpeaking = true;
+            IsPaused = false;
         }
         finally
         {
@@ -323,13 +324,10 @@ internal sealed class WindowsNeuralSpeechService : ISpeechService, IPrefetchSpee
             await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
             try
             {
-                _currentSoundPlayer?.Stop();
-                _currentSoundPlayer?.Dispose();
-                _currentSoundPlayer = null;
-
                 _playbackCancellationTokenSource?.Dispose();
                 _playbackCancellationTokenSource = null;
                 IsSpeaking = false;
+                IsPaused = false;
             }
             finally
             {
@@ -350,25 +348,41 @@ internal sealed class WindowsNeuralSpeechService : ISpeechService, IPrefetchSpee
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var playbackDuration = SpeechAudioHelper.GetPlaybackDuration(waveBytes);
-        using var waveStream = new MemoryStream(waveBytes, writable: false);
-        using var soundPlayer = new SoundPlayer(waveStream);
-        soundPlayer.Load();
+        _ = options;
+        var playbackId = Guid.NewGuid().ToString("N");
+        using var playbackPlayer = new ContinuousWaveOutPlayer(playbackId);
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             ThrowIfDisposed();
-            _currentSoundPlayer = soundPlayer;
+            _currentContinuousPlaybackPlayer = playbackPlayer;
         }
         finally
         {
             _gate.Release();
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
-        soundPlayer.Play();
-        await Task.Delay(playbackDuration, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await playbackPlayer.EnqueueWaveAsync(waveBytes, cancellationToken).ConfigureAwait(false);
+            await playbackPlayer.DrainAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                if (ReferenceEquals(_currentContinuousPlaybackPlayer, playbackPlayer))
+                {
+                    _currentContinuousPlaybackPlayer = null;
+                }
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
 
         return SpeechResult.Completed();
     }
@@ -435,7 +449,7 @@ internal sealed class WindowsNeuralSpeechService : ISpeechService, IPrefetchSpee
     private void CancelPlaybackUnsafe()
     {
         _playbackCancellationTokenSource?.Cancel();
-        _currentSoundPlayer?.Stop();
+        _currentContinuousPlaybackPlayer?.Stop();
     }
 
     private void CancelPrefetchUnsafe()
@@ -461,5 +475,57 @@ internal sealed class WindowsNeuralSpeechService : ISpeechService, IPrefetchSpee
     private static double MapSpeechRate(int rate)
     {
         return Math.Clamp(rate / 10d, -1d, 2d);
+    }
+
+    public async Task<SpeechResult> PauseAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            if (!IsSpeaking)
+            {
+                return SpeechResult.Completed("Speech is already stopped.");
+            }
+
+            if (IsPaused)
+            {
+                return SpeechResult.Completed("Reading is already paused.");
+            }
+
+            _currentContinuousPlaybackPlayer?.Pause();
+            IsPaused = true;
+            return SpeechResult.Completed("Reading paused.");
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<SpeechResult> ResumeAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            if (!IsSpeaking)
+            {
+                return SpeechResult.Failed("Nothing is paused right now.");
+            }
+
+            if (!IsPaused)
+            {
+                return SpeechResult.Completed("Reading is already playing.");
+            }
+
+            _currentContinuousPlaybackPlayer?.Resume();
+            IsPaused = false;
+            return SpeechResult.Completed("Reading resumed.");
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 }

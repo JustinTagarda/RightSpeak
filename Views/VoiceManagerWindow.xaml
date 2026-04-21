@@ -3,9 +3,9 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="Manage Voices"
-        Width="620"
+        Width="500"
         Height="520"
-        MinWidth="560"
+        MinWidth="500"
         MinHeight="440"
         WindowStartupLocation="CenterScreen"
         ShowInTaskbar="True"
@@ -100,6 +100,7 @@
             <Setter Property="Margin" Value="0" />
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
+
     </Window.Resources>
 
     <Border BorderBrush="{DynamicResource WindowBorderBrush}"
@@ -121,8 +122,6 @@
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
                     <TextBlock Grid.Column="0"
@@ -132,32 +131,6 @@
                                Text="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=Title}" />
 
                     <Button Grid.Column="1"
-                            Style="{StaticResource TitleBarButtonStyle}"
-                            Click="MinimizeButton_OnClick"
-                            ToolTip="Minimize">
-                        <TextBlock FontFamily="Segoe MDL2 Assets"
-                                   FontSize="10"
-                                   Text="&#xE921;" />
-                    </Button>
-                    <Button Grid.Column="2"
-                            Style="{StaticResource TitleBarButtonStyle}"
-                            Click="MaximizeRestoreButton_OnClick"
-                            ToolTip="Maximize or restore">
-                        <TextBlock FontFamily="Segoe MDL2 Assets"
-                                   FontSize="10">
-                            <TextBlock.Style>
-                                <Style TargetType="TextBlock">
-                                    <Setter Property="Text" Value="&#xE922;" />
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=WindowState}" Value="Maximized">
-                                            <Setter Property="Text" Value="&#xE923;" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
-                    </Button>
-                    <Button Grid.Column="3"
                             Style="{StaticResource TitleBarCloseButtonStyle}"
                             Click="CloseButton_OnClick"
                             ToolTip="Close">
@@ -203,7 +176,8 @@
                 </Grid>
 
                 <Grid Grid.Row="1"
-                      Margin="0,0,0,10">
+                      Margin="0,0,0,10"
+                      IsEnabled="{Binding IsOperationIdle}">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="12" />
@@ -230,6 +204,9 @@
                 </Grid>
 
                 <ScrollViewer Grid.Row="2"
+                              Padding="0,0,1,0"
+                              IsEnabled="{Binding IsOperationIdle}"
+                              HorizontalScrollBarVisibility="Disabled"
                               VerticalScrollBarVisibility="Auto">
                     <ItemsControl ItemsSource="{Binding Voices}">
                         <ItemsControl.ItemTemplate>
@@ -244,7 +221,6 @@
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
 
                                         <StackPanel Grid.Row="0"
@@ -256,24 +232,16 @@
                                                        Style="{StaticResource SubtleTextStyle}" />
                                         </StackPanel>
 
-                                        <TextBlock Grid.Row="0"
-                                                   Grid.Column="1"
-                                                   MinWidth="108"
-                                                   Margin="0,0,10,0"
-                                                   VerticalAlignment="Center"
-                                                   Text="{Binding StatusText}"
-                                                   Style="{StaticResource SubtleTextStyle}" />
-
                                         <StackPanel Grid.Row="0"
-                                                    Grid.Column="2"
+                                                    Grid.Column="1"
                                                     VerticalAlignment="Center"
                                                     Orientation="Horizontal">
-                                            <Button Width="82"
+                                            <Button MinWidth="70"
                                                     Margin="0,0,8,0"
                                                     Content="{Binding PrimaryActionText}"
                                                     Command="{Binding InstallOrUpdateCommand}"
                                                     Style="{StaticResource VoiceActionButtonStyle}" />
-                                            <Button Width="74"
+                                            <Button MinWidth="70"
                                                     Content="Remove"
                                                     Command="{Binding RemoveCommand}"
                                                     Style="{StaticResource VoiceActionButtonStyle}" />
@@ -310,6 +278,17 @@
                                Foreground="{DynamicResource StatusForegroundBrush}"
                                TextWrapping="Wrap" />
                 </Border>
+            </Grid>
+
+            <Grid Grid.Row="1"
+                  Panel.ZIndex="10"
+                  IsHitTestVisible="False"
+                  Visibility="{Binding IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <ProgressBar Width="220"
+                             Height="8"
+                             IsIndeterminate="True"
+                             HorizontalAlignment="Center"
+                             VerticalAlignment="Center" />
             </Grid>
         </Grid>
     </Border>

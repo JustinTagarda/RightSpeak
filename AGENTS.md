@@ -14,7 +14,6 @@ Its core job is simple:
 - read it aloud with minimal friction
 
 Planned expansion may include:
-- paragraph reading
 - reading queue or history
 - optional AI-assisted features later
 
@@ -54,11 +53,11 @@ Preferred in-project folders:
 - `Resources/`
 
 Current implementation target:
-1. manual text reading, selected-text reading, and document reading
+1. manual text reading, paragraph reading, selected-text reading, and document reading
 2. local text-to-speech with Windows OneCore, `System.Speech`, and Piper support
 3. voice selection, speed control, and Piper voice downloads
-4. global hotkeys and tray quick actions
-5. theme switching and background Store update handling
+4. pause/resume playback, global hotkeys, and tray quick actions
+5. theme switching, always-on-top window behavior, and background Store update handling
 6. browser-specific retrieval hardening, especially PDF fallback paths
 7. package/build support for Microsoft Store submission
 
@@ -91,7 +90,7 @@ Target design:
 The abstraction must leave room for:
 - voice selection
 - rate adjustment
-- stop or pause support
+- stop support
 - queueing
 - future engine replacement
 
@@ -128,7 +127,6 @@ Preferred acquisition order:
 
 Preferred interfaces:
 - `ISelectedTextProvider`
-- `IParagraphTextProvider`
 - `IDocumentTextProvider`
 
 Potential concrete classes:
@@ -144,18 +142,6 @@ Validated tray-focus reliability note:
   - `NotifyIconOverflowWindow`
   - `TopLevelWindowForOverflowXamlIsland`
 - Do not remove these exclusions or relax tray focus-restore verification without rerunning manual Notepad selected-text tests for both hotkey and tray flows.
-
-Validated paragraph-read reliability notes:
-- A confirmed regression occurred where `Read Paragraph` in Notepad failed with `UI Automation returned an empty paragraph` when only a caret/insertion point existed.
-- The fix depends on paragraph retrieval expanding insertion ranges to enclosing units (`Paragraph`, then `Line`) when direct selection text is empty.
-- A confirmed regression also occurred where clicking `Read Paragraph`/`Read Document` from the app window shifted focus to RightSpeak and caused retrieval against the wrong window.
-- The fix depends on routing these UI-triggered external reads through the same focus-sensitive restore path used by tray reads.
-- Do not simplify paragraph retrieval back to raw `GetSelection().GetText(-1)` only, and do not bypass focus restore for UI paragraph/document triggers without rerunning manual Notepad tests for tray and app-button paths.
-
-Validated production-scope note for paragraph read:
-- For the current production-facing surface, `Read Paragraph` is intentionally excluded from UI, tray menu, and global hotkey registration because browser behavior remains inconsistent.
-- Paragraph retrieval code remains in the codebase for diagnostics and future hardening, but it is not a user-facing command in the current production surface.
-- Do not re-enable `Read Paragraph` in UI/tray/hotkeys without explicit instruction and a fresh cross-app reliability pass.
 
 Validated selected-text scope reliability notes:
 - A confirmed regression occurred in VS Code where selected-text read spoke unrelated editor content (for example text with many slashes) because focused-control retrieval accepted full control value/document text instead of true selection.

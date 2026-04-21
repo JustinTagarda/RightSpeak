@@ -216,22 +216,32 @@ internal sealed class StoreAppUpdateService : IAppUpdateService
             _downloadRetryScheduled = true;
         }
 
-        _ = Task.Run(async () =>
-        {
-            try
+        _ = RunBackgroundUpdateTaskAsync(
+            async () =>
             {
-                await Task.Delay(_downloadRetryDelay, cancellationToken).ConfigureAwait(false);
-                lock (_sync)
+                try
                 {
-                    _downloadRetryScheduled = false;
-                }
+                    await Task.Delay(_downloadRetryDelay, cancellationToken).ConfigureAwait(false);
+                    lock (_sync)
+                    {
+                        _downloadRetryScheduled = false;
+                    }
 
-                await CheckForUpdatesAsync(isRetry: true, cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-            }
-        }, cancellationToken);
+                    await CheckForUpdatesAsync(isRetry: true, cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        lock (_sync)
+                        {
+                            _downloadRetryScheduled = false;
+                        }
+                    }
+                }
+            },
+            "store_update_download_retry",
+            cancellationToken);
     }
 
     private void QueueInstallRetry(bool hasMandatoryUpdate, string? availableVersion, CancellationToken cancellationToken)
@@ -246,61 +256,61 @@ internal sealed class StoreAppUpdateService : IAppUpdateService
             _installRetryScheduled = true;
         }
 
-        _ = Task.Run(async () =>
-        {
-            try
+        _ = RunBackgroundUpdateTaskAsync(
+            async () =>
             {
-                while (!cancellationToken.IsCancellationRequested)
+                try
                 {
-                    if (_isAppBusy())
+                    while (!cancellationToken.IsCancellationRequested)
                     {
+                        if (_isAppBusy())
+                        {
+                            Publish(BuildDeferredSnapshot(
+                                hasMandatoryUpdate,
+                                availableVersion,
+                                "Update is downloaded and will install after reading finishes."));
+                            await Task.Delay(_installRetryDelay, cancellationToken).ConfigureAwait(false);
+                            continue;
+                        }
+
+                        await Task.Delay(_installIdleDelay, cancellationToken).ConfigureAwait(false);
+                        if (_isAppBusy())
+                        {
+                            continue;
+                        }
+
+                        var installResult = await InstallUpdatesAsync(hasMandatoryUpdate, availableVersion, cancellationToken).ConfigureAwait(false);
+                        if (installResult.OverallState == StoreUpdateOperationState.Completed)
+                        {
+                            Publish(new AppUpdateSnapshot(
+                                AppUpdateState.Completed,
+                                "Update installed",
+                                "Latest package is installed. Restart RightSpeak to run the new version.",
+                                hasMandatoryUpdate,
+                                isProgressVisible: false,
+                                progressValue: 1d,
+                                installedVersion: _versionProvider.InstalledVersion,
+                                availableVersion: availableVersion));
+                            break;
+                        }
+
                         Publish(BuildDeferredSnapshot(
                             hasMandatoryUpdate,
                             availableVersion,
-                            "Update is downloaded and will install after reading finishes."));
+                            BuildRetryMessage("install", installResult.OverallState, hasMandatoryUpdate)));
                         await Task.Delay(_installRetryDelay, cancellationToken).ConfigureAwait(false);
-                        continue;
                     }
-
-                    await Task.Delay(_installIdleDelay, cancellationToken).ConfigureAwait(false);
-                    if (_isAppBusy())
-                    {
-                        continue;
-                    }
-
-                    var installResult = await InstallUpdatesAsync(hasMandatoryUpdate, availableVersion, cancellationToken).ConfigureAwait(false);
-                    if (installResult.OverallState == StoreUpdateOperationState.Completed)
-                    {
-                        Publish(new AppUpdateSnapshot(
-                            AppUpdateState.Completed,
-                            "Update installed",
-                            "Latest package is installed. Restart RightSpeak to run the new version.",
-                            hasMandatoryUpdate,
-                            isProgressVisible: false,
-                            progressValue: 1d,
-                            installedVersion: _versionProvider.InstalledVersion,
-                            availableVersion: availableVersion));
-                        break;
-                    }
-
-                    Publish(BuildDeferredSnapshot(
-                        hasMandatoryUpdate,
-                        availableVersion,
-                        BuildRetryMessage("install", installResult.OverallState, hasMandatoryUpdate)));
-                    await Task.Delay(_installRetryDelay, cancellationToken).ConfigureAwait(false);
                 }
-            }
-            catch (OperationCanceledException)
-            {
-            }
-            finally
-            {
-                lock (_sync)
+                finally
                 {
-                    _installRetryScheduled = false;
+                    lock (_sync)
+                    {
+                        _installRetryScheduled = false;
+                    }
                 }
-            }
-        }, cancellationToken);
+            },
+            "store_update_install_retry",
+            cancellationToken);
     }
 
     private async Task<StoreUpdateOperationResult> InstallUpdatesAsync(
@@ -363,7 +373,46 @@ internal sealed class StoreAppUpdateService : IAppUpdateService
     private void Publish(AppUpdateSnapshot snapshot)
     {
         _currentSnapshot = snapshot;
-        SnapshotChanged?.Invoke(this, snapshot);
+        try
+        {
+            SnapshotChanged?.Invoke(this, snapshot);
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "store_update_snapshot_handler_failed",
+                new Dictionary<string, string?>
+                {
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message,
+                    ["state"] = snapshot.State.ToString()
+                });
+        }
+    }
+
+    private static async Task RunBackgroundUpdateTaskAsync(
+        Func<Task> operation,
+        string operationName,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Run(operation, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "store_update_background_task_failed",
+                new Dictionary<string, string?>
+                {
+                    ["operationName"] = operationName,
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+        }
     }
 
     private static string BuildRetryMessage(string phase, StoreUpdateOperationState resultState, bool hasMandatoryUpdate)

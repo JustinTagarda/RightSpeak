@@ -7,5 +7,7 @@ namespace RightSpeak.Services;
 
 public interface IVoiceCatalogService
 {
-    Task<IReadOnlyList<DownloadableVoice>> GetDownloadableVoicesAsync(CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<DownloadableVoice>> GetDownloadableVoicesAsync(
+        bool forceRefresh = false,
+        CancellationToken cancellationToken = default);
 }

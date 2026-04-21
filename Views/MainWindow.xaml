@@ -4,10 +4,10 @@
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="RightSpeak"
         Icon="/Resources/Icons/RightSpeak.ico"
-        Width="600"
+        Width="550"
         WindowStartupLocation="Manual"
         Height="700"
-        MinWidth="600"
+        MinWidth="550"
         MinHeight="700"
         WindowStyle="None"
         ResizeMode="CanResize"
@@ -75,7 +75,8 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="Root"
-                                Background="{TemplateBinding Background}">
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="4">
                             <ContentPresenter HorizontalAlignment="Center"
                                               VerticalAlignment="Center" />
                         </Border>
@@ -97,7 +98,8 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="Root"
-                                Background="{TemplateBinding Background}">
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="4">
                             <ContentPresenter HorizontalAlignment="Center"
                                               VerticalAlignment="Center" />
                         </Border>
@@ -111,6 +113,151 @@
                                 <Setter Property="Foreground" Value="{DynamicResource TitleBarCloseButtonForegroundBrush}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="TitleBarCompactCheckBoxStyle" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{DynamicResource FooterTextBrush}" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Grid VerticalAlignment="Center" SnapsToDevicePixels="True">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="14" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <Border x:Name="Box"
+                                    Grid.Column="0"
+                                    Width="14"
+                                    Height="14"
+                                    CornerRadius="3"
+                                    BorderThickness="1"
+                                    BorderBrush="{DynamicResource InputBorderBrush}"
+                                    Background="{DynamicResource InputBackgroundBrush}" />
+
+                            <Path x:Name="CheckMark"
+                                  Grid.Column="0"
+                                  Width="8"
+                                  Height="8"
+                                  Stretch="Uniform"
+                                  StrokeThickness="1.5"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round"
+                                  StrokeLineJoin="Round"
+                                  Stroke="{DynamicResource InputForegroundBrush}"
+                                  Data="M 1 4 L 3.2 6.2 L 7 2.2"
+                                  Visibility="Collapsed"
+                                  HorizontalAlignment="Center"
+                                  VerticalAlignment="Center" />
+
+                            <ContentPresenter Grid.Column="1"
+                                              Margin="8,0,0,0"
+                                              VerticalAlignment="Center"
+                                              RecognizesAccessKey="True" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="CheckMark" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.6" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="FooterThemeComboBoxToggleButtonStyle" TargetType="ToggleButton">
+            <Setter Property="OverridesDefaultStyle" Value="True" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="FooterThemeComboBoxStyle" TargetType="ComboBox">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{DynamicResource FooterTextBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource FooterTextBrush}" />
+            <Setter Property="BorderThickness" Value="0.25" />
+            <Setter Property="Padding" Value="6,2,8,2" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+            <Setter Property="OverridesDefaultStyle" Value="True" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}">
+                            <ToggleButton x:Name="ToggleButton"
+                                          Style="{StaticResource FooterThemeComboBoxToggleButtonStyle}"
+                                          Focusable="False"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                          ClickMode="Press"
+                                          HorizontalContentAlignment="Stretch"
+                                          VerticalContentAlignment="Stretch"
+                                          Background="{TemplateBinding Background}"
+                                          BorderBrush="{TemplateBinding BorderBrush}"
+                                          BorderThickness="{TemplateBinding BorderThickness}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0"
+                                               Margin="{TemplateBinding Padding}"
+                                               VerticalAlignment="Center"
+                                               HorizontalAlignment="Left"
+                                               Text="{TemplateBinding SelectionBoxItem}"
+                                               Foreground="{TemplateBinding Foreground}"
+                                               TextAlignment="Left"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <Path Grid.Column="1"
+                                          Margin="0,0,8,0"
+                                          VerticalAlignment="Center"
+                                          HorizontalAlignment="Right"
+                                          Fill="{TemplateBinding Foreground}"
+                                          Data="M 0 0 L 4 4 L 8 0 Z" />
+                                </Grid>
+                            </ToggleButton>
+                            <Popup x:Name="Popup"
+                                   Placement="Bottom"
+                                   AllowsTransparency="True"
+                                   Focusable="False"
+                                   IsOpen="{TemplateBinding IsDropDownOpen}"
+                                   PopupAnimation="Slide">
+                                <Grid MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                                      MaxHeight="{TemplateBinding MaxDropDownHeight}"
+                                      SnapsToDevicePixels="True">
+                                    <Border Background="{DynamicResource CardBackgroundBrush}"
+                                            BorderBrush="{DynamicResource FooterTextBrush}"
+                                            BorderThickness="0.25"
+                                            CornerRadius="4" />
+                                    <ScrollViewer Margin="4"
+                                                  Padding="0,0,1,0"
+                                                  SnapsToDevicePixels="True">
+                                        <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained" />
+                                    </ScrollViewer>
+                                </Grid>
+                            </Popup>
+                        </Grid>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -147,10 +294,19 @@
                            Margin="10,0,8,0"
                            VerticalAlignment="Center"
                            Source="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=Icon}" />
-                    <TextBlock Grid.Column="1"
-                               VerticalAlignment="Center"
-                               Foreground="{DynamicResource TitleBarForegroundBrush}"
-                               Text="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=Title}" />
+                    <StackPanel Grid.Column="1"
+                                Orientation="Horizontal"
+                                VerticalAlignment="Center">
+                        <TextBlock VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TitleBarForegroundBrush}"
+                                   Text="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=Title}" />
+                        <CheckBox Margin="20,0,0,0"
+                                  Style="{StaticResource TitleBarCompactCheckBoxStyle}"
+                                  Content="Always on top"
+                                  Checked="AlwaysOnTopCheckBox_OnCheckedChanged"
+                                  Unchecked="AlwaysOnTopCheckBox_OnCheckedChanged"
+                                  IsChecked="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=Topmost, Mode=TwoWay}" />
+                    </StackPanel>
 
                     <Button Grid.Column="2"
                             Style="{StaticResource TitleBarButtonStyle}"
@@ -190,7 +346,7 @@
             </Border>
 
             <Grid Grid.Row="1"
-                  Margin="12,6,12,12">
+                  Margin="12,6,12,9">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -203,7 +359,7 @@
         <Border Grid.Row="1"
                 Style="{StaticResource CardStyle}"
                 Margin="0,0,0,6"
-                IsEnabled="{Binding IsManualReadEnabled}">
+                IsEnabled="{Binding IsInputReadEnabled}">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -213,7 +369,7 @@
                 </Grid.RowDefinitions>
 
                 <TextBlock Grid.Row="0"
-                           Text="Manual Read"
+                           Text="Read Input"
                            Style="{StaticResource SectionHeaderStyle}" />
                 <TextBlock Grid.Row="1"
                            Text="Type or paste text below, then start reading."
@@ -232,18 +388,23 @@
                             Margin="0,8,0,0"
                             Orientation="Horizontal"
                             HorizontalAlignment="Left">
-                    <Button Width="146"
-                            Content="Read Manual Text"
+                    <Button MinWidth="85"
+                            Content="Read"
                             Command="{Binding ReadCommand}"
                             Style="{DynamicResource PrimaryButtonStyle}" />
-                    <Button Width="78"
+                    <Button MinWidth="85"
                             Content="Clear"
                             Command="{Binding ClearCommand}"
                             Style="{DynamicResource SecondaryButtonStyle}" />
-                    <Button Width="88"
+                    <Button MinWidth="85"
+                            Content="{Binding PauseButtonText}"
+                            IsEnabled="{Binding IsPauseEnabled}"
+                            Click="OnInputPauseButtonClick"
+                            Style="{DynamicResource SecondaryButtonStyle}" />
+                    <Button MinWidth="85"
                             Content="Stop"
                             IsEnabled="{Binding IsStopEnabled}"
-                            Click="OnManualStopButtonClick"
+                            Click="OnInputStopButtonClick"
                             Style="{DynamicResource SecondaryButtonStyle}" />
                 </StackPanel>
             </Grid>
@@ -251,7 +412,8 @@
 
         <Border Grid.Row="2"
                 Style="{StaticResource CardStyle}"
-                Margin="0,0,0,6">
+                Margin="0,0,0,6"
+                IsEnabled="{Binding IsExternalReadSectionEnabled}">
             <StackPanel>
                 <Grid Margin="0,0,0,2">
                     <Grid.ColumnDefinitions>
@@ -275,20 +437,26 @@
 
                 <StackPanel Orientation="Horizontal"
                             HorizontalAlignment="Left">
-                    <Button Width="154"
+                    <Button MinWidth="85"
                             Margin="0,0,8,0"
                             Content="Read Selected Text"
                             IsEnabled="{Binding IsExternalReadsEnabled}"
                             Click="OnReadSelectedTextButtonClick"
                             Style="{DynamicResource SecondaryButtonStyle}" />
-                    <Button Width="128"
+                    <Button MinWidth="85"
                             Margin="0,0,8,0"
                             Content="Read Document"
                             IsEnabled="{Binding IsExternalReadsEnabled}"
                             Click="OnReadDocumentButtonClick"
                             Style="{DynamicResource SecondaryButtonStyle}" />
-                    <Button Width="128"
-                            Content="Stop Reading"
+                    <Button MinWidth="85"
+                            Margin="0,0,8,0"
+                            Content="{Binding PauseButtonText}"
+                            IsEnabled="{Binding IsPauseEnabled}"
+                            Click="OnExternalPauseButtonClick"
+                            Style="{DynamicResource SecondaryButtonStyle}" />
+                    <Button MinWidth="85"
+                            Content="{Binding ExternalReadActionText}"
                             IsEnabled="{Binding IsStopEnabled}"
                             Click="OnExternalStopButtonClick"
                             Style="{DynamicResource SecondaryButtonStyle}" />
@@ -304,45 +472,24 @@
             </Grid.ColumnDefinitions>
 
             <Grid Grid.Column="0"
-                  Margin="0,0,8,0">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="*" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-
-                    <Border Grid.Row="0"
-                            Margin="0,0,0,8"
-                            Style="{StaticResource CardStyle}">
+                  Margin="0,0,4,0">
+                <Border Style="{StaticResource CardStyle}">
                         <StackPanel>
                             <TextBlock Text="Voice model"
                                        Style="{StaticResource SectionHeaderStyle}" />
 
-                            <Grid Margin="0,0,0,8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-
-                                <ComboBox Height="30"
-                                          VerticalContentAlignment="Center"
-                                          Style="{DynamicResource InputComboBoxStyle}"
-                                          ItemsSource="{Binding VoiceOptions}"
-                                          SelectedItem="{Binding SelectedVoiceOption, UpdateSourceTrigger=PropertyChanged}" />
-                                <Button Grid.Column="1"
-                                        Width="84"
-                                        Margin="8,0,0,0"
-                                        Content="Manage"
-                                        Click="OnManageVoicesButtonClick"
-                                        Style="{DynamicResource SecondaryButtonStyle}" />
-                            </Grid>
+                            <ComboBox Height="30"
+                                      Margin="0,0,0,8"
+                                      VerticalContentAlignment="Center"
+                                      Style="{DynamicResource InputComboBoxStyle}"
+                                      ItemsSource="{Binding VoiceOptions}"
+                                      SelectedItem="{Binding SelectedVoiceOption, UpdateSourceTrigger=PropertyChanged}" />
 
                             <Grid Margin="0,0,0,8"
                                   VerticalAlignment="Center">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
 
@@ -351,6 +498,7 @@
                                            Margin="0,0,8,0" />
                                 <Slider Grid.Column="1"
                                         VerticalAlignment="Center"
+                                        Margin="0,0,8,0"
                                         Minimum="-10"
                                         Maximum="10"
                                         TickFrequency="1"
@@ -358,46 +506,31 @@
                                         Value="{Binding SpeechRate, UpdateSourceTrigger=PropertyChanged}" />
                                 <TextBlock Grid.Column="2"
                                            Width="24"
-                                           Margin="8,0,0,0"
                                            VerticalAlignment="Center"
                                            TextAlignment="Center"
                                            Text="{Binding SpeechRate}" />
-                                <Button Grid.Column="3"
-                                        Width="84"
-                                        Margin="8,0,0,0"
+                            </Grid>
+
+                            <StackPanel Orientation="Horizontal"
+                                        IsEnabled="{Binding IsVoiceModelButtonsEnabled}"
+                                        HorizontalAlignment="Left">
+                                <Button Width="84"
+                                        Margin="0,0,8,0"
+                                        Content="Manage"
+                                        Click="OnManageVoicesButtonClick"
+                                        Style="{DynamicResource SecondaryButtonStyle}" />
+                                <Button Width="84"
                                         Content="Preview"
                                         Command="{Binding PreviewVoiceCommand}"
                                         Style="{DynamicResource SecondaryButtonStyle}" />
-                            </Grid>
+                            </StackPanel>
                         </StackPanel>
-                    </Border>
-
-                    <Border Grid.Row="1"
-                            Style="{StaticResource CardStyle}">
-                        <Grid HorizontalAlignment="Left">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-
-                            <TextBlock VerticalAlignment="Center"
-                                       Text="Theme"
-                                       Margin="0,0,8,0" />
-                            <ComboBox Grid.Column="1"
-                                      Width="144"
-                                      Height="30"
-                                      VerticalContentAlignment="Center"
-                                      Style="{DynamicResource InputComboBoxStyle}"
-                                      ItemsSource="{Binding ThemeOptions}"
-                                      SelectedItem="{Binding SelectedTheme, UpdateSourceTrigger=PropertyChanged}" />
-                        </Grid>
-                    </Border>
-                </Grid>
+                </Border>
             </Grid>
 
             <Border Grid.Column="1"
                     Style="{StaticResource CardStyle}"
-                    Margin="8,0,0,0">
+                    Margin="4,0,0,0">
                 <StackPanel>
                     <Grid Margin="0,0,0,8">
                         <Grid.ColumnDefinitions>
@@ -530,25 +663,27 @@
         </Border>
 
         <Grid Grid.Row="5"
-              Margin="2,10,2,0"
-              VerticalAlignment="Bottom">
+              Margin="2,13,2,0"
+              VerticalAlignment="Center">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Text="© 2026 JustinTagarda. All rights reserved."
                        Foreground="{DynamicResource FooterTextBrush}"
                        FontSize="12"
-                       VerticalAlignment="Bottom" />
+                       VerticalAlignment="Center"
+                       Visibility="{Binding IsFooterStaticInfoVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <Border Grid.Column="1"
                     Margin="18,0"
                     Padding="10,4"
-                    VerticalAlignment="Bottom"
+                    VerticalAlignment="Center"
                     Background="{DynamicResource CardBackgroundBrush}"
                     BorderBrush="{DynamicResource CardBorderBrush}"
                     BorderThickness="1"
-                    Visibility="{Binding IsUpdateVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    Visibility="{Binding IsFooterUpdateCardVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
                 <StackPanel Width="210">
                     <TextBlock Text="{Binding UpdateStageText}"
                                FontSize="11"
@@ -568,11 +703,30 @@
                                  Visibility="{Binding IsUpdateProgressVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
                 </StackPanel>
             </Border>
-            <TextBlock Grid.Column="2"
+            <StackPanel Grid.Column="2"
+                        Orientation="Horizontal"
+                        VerticalAlignment="Center"
+                        Margin="0,0,10,0"
+                        Visibility="{Binding IsFooterStaticInfoVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <TextBlock Text="Theme"
+                           Foreground="{DynamicResource FooterTextBrush}"
+                           FontSize="12"
+                           VerticalAlignment="Center"
+                           Margin="0,0,6,0" />
+                <ComboBox Height="24"
+                          Padding="4,0"
+                          HorizontalAlignment="Left"
+                          VerticalAlignment="Center"
+                          VerticalContentAlignment="Center"
+                          Style="{StaticResource FooterThemeComboBoxStyle}"
+                          ItemsSource="{Binding ThemeOptions}"
+                          SelectedItem="{Binding SelectedTheme, UpdateSourceTrigger=PropertyChanged}" />
+            </StackPanel>
+            <TextBlock Grid.Column="3"
                        Text="{Binding AppVersionText, RelativeSource={RelativeSource AncestorType=Window}}"
                        Foreground="{DynamicResource FooterTextBrush}"
                        FontSize="12"
-                       VerticalAlignment="Bottom"
+                       VerticalAlignment="Center"
                        HorizontalAlignment="Right" />
         </Grid>
             </Grid>

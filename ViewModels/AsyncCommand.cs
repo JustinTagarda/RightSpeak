@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Windows.Input;
+using RightSpeak.Services;
 
 namespace RightSpeak.ViewModels;
 
@@ -20,12 +22,55 @@ public sealed class AsyncCommand : ICommand
 
     public bool CanExecute(object? parameter)
     {
-        return !_isExecuting && (_canExecute?.Invoke() ?? true);
+        if (_isExecuting)
+        {
+            return false;
+        }
+
+        try
+        {
+            return _canExecute?.Invoke() ?? true;
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "async_command_can_execute_failed",
+                new Dictionary<string, string?>
+                {
+                    ["commandType"] = GetType().FullName,
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+            return false;
+        }
     }
 
     public async void Execute(object? parameter)
     {
-        await ExecuteCoreAsync(parameter).ConfigureAwait(true);
+        try
+        {
+            await ExecuteCoreAsync(parameter).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            AppDiagnostics.Info(
+                "async_command_execute_canceled",
+                new Dictionary<string, string?>
+                {
+                    ["commandType"] = GetType().FullName
+                });
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "async_command_execute_failed",
+                new Dictionary<string, string?>
+                {
+                    ["commandType"] = GetType().FullName,
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+        }
     }
 
     public Task ExecuteAsync(object? parameter = null)
@@ -55,6 +100,20 @@ public sealed class AsyncCommand : ICommand
 
     public void RaiseCanExecuteChanged()
     {
-        CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+        try
+        {
+            CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "async_command_can_execute_changed_failed",
+                new Dictionary<string, string?>
+                {
+                    ["commandType"] = GetType().FullName,
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+        }
     }
 }

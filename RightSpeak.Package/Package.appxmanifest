@@ -9,7 +9,7 @@
   <Identity
     Name="JustinTagardaSoftware.RightSpeak"
     Publisher="CN=68EC506E-4B5E-416B-93E8-BA707CA3BE0F"
-    Version="1.0.0.0" />
+    Version="1.0.1.0" />
 
   <Properties>
     <DisplayName>RightSpeak</DisplayName>

@@ -40,7 +40,9 @@ public sealed class PiperVoiceCatalogService : IVoiceCatalogService
         _optionsResolver = optionsResolver ?? throw new ArgumentNullException(nameof(optionsResolver));
     }
 
-    public async Task<IReadOnlyList<DownloadableVoice>> GetDownloadableVoicesAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<DownloadableVoice>> GetDownloadableVoicesAsync(
+        bool forceRefresh = false,
+        CancellationToken cancellationToken = default)
     {
         var operationId = Guid.NewGuid().ToString("N");
         var stopwatch = Stopwatch.StartNew();
@@ -57,7 +59,12 @@ public sealed class PiperVoiceCatalogService : IVoiceCatalogService
         var approvedLicenses = new HashSet<string>(options.ApprovedLicenses ?? new(), StringComparer.OrdinalIgnoreCase);
         var denylist = LoadDenylist(options.VoiceDenylistPath);
 
-        if (TryLoadCache(options, availableVersion, out var cachedVoices))
+        if (forceRefresh)
+        {
+            InvalidateCache();
+        }
+
+        if (!forceRefresh && TryLoadCache(options, availableVersion, out var cachedVoices))
         {
             var cachedResult = ApplyInstalledState(cachedVoices, availableVersion);
             stopwatch.Stop();
@@ -195,6 +202,22 @@ public sealed class PiperVoiceCatalogService : IVoiceCatalogService
                 ["excludedMissingMetadataCount"] = GetCount(exclusionCounts, "missing_metadata").ToString()
             });
         return result;
+    }
+
+    private void InvalidateCache()
+    {
+        try
+        {
+            var cachePath = BuildCachePath();
+            if (File.Exists(cachePath))
+            {
+                File.Delete(cachePath);
+            }
+        }
+        catch
+        {
+            // Best-effort cache invalidation; continue with fresh fetch attempt.
+        }
     }
 
     internal static PiperCatalogOptions LoadCatalogOptions()

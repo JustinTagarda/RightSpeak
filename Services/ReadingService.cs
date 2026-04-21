@@ -18,6 +18,8 @@ public sealed class ReadingService : IReadingService
     private const int ContinuationChunkTargetCharacters = 280;
     private const int ContinuationChunkMaxCharacters = 380;
     private const int TextRetrievalRetryDelayMilliseconds = 220;
+    private static readonly TimeSpan SelectedTextRetrievalTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan DocumentTextRetrievalTimeout = TimeSpan.FromSeconds(90);
     private readonly ISpeechService _speechService;
     private readonly ISelectedTextRetrievalService _selectedTextRetrievalService;
     private readonly IParagraphTextRetrievalService _paragraphTextRetrievalService;
@@ -42,6 +44,7 @@ public sealed class ReadingService : IReadingService
     }
 
     public bool IsReading => _speechService.IsSpeaking;
+    public bool IsPaused => _speechService.IsPaused;
     public IReadOnlyList<SpeechVoice> AvailableVoices => _availableVoices;
     public int SpeechRate
     {
@@ -105,7 +108,9 @@ public sealed class ReadingService : IReadingService
         return SpeakWithChunkingIfNeededAsync(text, cancellationToken);
     }
 
-    public async Task<SpeechResult> ReadSelectedTextAsync(CancellationToken cancellationToken = default)
+    public async Task<SpeechResult> ReadSelectedTextAsync(
+        CancellationToken cancellationToken = default,
+        IProgress<ReadingProgressUpdate>? progress = null)
     {
         var operationId = Guid.NewGuid().ToString("N");
         var readStopwatch = Stopwatch.StartNew();
@@ -118,11 +123,15 @@ public sealed class ReadingService : IReadingService
                 ["rate"] = _settingsService.Current.SpeechRate.ToString()
             });
 
+        progress?.Report(new ReadingProgressUpdate(ReadingProgressStage.Retrieving, "Capturing selected text..."));
+
         var retrievalStopwatch = Stopwatch.StartNew();
-        var retrievalAttempt = await RetrieveTextWithRetryAsync(
+        var retrievalAttempt = await RetrieveTextWithTimeoutAsync(
                 "selected",
                 operationId,
                 _selectedTextRetrievalService.RetrieveSelectedTextAsync,
+                SelectedTextRetrievalTimeout,
+                "Timed out capturing selected text.",
                 cancellationToken)
             .ConfigureAwait(false);
         var retrieval = retrievalAttempt.Result;
@@ -141,6 +150,7 @@ public sealed class ReadingService : IReadingService
                 ["elapsedMs"] = retrievalStopwatch.ElapsedMilliseconds.ToString()
             });
 
+        cancellationToken.ThrowIfCancellationRequested();
         if (!retrieval.Success || string.IsNullOrWhiteSpace(retrieval.Text))
         {
             readStopwatch.Stop();
@@ -153,11 +163,17 @@ public sealed class ReadingService : IReadingService
                     ["retried"] = retrievalAttempt.Retried.ToString(),
                     ["totalElapsedMs"] = readStopwatch.ElapsedMilliseconds.ToString()
                 });
-            return SpeechResult.Failed(BuildSelectedTextFailureMessage());
+            return SpeechResult.Failed(BuildSelectedTextFailureMessage(retrieval));
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
+        progress?.Report(new ReadingProgressUpdate(ReadingProgressStage.PreparingAudio, "Preparing speech..."));
+
+        cancellationToken.ThrowIfCancellationRequested();
         var chunkCount = EstimateSpeechChunkCount(retrieval.Text);
         var speechStopwatch = Stopwatch.StartNew();
+        cancellationToken.ThrowIfCancellationRequested();
+        progress?.Report(new ReadingProgressUpdate(ReadingProgressStage.Speaking, "Reading selected text..."));
         var speechResult = await SpeakWithChunkingIfNeededAsync(retrieval.Text, cancellationToken).ConfigureAwait(false);
         speechStopwatch.Stop();
         readStopwatch.Stop();
@@ -185,6 +201,16 @@ public sealed class ReadingService : IReadingService
     public Task<SpeechResult> StopAsync(CancellationToken cancellationToken = default)
     {
         return _speechService.StopAsync(cancellationToken);
+    }
+
+    public Task<SpeechResult> PauseAsync(CancellationToken cancellationToken = default)
+    {
+        return _speechService.PauseAsync(cancellationToken);
+    }
+
+    public Task<SpeechResult> ResumeAsync(CancellationToken cancellationToken = default)
+    {
+        return _speechService.ResumeAsync(cancellationToken);
     }
 
     public async Task<SpeechResult> ReadParagraphAsync(CancellationToken cancellationToken = default)
@@ -273,7 +299,9 @@ public sealed class ReadingService : IReadingService
         return SpeechResult.Completed(retrieval.Message);
     }
 
-    public async Task<SpeechResult> ReadDocumentAsync(CancellationToken cancellationToken = default)
+    public async Task<SpeechResult> ReadDocumentAsync(
+        CancellationToken cancellationToken = default,
+        IProgress<ReadingProgressUpdate>? progress = null)
     {
         var operationId = Guid.NewGuid().ToString("N");
         using var scope = AppDiagnostics.BeginScope(new Dictionary<string, string?>
@@ -293,11 +321,15 @@ public sealed class ReadingService : IReadingService
                 ["rate"] = _settingsService.Current.SpeechRate.ToString()
             });
 
+        progress?.Report(new ReadingProgressUpdate(ReadingProgressStage.Retrieving, "Capturing document text..."));
+
         var retrievalStopwatch = Stopwatch.StartNew();
-        var retrievalAttempt = await RetrieveTextWithRetryAsync(
+        var retrievalAttempt = await RetrieveTextWithTimeoutAsync(
                 "document",
                 operationId,
                 _documentTextRetrievalService.RetrieveDocumentTextAsync,
+                DocumentTextRetrievalTimeout,
+                "Timed out capturing document text.",
                 cancellationToken)
             .ConfigureAwait(false);
         var retrieval = retrievalAttempt.Result;
@@ -316,6 +348,7 @@ public sealed class ReadingService : IReadingService
                 ["elapsedMs"] = retrievalStopwatch.ElapsedMilliseconds.ToString()
             });
 
+        cancellationToken.ThrowIfCancellationRequested();
         if (!retrieval.Success || string.IsNullOrWhiteSpace(retrieval.Text))
         {
             readStopwatch.Stop();
@@ -333,8 +366,14 @@ public sealed class ReadingService : IReadingService
             return SpeechResult.Failed(BuildDocumentFailureMessage(retrieval));
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
+        progress?.Report(new ReadingProgressUpdate(ReadingProgressStage.PreparingAudio, "Preparing speech..."));
+
+        cancellationToken.ThrowIfCancellationRequested();
         var chunkCount = EstimateSpeechChunkCount(retrieval.Text);
         var speechStopwatch = Stopwatch.StartNew();
+        cancellationToken.ThrowIfCancellationRequested();
+        progress?.Report(new ReadingProgressUpdate(ReadingProgressStage.Speaking, "Reading document..."));
         var speechResult = await SpeakWithChunkingIfNeededAsync(retrieval.Text, cancellationToken).ConfigureAwait(false);
         speechStopwatch.Stop();
         readStopwatch.Stop();
@@ -398,6 +437,40 @@ public sealed class ReadingService : IReadingService
 
         await Task.Delay(TextRetrievalRetryDelayMilliseconds, cancellationToken).ConfigureAwait(false);
         return (await retrieveAsync(cancellationToken).ConfigureAwait(false), true);
+    }
+
+    private static async Task<(TextRetrievalResult Result, bool Retried)> RetrieveTextWithTimeoutAsync(
+        string workflowName,
+        string operationId,
+        Func<CancellationToken, Task<TextRetrievalResult>> retrieveAsync,
+        TimeSpan timeout,
+        string timeoutMessage,
+        CancellationToken cancellationToken)
+    {
+        using var timeoutCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCancellationTokenSource.CancelAfter(timeout);
+
+        try
+        {
+            return await RetrieveTextWithRetryAsync(
+                    workflowName,
+                    operationId,
+                    retrieveAsync,
+                    timeoutCancellationTokenSource.Token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeoutCancellationTokenSource.IsCancellationRequested)
+        {
+            AppDiagnostics.Warn(
+                "focused_read_retrieval_timeout",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["workflow"] = workflowName,
+                    ["timeoutSeconds"] = timeout.TotalSeconds.ToString()
+                });
+            return (TextRetrievalResult.Failed(timeoutMessage, shouldRetry: true), false);
+        }
     }
 
     private SpeechRequest BuildRequest(string text)
@@ -809,8 +882,14 @@ public sealed class ReadingService : IReadingService
         return isExternal;
     }
 
-    private static string BuildSelectedTextFailureMessage()
+    private static string BuildSelectedTextFailureMessage(TextRetrievalResult retrieval)
     {
+        if (!string.IsNullOrWhiteSpace(retrieval.Message) &&
+            retrieval.Message.Contains("Timed out", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Timed out capturing selected text. Click the target app, then try again.";
+        }
+
         return "Couldn't read the selected text. Select the text in the other app, then try again.";
     }
 
@@ -847,6 +926,12 @@ public sealed class ReadingService : IReadingService
             retrieval.Message.Contains("Browser PDF viewer blocked document copy to clipboard", StringComparison.OrdinalIgnoreCase))
         {
             return "Couldn't copy document text from the browser PDF viewer. Enable PDF accessibility text access and try again, or open the PDF in an external reader.";
+        }
+
+        if (!string.IsNullOrWhiteSpace(retrieval.Message) &&
+            retrieval.Message.Contains("Timed out", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Timed out capturing document text. Click the target app, then try again.";
         }
 
         return "Couldn't read the document from that app.";

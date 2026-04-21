@@ -6,6 +6,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows;
 using System.Windows.Input;
 using RightSpeak.Models;
 using RightSpeak.Services;
@@ -21,6 +22,7 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
     private readonly Action _refreshMainVoiceOptions;
     private readonly List<DownloadableVoice> _allVoices = [];
     private CancellationTokenSource? _downloadCancellationTokenSource;
+    private CancellationTokenSource? _catalogLoadCancellationTokenSource;
     private string _statusMessage = "Choose a voice to install.";
     private bool _isBusy;
     private bool _isLoading;
@@ -38,7 +40,7 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
         _readingService = readingService ?? throw new ArgumentNullException(nameof(readingService));
         _refreshMainVoiceOptions = refreshMainVoiceOptions ?? throw new ArgumentNullException(nameof(refreshMainVoiceOptions));
 
-        RefreshCommand = new AsyncCommand(LoadAsync, CanRefresh);
+        RefreshCommand = new AsyncCommand(RefreshFromScratchAsync, CanRefresh);
         CancelCommand = new AsyncCommand(CancelAsync, CanCancel);
     }
 
@@ -107,6 +109,7 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
 
             _isBusy = value;
             OnPropertyChanged();
+            OnPropertyChanged(nameof(IsOperationIdle));
             RefreshCommandStates();
             RefreshVoiceCommands();
         }
@@ -124,25 +127,49 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
 
             _isLoading = value;
             OnPropertyChanged();
+            OnPropertyChanged(nameof(IsOperationIdle));
             RefreshCommandStates();
         }
     }
+
+    public bool IsOperationIdle => !IsBusy && !IsLoading;
 
     public ICommand RefreshCommand { get; }
     public ICommand CancelCommand { get; }
 
     public async Task LoadAsync()
     {
+        await LoadCoreAsync(forceRefresh: false, resetUiBeforeFetch: false).ConfigureAwait(true);
+    }
+
+    private async Task RefreshFromScratchAsync()
+    {
+        await LoadCoreAsync(forceRefresh: true, resetUiBeforeFetch: true).ConfigureAwait(true);
+    }
+
+    private async Task LoadCoreAsync(bool forceRefresh, bool resetUiBeforeFetch)
+    {
         if (IsLoading)
         {
             return;
         }
 
+        _catalogLoadCancellationTokenSource?.Dispose();
+        _catalogLoadCancellationTokenSource = new CancellationTokenSource();
         IsLoading = true;
-        StatusMessage = "Loading voice catalog...";
+        StatusMessage = forceRefresh ? "Refreshing voice catalog..." : "Loading voice catalog...";
+        if (resetUiBeforeFetch)
+        {
+            ClearCatalogUiState();
+        }
+
         try
         {
-            var voices = await _voiceCatalogService.GetDownloadableVoicesAsync().ConfigureAwait(true);
+            var voices = await _voiceCatalogService
+                .GetDownloadableVoicesAsync(
+                    forceRefresh: forceRefresh,
+                    cancellationToken: _catalogLoadCancellationTokenSource.Token)
+                .ConfigureAwait(true);
             _allVoices.Clear();
             _allVoices.AddRange(voices);
             BuildFilterOptions(_allVoices);
@@ -151,6 +178,10 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
             StatusMessage = Voices.Count == 0
                 ? "No downloadable voices are available right now."
                 : "Choose a voice to install.";
+        }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "Voice catalog refresh cancelled.";
         }
         catch (Exception ex)
         {
@@ -164,8 +195,22 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
         }
         finally
         {
+            _catalogLoadCancellationTokenSource?.Dispose();
+            _catalogLoadCancellationTokenSource = null;
             IsLoading = false;
         }
+    }
+
+    private void ClearCatalogUiState()
+    {
+        _allVoices.Clear();
+        Voices.Clear();
+        LanguageFilters.Clear();
+        QualityFilters.Clear();
+        _selectedLanguageFilter = null;
+        _selectedQualityFilter = "All qualities";
+        OnPropertyChanged(nameof(SelectedLanguageFilter));
+        OnPropertyChanged(nameof(SelectedQualityFilter));
     }
 
     private async Task InstallOrUpdateAsync(VoiceManagerVoiceViewModel item)
@@ -222,6 +267,12 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
             item.Status = result.WasCancelled ? item.Voice.Status : VoiceInstallState.Failed;
             item.RefreshCommands();
         }
+        catch (OperationCanceledException)
+        {
+            item.Status = item.Voice.Status;
+            item.RefreshCommands();
+            StatusMessage = "Voice download cancelled.";
+        }
         finally
         {
             _downloadCancellationTokenSource?.Dispose();
@@ -274,8 +325,22 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
 
     private Task CancelAsync()
     {
-        _downloadCancellationTokenSource?.Cancel();
-        StatusMessage = "Cancelling download...";
+        var canceled = false;
+        if (_catalogLoadCancellationTokenSource is not null)
+        {
+            _catalogLoadCancellationTokenSource.Cancel();
+            canceled = true;
+        }
+
+        if (_downloadCancellationTokenSource is not null)
+        {
+            _downloadCancellationTokenSource.Cancel();
+            canceled = true;
+        }
+
+        StatusMessage = canceled
+            ? "Cancelling current operation..."
+            : "No active operation to cancel.";
         return Task.CompletedTask;
     }
 
@@ -286,7 +351,13 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
 
     private bool CanCancel()
     {
-        return IsBusy && _downloadCancellationTokenSource is not null;
+        return _catalogLoadCancellationTokenSource is not null || _downloadCancellationTokenSource is not null;
+    }
+
+    public void CancelActiveOperations()
+    {
+        _catalogLoadCancellationTokenSource?.Cancel();
+        _downloadCancellationTokenSource?.Cancel();
     }
 
     private void RefreshCommandStates()
@@ -313,17 +384,33 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
     private bool ConfirmLicenseTerms()
     {
         var dialog = new LicenseTermsWindow();
-        var result = dialog.ShowDialog();
-        return result == true;
+        return ShowOwnedDialog(dialog);
     }
 
-    private static bool ConfirmRemoveVoice(string displayName)
+    private bool ConfirmRemoveVoice(string displayName)
     {
         var dialog = new ConfirmActionWindow(
             "Confirm Remove Voice",
             $"Remove '{displayName}' from local installed voices?",
             confirmText: "Remove",
             cancelText: "Cancel");
+        return ShowOwnedDialog(dialog);
+    }
+
+    private static bool ShowOwnedDialog(Window dialog)
+    {
+        var owner = System.Windows.Application.Current?.Windows
+            .OfType<Window>()
+            .FirstOrDefault(window => window.IsActive) ??
+            System.Windows.Application.Current?.MainWindow;
+
+        if (owner is not null && !ReferenceEquals(owner, dialog))
+        {
+            dialog.Owner = owner;
+            dialog.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+            dialog.Topmost = owner.Topmost;
+        }
+
         return dialog.ShowDialog() == true;
     }
 

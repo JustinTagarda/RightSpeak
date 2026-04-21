@@ -107,25 +107,49 @@ public sealed class WindowsGlobalHotkeyService : IGlobalHotkeyService
         var hotkeyId = wParam.ToInt32();
         if (hotkeyId == ReadSelectedHotkeyId)
         {
-            ReadSelectedHotkeyPressed?.Invoke(this, EventArgs.Empty);
+            RaiseHotkeyEvent(ReadSelectedHotkeyPressed, "read_selected");
             handled = true;
             return nint.Zero;
         }
 
         if (hotkeyId == ReadDocumentHotkeyId)
         {
-            ReadDocumentHotkeyPressed?.Invoke(this, EventArgs.Empty);
+            RaiseHotkeyEvent(ReadDocumentHotkeyPressed, "read_document");
             handled = true;
             return nint.Zero;
         }
 
         if (hotkeyId == StopHotkeyId)
         {
-            StopHotkeyPressed?.Invoke(this, EventArgs.Empty);
+            RaiseHotkeyEvent(StopHotkeyPressed, "stop");
             handled = true;
         }
 
         return nint.Zero;
+    }
+
+    private void RaiseHotkeyEvent(EventHandler? handler, string hotkeyName)
+    {
+        if (handler is null)
+        {
+            return;
+        }
+
+        try
+        {
+            handler.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "hotkey_event_handler_failed",
+                new Dictionary<string, string?>
+                {
+                    ["hotkey"] = hotkeyName,
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+        }
     }
 
     private void ThrowIfDisposed()
