@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Interop;
 using System.Windows.Threading;
 using System.Windows.Input;
 using Microsoft.Win32;
@@ -22,6 +23,8 @@ public partial class App : WpfApplication
 {
     private const string SingleInstanceMutexName = @"Global\RightSpeak.SingleInstance";
     private const string ActivateWindowMessageName = "RightSpeak.Activate.MainWindow";
+    private const string PremiumAddOnStoreId = "9PG6LR8K5M0Z";
+    private const string PremiumAddOnProductId = "rightspeak_premium_lifetime";
 
     private WindowsSpeechService? _speechService;
     private WindowsGlobalHotkeyService? _hotkeyService;
@@ -32,6 +35,7 @@ public partial class App : WpfApplication
     private IVoiceDownloadService? _voiceDownloadService;
     private IAppVersionProvider? _appVersionProvider;
     private IAppUpdateService? _appUpdateService;
+    private IPremiumEntitlementService? _premiumEntitlementService;
     private MainViewModel? _mainViewModel;
     private IReadingService? _readingService;
     private MainWindow? _mainWindow;
@@ -115,15 +119,27 @@ public partial class App : WpfApplication
             CreateStoreUpdateClient(),
             _appVersionProvider,
             () => _readingService?.IsReading == true);
+        _premiumEntitlementService = new StorePremiumEntitlementService(
+            _appVersionProvider,
+            () => _mainWindow is null ? nint.Zero : new WindowInteropHelper(_mainWindow).Handle,
+            new StorePremiumEntitlementOptions
+            {
+                PremiumProductDisplayName = "RightSpeak Premium",
+                PremiumStoreIds = [PremiumAddOnStoreId],
+                PremiumProductIds = [PremiumAddOnProductId]
+            });
         _mainViewModel = new MainViewModel(
             _readingService,
             _hotkeySettingsService,
             ApplyHotkeysAndRefreshTray,
             BuildConfiguration.IsDebugDiagnosticsEnabled,
             _appSettingsService,
-            ApplyTheme);
+            ApplyTheme,
+            premiumEntitlementSnapshot: _premiumEntitlementService.CurrentSnapshot);
         _appUpdateService.SnapshotChanged += OnAppUpdateSnapshotChanged;
+        _premiumEntitlementService.SnapshotChanged += OnPremiumEntitlementSnapshotChanged;
         _mainViewModel.ApplyUpdateSnapshot(_appUpdateService.CurrentSnapshot);
+        _mainViewModel.ApplyPremiumEntitlementSnapshot(_premiumEntitlementService.CurrentSnapshot);
 
         _trayService = new WindowsTrayService();
         _trayService.ReadSelectedRequested += OnTrayReadSelectedRequested;
@@ -204,6 +220,21 @@ public partial class App : WpfApplication
             }
         }, DispatcherPriority.Background);
         ObserveBackgroundTask(updateOperation.Task, "app_update_startup");
+
+        var entitlementOperation = Dispatcher.BeginInvoke(async () =>
+        {
+            try
+            {
+                if (_premiumEntitlementService is not null)
+                {
+                    await _premiumEntitlementService.RefreshAsync(_updateCancellationTokenSource.Token).ConfigureAwait(true);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }, DispatcherPriority.Background);
+        ObserveBackgroundTask(entitlementOperation.Task, "premium_entitlement_startup");
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -234,6 +265,10 @@ public partial class App : WpfApplication
             if (_appUpdateService is not null)
             {
                 _appUpdateService.SnapshotChanged -= OnAppUpdateSnapshotChanged;
+            }
+            if (_premiumEntitlementService is not null)
+            {
+                _premiumEntitlementService.SnapshotChanged -= OnPremiumEntitlementSnapshotChanged;
             }
         });
         TryRunCleanup("app_exit_dispose_speech", () => _speechService?.Dispose());
@@ -382,6 +417,13 @@ public partial class App : WpfApplication
             "app_update_snapshot_changed");
     }
 
+    private void OnPremiumEntitlementSnapshotChanged(object? sender, PremiumEntitlementSnapshot snapshot)
+    {
+        ObserveBackgroundTask(
+            Dispatcher.InvokeAsync(() => _mainViewModel?.ApplyPremiumEntitlementSnapshot(snapshot)).Task,
+            "premium_entitlement_snapshot_changed");
+    }
+
     private static string GetModifierLabel(RightSpeak.Models.HotkeyModifierPreset preset)
     {
         return preset switch
@@ -521,7 +563,38 @@ public partial class App : WpfApplication
             _voiceCatalogService,
             _voiceDownloadService,
             _readingService,
-            _mainViewModel.RefreshVoiceOptions);
+            _mainViewModel.RefreshVoiceOptions,
+            _premiumEntitlementService?.CurrentSnapshot ?? new PremiumEntitlementSnapshot(
+                IsPackaged: false,
+                HasPremium: true,
+                State: PremiumEntitlementState.VerifiedOwned,
+                IsPremiumProductAvailable: false,
+                PremiumProductDisplayName: "RightSpeak Premium",
+                StatusMessage: "Development build: Premium features unlocked."),
+            OpenPremiumStorePage);
+    }
+
+    private static void OpenPremiumStorePage()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = $"ms-windows-store://pdp/?productid={PremiumAddOnStoreId}",
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "open_premium_store_page_failed",
+                new Dictionary<string, string?>
+                {
+                    ["storeId"] = PremiumAddOnStoreId,
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+        }
     }
 
     private Dictionary<string, string?> BuildFocusRestoreDiagnostics(string trigger)

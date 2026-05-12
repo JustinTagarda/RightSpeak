@@ -8,20 +8,21 @@ The goal is low-friction text-to-speech for text the user selects in another app
 This repository is in early development.
 
 Current state:
-- WPF app scaffold exists
+- WPF desktop app is implemented
 - project targets `.NET 10` on Windows
 - core reading workflows are implemented and being hardened for reliability
-- manual text reading, paragraph reading, selected-text reading, document reading, pause/resume, always-on-top window behavior, voice management, tray actions, hotkeys, themes, and background Store updates are implemented
+- manual text reading, external selected-text reading, external document reading, pause/resume, stop, always-on-top behavior, voice management, tray actions, configurable hotkeys, themes, and background Store updates are implemented
 - external `Read Document` is enabled with browser-PDF-specific hardening and diagnostics
+- paragraph retrieval code still exists internally, but it is not part of the current production-facing app/tray/global-hotkey surface
 - production-facing external commands are:
   - app/tray: `Read Selected Text` and `Read Document`
-  - global hotkey: `Read Selected Text`, `Read Paragraph`, `Read Document`, and `Stop`
+  - global hotkey: `Read Selected Text`, `Read Document`, and `Stop`
 
 The current focus is getting the MVP path working reliably:
 1. local text-to-speech and playback controls
-2. selected-text, paragraph, and document retrieval
+2. selected-text and document retrieval
 3. global hotkey trigger
-4. basic settings, tray behavior, and window state
+4. basic settings, tray behavior, packaged updates, and window state
 
 ## Product Goal
 RightSpeak is intended to:
@@ -32,17 +33,23 @@ RightSpeak is intended to:
 
 Reliability matters more than UI polish.
 
+## Current Features
+- Read typed or pasted text directly in the app, with `Read`, `Clear`, `Pause/Resume`, and `Stop`.
+- Read selected text from another app through a multi-strategy retrieval pipeline: UI Automation, focused-control selection access, then clipboard fallback.
+- Read document text from another app through focused-control document access, clipboard document capture, browser-PDF hardening, and candidate scoring.
+- Cancel external reads before speech starts, and pause/resume or stop once speech is active.
+- Use `System.Speech` voices or Piper through one speech abstraction with speech-rate control and voice preview.
+- Manage downloadable Piper voices with refresh, install, update, remove, language filters, quality filters, cancel, and license confirmation.
+- Use tray quick actions for `Read Selected Text`, `Read Document`, `Stop Reading`, `Show RightSpeak`, and `Exit`.
+- Configure global hotkeys in-app for `Read Selected Text`, `Read Document`, and `Stop` using `Alt+Shift`, `Ctrl+Shift`, or `Ctrl+Alt`.
+- Persist theme, always-on-top, selected voice, speech rate, typed text draft, and hotkey settings.
+- Show focused-window context for external reads, packaged app version text in the footer, and Store update progress in the footer and taskbar when packaged.
+
 ## Planned Capabilities
-Target capabilities include:
-- read paragraph text
-- read selected text
-- pause and resume reading
-- stop reading
-- choose voice and speech rate
-- read the current control or document content where possible
-- trigger reading from a global hotkey
-- expose quick actions from the tray
-- keep the app on top when needed
+Target capabilities still under consideration include:
+- a production-facing paragraph-read surface
+- reading queue or reading history
+- optional AI-assisted features later
 
 ## Windows-First Design
 RightSpeak is intentionally Windows-specific.
@@ -88,7 +95,7 @@ It should avoid:
 
 ### Build
 ```powershell
-dotnet build .\RightSpeak.slnx
+dotnet build .\RightSpeak.csproj
 ```
 
 ### Run
@@ -109,8 +116,8 @@ $env:DOTNET_ROOT='C:\Program Files\dotnet'
 $env:DOTNET_MSBUILD_SDK_RESOLVER_CLI_DIR='C:\Program Files\dotnet'
 $env:DOTNET_MSBUILD_SDK_RESOLVER_SDKS_DIR='C:\Program Files\dotnet\sdk\10.0.202\Sdks'
 $env:DOTNET_MSBUILD_SDK_RESOLVER_SDKS_VER='10.0.202'
-& 'C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe' .\RightSpeak.Package\RightSpeak.Package.wapproj /restore /p:Configuration=Release /p:Platform=x64 /p:UapAppxPackageBuildMode=StoreUpload
-& 'C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe' .\RightSpeak.Package\RightSpeak.Package.wapproj /restore /p:Configuration=Release /p:Platform=ARM64 /p:UapAppxPackageBuildMode=StoreUpload
+& 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe' .\RightSpeak.Package\RightSpeak.Package.wapproj /restore /p:Configuration=Release /p:Platform=x64 /p:UapAppxPackageBuildMode=StoreUpload
+& 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe' .\RightSpeak.Package\RightSpeak.Package.wapproj /restore /p:Configuration=Release /p:Platform=ARM64 /p:UapAppxPackageBuildMode=StoreUpload
 ```
 
 Expected output:
@@ -118,7 +125,8 @@ Expected output:
 - install/test artifacts for local validation in the same output folder
 - build `Platform=x64` for an x64-only upload package
 - build `Platform=ARM64` for an ARM64-only upload package
-- upload the architecture-specific files, not any older `_x64_ARM64_bundle.msixupload` or `_bundle.msixupload` artifacts
+- `x86` Store packaging is not currently configured in the app project runtime identifiers
+- upload the architecture-specific files, not any older bundle artifacts
 
 Runtime update behavior for packaged installs:
 - RightSpeak checks Store updates asynchronously after startup
@@ -127,17 +135,18 @@ Runtime update behavior for packaged installs:
 - the footer-right version text shows the installed packaged version when the app has package identity
 
 ## Current Implementation
-- local speech engine abstraction with Windows OneCore, `System.Speech`, and Piper support
+- local speech engine abstraction with `System.Speech` and Piper support
 - manual text input with `Read`, `Pause/Resume`, and `Stop`
-- paragraph reading pipeline with UI Automation, focused-control, and clipboard fallback stages
-- selected-text reading pipeline with UI Automation, focused-control, and clipboard fallback stages
-- document reading (first path via focused-control UI Automation document or value patterns)
+- selected-text reading pipeline with UI Automation, focused-control selection-only access, and clipboard fallback stages
+- document reading via focused-control UI Automation document/value patterns plus orchestrated document fallback providers
 - document browser-PDF fallback hardening:
   - multi-cycle clipboard capture and settle-window upgrade
   - UI Automation fallback when browser PDF copy is blocked
   - retrieval candidate scoring to reduce viewer-UI preamble drift
   - strict command-scope behavior for document flow (no selected-text downgrade)
   - webpage main-context extraction path for conversation-like pages before generic document fallbacks
+- external read lifecycle state with explicit `focusing`, `retrieving`, `preparing speech`, and `speaking` phases
+- external read cancel-before-speech behavior, with `Cancel` during retrieval/preparation and `Stop` once speech has started
 - chunked/continuous speech stream orchestration for longer reads
 - chunk-render retry path for transient long-read continuation misses in pinned-engine chunk streams
 - Piper startup-clipping mitigation baseline:
@@ -145,13 +154,12 @@ Runtime update behavior for packaged installs:
   - single-chunk Piper reads are routed through the same stream path as multi-chunk reads
   - direct Piper `SoundPlayer` playback is not the normal read path
 - Piper voice management with downloadable voice models and runtime installation
-- voice selection, speech-rate control, and voice preview
+- voice selection, speech-rate control, voice preview, and persisted typed-text draft
 - theme switching with light, dark, and Windows settings support
 - always-on-top window behavior
 - speech diagnostics include stream and engine routing events (for example `speech_single_chunk_stream_routed`, `speech_chunk_stream_*`, `piper_continuous_playback_*`)
 - global hotkeys:
   - read selected text
-  - read paragraph
   - read document
   - stop reading
   - modifier and keys are configurable in-app (`Alt+Shift`, `Ctrl+Shift`, `Ctrl+Alt`)
@@ -163,6 +171,7 @@ Runtime update behavior for packaged installs:
   - menu items display current hotkey hints
 - background Microsoft Store update checks with footer and taskbar progress
 - packaged version display in the footer for Store installs
+- voice manager filtering by language and quality, with refresh/cancel/install/update/remove actions
 
 ## Current Project Shape
 The repository currently starts as a single WPF project. As features are added, code should stay organized so it can later split cleanly into dedicated layers for UI, core logic, and Windows-specific integration.

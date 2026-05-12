@@ -50,7 +50,6 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
     }
 
     private const int PiperPrefetchGraceWindowMilliseconds = 40;
-    private const int WindowsOneCorePrefetchGraceWindowMilliseconds = 15;
     private const int SystemSpeechPrefetchGraceWindowMilliseconds = 15;
     private const int DefaultPrefetchGraceWindowMilliseconds = 15;
     private const int ShortChunkThresholdCharacters = 120;
@@ -60,7 +59,6 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
 
     private readonly SemaphoreSlim _gate;
     private PiperSpeechService _piperSpeechService;
-    private readonly WindowsNeuralSpeechService _preferredSpeechService;
     private readonly SystemSpeechService _fallbackSpeechService;
     private SpeechVoice[] _installedVoices;
     private CancellationTokenSource? _continuousChunkPlaybackCancellationTokenSource;
@@ -73,7 +71,6 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
     {
         _gate = new SemaphoreSlim(1, 1);
         _piperSpeechService = new PiperSpeechService();
-        _preferredSpeechService = new WindowsNeuralSpeechService();
         _fallbackSpeechService = new SystemSpeechService();
         _installedVoices = BuildInstalledVoices();
     }
@@ -95,7 +92,6 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
     {
         return _piperSpeechService
             .GetInstalledVoices()
-            .Concat(_preferredSpeechService.GetInstalledVoices())
             .Concat(_fallbackSpeechService.GetInstalledVoices())
             .GroupBy(voice => voice.Name, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
@@ -107,13 +103,11 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
     public bool IsSpeaking =>
         _isContinuousChunkPlaybackActive ||
         _piperSpeechService.IsSpeaking ||
-        _preferredSpeechService.IsSpeaking ||
         _fallbackSpeechService.IsSpeaking;
 
     public bool IsPaused =>
         _isContinuousChunkPlaybackPaused ||
         _piperSpeechService.IsPaused ||
-        _preferredSpeechService.IsPaused ||
         _fallbackSpeechService.IsPaused;
 
     public IReadOnlyList<SpeechVoice> GetInstalledVoices() => _installedVoices;
@@ -418,11 +412,6 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
             return await _piperSpeechService.PauseAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        if (_preferredSpeechService.IsSpeaking)
-        {
-            return await _preferredSpeechService.PauseAsync(cancellationToken).ConfigureAwait(false);
-        }
-
         if (_fallbackSpeechService.IsSpeaking)
         {
             return await _fallbackSpeechService.PauseAsync(cancellationToken).ConfigureAwait(false);
@@ -460,11 +449,6 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
             return await _piperSpeechService.ResumeAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        if (_preferredSpeechService.IsSpeaking)
-        {
-            return await _preferredSpeechService.ResumeAsync(cancellationToken).ConfigureAwait(false);
-        }
-
         if (_fallbackSpeechService.IsSpeaking)
         {
             return await _fallbackSpeechService.ResumeAsync(cancellationToken).ConfigureAwait(false);
@@ -482,7 +466,6 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
                 ["reason"] = reason,
                 ["continuousChunkPlaybackActive"] = _isContinuousChunkPlaybackActive.ToString(),
                 ["piperSpeaking"] = _piperSpeechService.IsSpeaking.ToString(),
-                ["windowsNeuralSpeaking"] = _preferredSpeechService.IsSpeaking.ToString(),
                 ["systemSpeechSpeaking"] = _fallbackSpeechService.IsSpeaking.ToString()
             });
 
@@ -491,7 +474,6 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
             ThrowIfDisposed();
             var stoppedContinuousChunkPlayback = await StopActiveContinuousChunkPlaybackAsync(reason, cancellationToken).ConfigureAwait(false);
             await _piperSpeechService.CancelPrefetchAsync(cancellationToken).ConfigureAwait(false);
-            await _preferredSpeechService.CancelPrefetchAsync(cancellationToken).ConfigureAwait(false);
             await _fallbackSpeechService.CancelPrefetchAsync(cancellationToken).ConfigureAwait(false);
 
             if (_piperSpeechService.IsSpeaking)
@@ -508,22 +490,6 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
                         ["message"] = piperResult.Message
                     });
                 return piperResult;
-            }
-
-            if (_preferredSpeechService.IsSpeaking)
-            {
-                var windowsNeuralResult = await _preferredSpeechService.StopAsync(cancellationToken).ConfigureAwait(false);
-                AppDiagnostics.Info(
-                    "windows_speech_stop_completed",
-                    new Dictionary<string, string?>
-                    {
-                        ["reason"] = reason,
-                        ["stopPath"] = "windows_neural_engine",
-                        ["success"] = windowsNeuralResult.Success.ToString(),
-                        ["cancelled"] = windowsNeuralResult.WasCancelled.ToString(),
-                        ["message"] = windowsNeuralResult.Message
-                    });
-                return windowsNeuralResult;
             }
 
             if (_fallbackSpeechService.IsSpeaking)
@@ -655,11 +621,6 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
             return await _piperSpeechService.SpeakPrefetchedAsync(piperClip, request, cancellationToken).ConfigureAwait(false);
         }
 
-        if (prefetchedClip is WindowsNeuralSpeechService.WindowsNeuralPrefetchedSpeechClip neuralClip)
-        {
-            return await _preferredSpeechService.SpeakPrefetchedAsync(neuralClip, request, cancellationToken).ConfigureAwait(false);
-        }
-
         if (prefetchedClip is SystemSpeechService.SystemPrefetchedSpeechClip systemClip)
         {
             return await _fallbackSpeechService.SpeakPrefetchedAsync(systemClip, request, cancellationToken).ConfigureAwait(false);
@@ -778,7 +739,6 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
         var baseGraceWindowMilliseconds = engineOrder[0] switch
         {
             PiperSpeechService => PiperPrefetchGraceWindowMilliseconds,
-            WindowsNeuralSpeechService => WindowsOneCorePrefetchGraceWindowMilliseconds,
             SystemSpeechService => SystemSpeechPrefetchGraceWindowMilliseconds,
             _ => DefaultPrefetchGraceWindowMilliseconds
         };
@@ -840,7 +800,6 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
         continuousChunkPlaybackCancellationTokenSource?.Dispose();
 
         _piperSpeechService.Dispose();
-        _preferredSpeechService.Dispose();
         _fallbackSpeechService.Dispose();
         _gate.Dispose();
         _disposed = true;
@@ -1183,9 +1142,6 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
             case PiperSpeechService.PiperPrefetchedSpeechClip piperClip:
                 renderedChunk = new RenderedChunkClip(prefetchedClip, piperClip.WaveBytes, GetEngineName(owningEngine));
                 return true;
-            case WindowsNeuralSpeechService.WindowsNeuralPrefetchedSpeechClip neuralClip:
-                renderedChunk = new RenderedChunkClip(prefetchedClip, neuralClip.WaveBytes, GetEngineName(owningEngine));
-                return true;
             case SystemSpeechService.SystemPrefetchedSpeechClip systemClip:
                 renderedChunk = new RenderedChunkClip(prefetchedClip, systemClip.WaveBytes, GetEngineName(owningEngine));
                 return true;
@@ -1241,11 +1197,6 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
                 return new[] { (ISpeechService)_piperSpeechService };
             }
 
-            if (_preferredSpeechService.SupportsVoice(voiceName))
-            {
-                return new[] { (ISpeechService)_preferredSpeechService };
-            }
-
             if (_fallbackSpeechService.SupportsVoice(voiceName))
             {
                 return new[] { (ISpeechService)_fallbackSpeechService };
@@ -1254,13 +1205,12 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
             return Array.Empty<ISpeechService>();
         }
 
-        var engines = new List<ISpeechService>(3);
+        var engines = new List<ISpeechService>(2);
         if (TryResolveEngine(preferredEngineName, out var preferredEngine))
         {
             AddEngine(engines, preferredEngine);
         }
 
-        AddEngine(engines, _preferredSpeechService);
         AddEngine(engines, _fallbackSpeechService);
         if (_piperSpeechService.HasUsableInstallation &&
             (engines.Count == 0 || string.Equals(preferredEngineName, GetEngineName(_piperSpeechService), StringComparison.OrdinalIgnoreCase)))
@@ -1349,7 +1299,6 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
         return engine switch
         {
             PiperSpeechService piper => piper.PrefetchAsync(request, cancellationToken),
-            WindowsNeuralSpeechService neural => neural.PrefetchAsync(request, cancellationToken),
             SystemSpeechService system => system.PrefetchAsync(request, cancellationToken),
             _ => Task.FromResult<IPrefetchedSpeechClip?>(null)
         };
@@ -1360,7 +1309,6 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
         return engine switch
         {
             PiperSpeechService piper => piper.SupportsPrefetch(request),
-            WindowsNeuralSpeechService neural => neural.SupportsPrefetch(request),
             SystemSpeechService system => system.SupportsPrefetch(request),
             _ => false
         };
@@ -1375,19 +1323,13 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
             return true;
         }
 
-        if (string.Equals(engineName, GetEngineName(_preferredSpeechService), StringComparison.OrdinalIgnoreCase))
-        {
-            engine = _preferredSpeechService;
-            return true;
-        }
-
         if (string.Equals(engineName, GetEngineName(_fallbackSpeechService), StringComparison.OrdinalIgnoreCase))
         {
             engine = _fallbackSpeechService;
             return true;
         }
 
-        engine = _preferredSpeechService;
+        engine = _fallbackSpeechService;
         return false;
     }
 
@@ -1404,7 +1346,6 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
         return engine switch
         {
             PiperSpeechService => "piper",
-            WindowsNeuralSpeechService => "windows_onecore",
             SystemSpeechService => "system_speech",
             _ => engine.GetType().Name
         };
@@ -1415,8 +1356,7 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
         return engine switch
         {
             "Piper" => 0,
-            "Windows OneCore" => 1,
-            "System.Speech" => 2,
+            "System.Speech" => 1,
             _ => 9
         };
     }
@@ -1442,14 +1382,6 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
             return true;
         }
 
-        if (prefetchedClip is WindowsNeuralSpeechService.WindowsNeuralPrefetchedSpeechClip neuralClip)
-        {
-            owningEngine = _preferredSpeechService;
-            speakPrefetchedOnOwner = (request, cancellationToken) =>
-                _preferredSpeechService.SpeakPrefetchedAsync(neuralClip, request, cancellationToken);
-            return true;
-        }
-
         if (prefetchedClip is SystemSpeechService.SystemPrefetchedSpeechClip systemClip)
         {
             owningEngine = _fallbackSpeechService;
@@ -1458,7 +1390,7 @@ public sealed class WindowsSpeechService : ISpeechService, IPrefetchSpeechServic
             return true;
         }
 
-        owningEngine = _preferredSpeechService;
+        owningEngine = _fallbackSpeechService;
         speakPrefetchedOnOwner = static (_, _) => Task.FromResult(SpeechResult.Failed("Prefetched speech clip is not compatible with the active speech engine."));
         return false;
     }

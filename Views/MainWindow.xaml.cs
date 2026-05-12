@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Forms;
@@ -14,6 +15,7 @@ namespace RightSpeak.Views;
 
 public partial class MainWindow : Window
 {
+    private const string PremiumAddOnStoreId = "9PG6LR8K5M0Z";
     private readonly MainViewModel _viewModel;
     private readonly IGlobalHotkeyService _hotkeyService;
     private readonly IWebpageMainContextAnalyzer _webpageMainContextAnalyzer;
@@ -52,6 +54,7 @@ public partial class MainWindow : Window
         _appSettingsService = appSettingsService;
         _appVersionText = appVersionText;
         DataContext = _viewModel;
+        _viewModel.PremiumUpsellRequested += OnPremiumUpsellRequested;
         ApplyPersistedAlwaysOnTop();
 
         SourceInitialized += OnSourceInitialized;
@@ -100,6 +103,7 @@ public partial class MainWindow : Window
             _hotkeyService.ReadSelectedHotkeyPressed -= OnReadSelectedHotkeyPressed;
             _hotkeyService.ReadDocumentHotkeyPressed -= OnReadDocumentHotkeyPressed;
             _hotkeyService.StopHotkeyPressed -= OnStopHotkeyPressed;
+            _viewModel.PremiumUpsellRequested -= OnPremiumUpsellRequested;
             _hotkeyService.Dispose();
             if (_windowSource is not null)
             {
@@ -735,6 +739,67 @@ public partial class MainWindow : Window
         if (Top < topLeft.Y + edgePaddingDip)
         {
             Top = topLeft.Y + edgePaddingDip;
+        }
+    }
+
+    private void OnPremiumUpsellRequested(object? sender, PremiumUpsellRequest request)
+    {
+        _ = sender;
+        if (!request.CanShowPurchase)
+        {
+            var unavailableDialog = new ConfirmActionWindow(
+                $"{request.FeatureName} unavailable",
+                request.Message,
+                confirmText: "OK",
+                cancelText: "Close")
+            {
+                Owner = this,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Topmost = Topmost
+            };
+            unavailableDialog.ShowDialog();
+            return;
+        }
+
+        var dialog = new ConfirmActionWindow(
+            $"{request.FeatureName} requires Premium",
+            request.Message,
+            confirmText: "Go to Premium",
+            cancelText: "Not now")
+        {
+            Owner = this,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Topmost = Topmost
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        OpenPremiumStorePage();
+    }
+
+    private static void OpenPremiumStorePage()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = $"ms-windows-store://pdp/?productid={PremiumAddOnStoreId}",
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "open_premium_store_page_failed",
+                new Dictionary<string, string?>
+                {
+                    ["storeId"] = PremiumAddOnStoreId,
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
         }
     }
 }

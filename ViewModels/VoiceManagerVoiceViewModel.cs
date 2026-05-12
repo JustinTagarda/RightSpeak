@@ -12,6 +12,7 @@ public sealed class VoiceManagerVoiceViewModel : INotifyPropertyChanged
 {
     private readonly Func<VoiceManagerVoiceViewModel, Task> _installOrUpdateAsync;
     private readonly Func<VoiceManagerVoiceViewModel, Task> _removeAsync;
+    private readonly bool _canManageVoices;
     private VoiceInstallState _status;
     private string _progressText = string.Empty;
     private double _progressPercent;
@@ -20,12 +21,14 @@ public sealed class VoiceManagerVoiceViewModel : INotifyPropertyChanged
     public VoiceManagerVoiceViewModel(
         DownloadableVoice voice,
         Func<VoiceManagerVoiceViewModel, Task> installOrUpdateAsync,
-        Func<VoiceManagerVoiceViewModel, Task> removeAsync)
+        Func<VoiceManagerVoiceViewModel, Task> removeAsync,
+        bool canManageVoices)
     {
         Voice = voice ?? throw new ArgumentNullException(nameof(voice));
         _status = voice.Status;
         _installOrUpdateAsync = installOrUpdateAsync ?? throw new ArgumentNullException(nameof(installOrUpdateAsync));
         _removeAsync = removeAsync ?? throw new ArgumentNullException(nameof(removeAsync));
+        _canManageVoices = canManageVoices;
         InstallOrUpdateCommand = new AsyncCommand(() => _installOrUpdateAsync(this), CanInstallOrUpdate);
         RemoveCommand = new AsyncCommand(() => _removeAsync(this), CanRemove);
     }
@@ -125,11 +128,21 @@ public sealed class VoiceManagerVoiceViewModel : INotifyPropertyChanged
 
     private bool CanInstallOrUpdate()
     {
+        if (!_canManageVoices)
+        {
+            return false;
+        }
+
         return Status is VoiceInstallState.NotInstalled or VoiceInstallState.UpdateAvailable or VoiceInstallState.Failed;
     }
 
     private bool CanRemove()
     {
+        if (!_canManageVoices)
+        {
+            return false;
+        }
+
         return Status is VoiceInstallState.Installed or VoiceInstallState.UpdateAvailable;
     }
 

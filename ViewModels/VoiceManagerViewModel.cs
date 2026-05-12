@@ -20,6 +20,8 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
     private readonly IVoiceDownloadService _voiceDownloadService;
     private readonly IReadingService _readingService;
     private readonly Action _refreshMainVoiceOptions;
+    private readonly Action _goToPremiumAction;
+    private readonly PremiumEntitlementSnapshot _entitlementSnapshot;
     private readonly List<DownloadableVoice> _allVoices = [];
     private CancellationTokenSource? _downloadCancellationTokenSource;
     private CancellationTokenSource? _catalogLoadCancellationTokenSource;
@@ -33,15 +35,21 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
         IVoiceCatalogService voiceCatalogService,
         IVoiceDownloadService voiceDownloadService,
         IReadingService readingService,
-        Action refreshMainVoiceOptions)
+        Action refreshMainVoiceOptions,
+        PremiumEntitlementSnapshot entitlementSnapshot,
+        Action goToPremiumAction)
     {
         _voiceCatalogService = voiceCatalogService ?? throw new ArgumentNullException(nameof(voiceCatalogService));
         _voiceDownloadService = voiceDownloadService ?? throw new ArgumentNullException(nameof(voiceDownloadService));
         _readingService = readingService ?? throw new ArgumentNullException(nameof(readingService));
         _refreshMainVoiceOptions = refreshMainVoiceOptions ?? throw new ArgumentNullException(nameof(refreshMainVoiceOptions));
+        _goToPremiumAction = goToPremiumAction ?? throw new ArgumentNullException(nameof(goToPremiumAction));
+        _entitlementSnapshot = entitlementSnapshot ?? throw new ArgumentNullException(nameof(entitlementSnapshot));
+        HasPremiumAccess = _entitlementSnapshot.HasPremium;
 
         RefreshCommand = new AsyncCommand(RefreshFromScratchAsync, CanRefresh);
         CancelCommand = new AsyncCommand(CancelAsync, CanCancel);
+        GoToPremiumCommand = new AsyncCommand(GoToPremiumAsync, CanGoToPremium);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -133,9 +141,19 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
     }
 
     public bool IsOperationIdle => !IsBusy && !IsLoading;
+    public bool HasPremiumAccess { get; }
+    public bool IsPremiumUpsellVisible => !HasPremiumAccess;
+    public string PremiumUpsellMessage =>
+        _entitlementSnapshot.State switch
+        {
+            PremiumEntitlementState.Checking => "Checking license. Install and remove actions will be available after verification.",
+            PremiumEntitlementState.VerificationFailed => "Unable to verify license right now. Please ensure Microsoft Store is signed in and try again.",
+            _ => "Get Premium to unlock install, update, and remove voice options."
+        };
 
     public ICommand RefreshCommand { get; }
     public ICommand CancelCommand { get; }
+    public ICommand GoToPremiumCommand { get; }
 
     public async Task LoadAsync()
     {
@@ -177,7 +195,9 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
 
             StatusMessage = Voices.Count == 0
                 ? "No downloadable voices are available right now."
-                : "Choose a voice to install.";
+                : HasPremiumAccess
+                    ? "Choose a voice to install."
+                    : "Browse available Premium voice models.";
         }
         catch (OperationCanceledException)
         {
@@ -360,6 +380,17 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
         _downloadCancellationTokenSource?.Cancel();
     }
 
+    private Task GoToPremiumAsync()
+    {
+        _goToPremiumAction();
+        return Task.CompletedTask;
+    }
+
+    private bool CanGoToPremium()
+    {
+        return !HasPremiumAccess && _entitlementSnapshot.State == PremiumEntitlementState.VerifiedNotOwned;
+    }
+
     private void RefreshCommandStates()
     {
         if (RefreshCommand is AsyncCommand refreshCommand)
@@ -468,7 +499,7 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
         Voices.Clear();
         foreach (var voice in filtered)
         {
-            Voices.Add(new VoiceManagerVoiceViewModel(voice, InstallOrUpdateAsync, RemoveAsync));
+            Voices.Add(new VoiceManagerVoiceViewModel(voice, InstallOrUpdateAsync, RemoveAsync, HasPremiumAccess));
         }
 
         RefreshVoiceCommands();

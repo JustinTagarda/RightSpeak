@@ -62,10 +62,10 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
     private const double ShortTextPrimerBoostSeconds = 0.18;
     private const double PiperPrimerMinSeconds = 0.00;
     private const double PiperPrimerMaxSeconds = 1.25;
+    private const string PreinstalledPiperModelName = "en_US-ljspeech-high";
     private static readonly string[] PreferredDefaultVoices =
     {
-        "piper:en_US-ljspeech-high",
-        "piper:en_GB-cori-high"
+        $"{PiperVoicePrefix}{PreinstalledPiperModelName}"
     };
 
     private readonly SemaphoreSlim _gate;
@@ -1207,6 +1207,7 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
             yield break;
         }
 
+        var allowedModelNames = LoadAllowedPiperModelNames();
         var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var voicesDirectory in EnumerateVoiceDirectoryCandidates())
         {
@@ -1224,6 +1225,11 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
                 }
 
                 var modelName = Path.GetFileNameWithoutExtension(modelPath);
+                if (!allowedModelNames.Contains(modelName))
+                {
+                    continue;
+                }
+
                 var voiceName = $"{PiperVoicePrefix}{modelName}";
                 if (!seenNames.Add(voiceName))
                 {
@@ -1237,6 +1243,38 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
                     configPath);
             }
         }
+    }
+
+    private static HashSet<string> LoadAllowedPiperModelNames()
+    {
+        var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            PreinstalledPiperModelName
+        };
+
+        try
+        {
+            var manifest = new VoiceInstallStore().LoadManifest();
+            foreach (var voice in manifest.Voices)
+            {
+                if (string.IsNullOrWhiteSpace(voice.ModelFileName))
+                {
+                    continue;
+                }
+
+                var modelName = Path.GetFileNameWithoutExtension(voice.ModelFileName);
+                if (!string.IsNullOrWhiteSpace(modelName))
+                {
+                    allowed.Add(modelName);
+                }
+            }
+        }
+        catch
+        {
+            // If manifest loading fails, keep the preinstalled-only allowlist.
+        }
+
+        return allowed;
     }
 
     private static IEnumerable<string> EnumeratePiperExecutableCandidates()

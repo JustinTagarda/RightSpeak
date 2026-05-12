@@ -13,6 +13,11 @@ using RightSpeak.Services;
 
 namespace RightSpeak.ViewModels;
 
+public sealed record PremiumUpsellRequest(
+    string FeatureName,
+    string Message,
+    bool CanShowPurchase);
+
 public sealed class MainViewModel : INotifyPropertyChanged
 {
     private const string SystemDefaultVoiceOption = "System default";
@@ -30,6 +35,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private Dictionary<string, string> _voiceOptionLabelByName;
     private readonly Func<(bool Success, string StatusMessage)>? _applyHotkeysRegistration;
     private readonly Func<string, bool>? _applyTheme;
+    private PremiumEntitlementSnapshot _premiumEntitlementSnapshot;
     private CancellationTokenSource? _hotkeyModifierWarningCts;
     private CancellationTokenSource? _activeExternalReadCancellationTokenSource;
 
@@ -72,7 +78,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         Func<(bool Success, string StatusMessage)>? applyHotkeysRegistration = null,
         bool isAnalyzeAvailable = false,
         IAppSettingsService? appSettingsService = null,
-        Func<string, bool>? applyTheme = null)
+        Func<string, bool>? applyTheme = null,
+        PremiumEntitlementSnapshot? premiumEntitlementSnapshot = null)
     {
         _readingService = readingService ?? throw new ArgumentNullException(nameof(readingService));
         _hotkeySettingsService = hotkeySettingsService ?? throw new ArgumentNullException(nameof(hotkeySettingsService));
@@ -80,6 +87,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _applyHotkeysRegistration = applyHotkeysRegistration;
         _isAnalyzeAvailable = isAnalyzeAvailable;
         _applyTheme = applyTheme;
+        _premiumEntitlementSnapshot = premiumEntitlementSnapshot ?? new PremiumEntitlementSnapshot(
+            IsPackaged: false,
+            HasPremium: true,
+            State: PremiumEntitlementState.VerifiedOwned,
+            IsPremiumProductAvailable: false,
+            PremiumProductDisplayName: "RightSpeak Premium",
+            StatusMessage: "Development build: Premium features unlocked.");
 
         _speechRate = _readingService.SpeechRate;
         _inputText = _readingService.TypedTextDraft ?? string.Empty;
@@ -96,6 +110,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _appliedReadParagraphHotkeyKey = _readParagraphHotkeyKey;
         _appliedReadDocumentHotkeyKey = _readDocumentHotkeyKey;
         _appliedStopHotkeyKey = _stopHotkeyKey;
+        EnsureBasicHotkeysIfRequired();
         UpdateHotkeyModifierWarningMessage();
 
         ReadCommand = new AsyncCommand(ReadAsync, CanRead);
@@ -110,6 +125,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
+    public event EventHandler<PremiumUpsellRequest>? PremiumUpsellRequested;
+    public PremiumEntitlementState PremiumEntitlementState => _premiumEntitlementSnapshot.State;
 
     public string InputText
     {
@@ -578,6 +595,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private bool CanResetHotkeys()
     {
+        if (!HasPremiumHotkeyCustomization)
+        {
+            return false;
+        }
+
         return _hotkeyModifierPreset != HotkeyModifierPreset.AltShift ||
                !string.Equals(_readSelectedHotkeyKey, DefaultReadSelectedHotkeyKey, StringComparison.OrdinalIgnoreCase) ||
                !string.Equals(_readParagraphHotkeyKey, DefaultReadParagraphHotkeyKey, StringComparison.OrdinalIgnoreCase) ||
@@ -999,6 +1021,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private Task ResetHotkeysAsync()
     {
+        if (!EnsurePremiumHotkeyCustomization())
+        {
+            return Task.CompletedTask;
+        }
+
         _suppressHotkeyAutoApply = true;
         try
         {
@@ -1079,6 +1106,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
+        if (!EnsurePremiumHotkeyCustomization())
+        {
+            OnPropertyChanged(propertyName);
+            OnPropertyChanged(displayPropertyName);
+            return;
+        }
+
         var previous = field;
         field = value;
         OnPropertyChanged(propertyName);
@@ -1114,6 +1148,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         if (!selected || _hotkeyModifierPreset == preset)
         {
+            return;
+        }
+
+        if (!EnsurePremiumHotkeyCustomization())
+        {
+            NotifyHotkeyPropertiesChanged();
             return;
         }
 
@@ -1320,6 +1360,94 @@ public sealed class MainViewModel : INotifyPropertyChanged
             _ => "Alt+Shift"
         };
     }
+
+    private bool EnsurePremiumHotkeyCustomization()
+    {
+        if (HasPremiumHotkeyCustomization)
+        {
+            return true;
+        }
+
+        RaisePremiumHotkeysUpsell();
+        SetStatusMessage(_premiumEntitlementSnapshot.State switch
+        {
+            PremiumEntitlementState.Checking => "Checking license...",
+            PremiumEntitlementState.VerificationFailed => "Unable to verify license right now.",
+            _ => "Custom hotkeys are available with Premium."
+        });
+        return false;
+    }
+
+    private void EnsureBasicHotkeysIfRequired()
+    {
+        if (HasPremiumHotkeyCustomization)
+        {
+            return;
+        }
+
+        _suppressHotkeyAutoApply = true;
+        try
+        {
+            _hotkeyModifierPreset = HotkeyModifierPreset.AltShift;
+            _readSelectedHotkeyKey = DefaultReadSelectedHotkeyKey;
+            _readParagraphHotkeyKey = DefaultReadParagraphHotkeyKey;
+            _readDocumentHotkeyKey = DefaultReadDocumentHotkeyKey;
+            _stopHotkeyKey = DefaultStopHotkeyKey;
+            NotifyHotkeyPropertiesChanged();
+        }
+        finally
+        {
+            _suppressHotkeyAutoApply = false;
+        }
+
+        _hotkeySettingsService.ModifierPreset = _hotkeyModifierPreset;
+        _hotkeySettingsService.ReadSelectedKey = _readSelectedHotkeyKey;
+        _hotkeySettingsService.ReadParagraphKey = _readParagraphHotkeyKey;
+        _hotkeySettingsService.ReadDocumentKey = _readDocumentHotkeyKey;
+        _hotkeySettingsService.StopKey = _stopHotkeyKey;
+        _hotkeySettingsService.Save();
+    }
+
+    private void RaisePremiumHotkeysUpsell()
+    {
+        bool canShowPurchase = _premiumEntitlementSnapshot.State == PremiumEntitlementState.VerifiedNotOwned;
+        string message = _premiumEntitlementSnapshot.State switch
+        {
+            PremiumEntitlementState.Checking =>
+                "RightSpeak is still checking your Microsoft Store entitlement. Try again in a moment.",
+            PremiumEntitlementState.VerificationFailed =>
+                "RightSpeak could not verify your Microsoft Store entitlement right now. Please ensure Microsoft Store is signed in and try again.",
+            _ =>
+                "Custom hotkeys are a Premium feature. Upgrade to RightSpeak Premium to unlock full hotkey customization."
+        };
+        PremiumUpsellRequested?.Invoke(
+            this,
+            new PremiumUpsellRequest(
+                "Custom hotkeys",
+                message,
+                canShowPurchase));
+    }
+
+    public void ApplyPremiumEntitlementSnapshot(PremiumEntitlementSnapshot snapshot)
+    {
+        if (snapshot is null)
+        {
+            return;
+        }
+
+        bool previousHasPremium = HasPremiumHotkeyCustomization;
+        _premiumEntitlementSnapshot = snapshot;
+
+        if (previousHasPremium && !HasPremiumHotkeyCustomization)
+        {
+            EnsureBasicHotkeysIfRequired();
+            SetStatusMessage("Custom hotkeys are now locked to Basic defaults.");
+        }
+
+        UpdateCommandStates();
+    }
+
+    private bool HasPremiumHotkeyCustomization => _premiumEntitlementSnapshot.HasPremium;
 
     private bool IsExternalReadCancellationStage =>
         _isExternalReadActive &&

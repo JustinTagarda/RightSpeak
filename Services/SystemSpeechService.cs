@@ -50,8 +50,8 @@ internal sealed class SystemSpeechService : ISpeechService, IPrefetchSpeechServi
     {
         using var voiceProbe = new SpeechSynthesizer();
         _gate = new SemaphoreSlim(1, 1);
-        _installedVoiceNames = voiceProbe.GetInstalledVoices()
-            .Select(voice => voice.VoiceInfo.Name)
+        _installedVoiceNames = SelectPreferredMicrosoftVoiceSet(
+                voiceProbe.GetInstalledVoices().Select(voice => voice.VoiceInfo.Name))
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         _defaultVoiceName = voiceProbe.Voice?.Name;
@@ -446,6 +446,34 @@ internal sealed class SystemSpeechService : ISpeechService, IPrefetchSpeechServi
         _prefetchCancellationTokenSource?.Cancel();
         _prefetchCancellationTokenSource?.Dispose();
         _prefetchCancellationTokenSource = null;
+    }
+
+    private static IEnumerable<string> SelectPreferredMicrosoftVoiceSet(IEnumerable<string> voiceNames)
+    {
+        var names = voiceNames
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var hasAnyMicrosoftNewVoice = names.Any(name =>
+            IsMicrosoftVoice(name) &&
+            !name.EndsWith(" Desktop", StringComparison.OrdinalIgnoreCase));
+
+        return names.Where(name =>
+        {
+            if (!IsMicrosoftVoice(name))
+            {
+                return true;
+            }
+
+            var isDesktopVariant = name.EndsWith(" Desktop", StringComparison.OrdinalIgnoreCase);
+            return hasAnyMicrosoftNewVoice ? !isDesktopVariant : isDesktopVariant;
+        });
+    }
+
+    private static bool IsMicrosoftVoice(string voiceName)
+    {
+        return voiceName.StartsWith("Microsoft ", StringComparison.OrdinalIgnoreCase);
     }
 
     private void ThrowIfDisposed()

@@ -16,6 +16,7 @@ namespace RightSpeak.Services;
 public sealed class PiperVoiceCatalogService : IVoiceCatalogService
 {
     private const string CatalogResourcePath = "Resources/Piper/CuratedVoices.json";
+    private const string PreinstalledVoiceId = "en_US-ljspeech-high";
     private readonly IVoiceInstallStore _installStore;
     private readonly HttpClient _httpClient;
     private readonly Func<PiperCatalogOptions> _optionsResolver;
@@ -248,8 +249,9 @@ public sealed class PiperVoiceCatalogService : IVoiceCatalogService
             .Select(entry =>
             {
                 installedById.TryGetValue(entry.Id, out var installed);
-                var hasInstalledFiles = HasVoiceFiles(entry.ModelFileName, entry.ConfigFileName);
-                var status = installed is null && !hasInstalledFiles
+                var isPreinstalledLjspeech = string.Equals(entry.Id, PreinstalledVoiceId, StringComparison.OrdinalIgnoreCase) &&
+                                             HasVoiceFiles(entry.ModelFileName, entry.ConfigFileName);
+                var status = installed is null && !isPreinstalledLjspeech
                     ? VoiceInstallState.NotInstalled
                     : installed is not null &&
                       !string.IsNullOrWhiteSpace(installed.Version) &&
@@ -265,7 +267,7 @@ public sealed class PiperVoiceCatalogService : IVoiceCatalogService
                     Quality = entry.Quality,
                     LicenseId = entry.LicenseId,
                     Status = status,
-                    InstalledVersion = installed?.Version ?? (hasInstalledFiles ? availableVersion : null),
+                    InstalledVersion = installed?.Version ?? (isPreinstalledLjspeech ? availableVersion : null),
                     AvailableVersion = entry.AvailableVersion,
                     ModelSizeBytes = entry.ModelSizeBytes,
                     ConfigSizeBytes = entry.ConfigSizeBytes,
@@ -279,82 +281,13 @@ public sealed class PiperVoiceCatalogService : IVoiceCatalogService
             })
             .ToList();
 
-        var knownIds = new HashSet<string>(catalogVoices.Select(voice => voice.Id), StringComparer.OrdinalIgnoreCase);
-
-        foreach (var record in manifest.Voices)
-        {
-            if (knownIds.Contains(record.Id) || !HasVoiceFiles(record.ModelFileName, record.ConfigFileName))
-            {
-                continue;
-            }
-
-            var (locale, quality) = ParseVoiceIdParts(record.Id);
-            catalogVoices.Add(new DownloadableVoice
-            {
-                Id = record.Id,
-                DisplayName = string.IsNullOrWhiteSpace(record.DisplayName) ? record.Id : record.DisplayName,
-                Locale = locale,
-                Quality = quality,
-                LicenseId = string.Empty,
-                Status = VoiceInstallState.Installed,
-                InstalledVersion = record.Version,
-                AvailableVersion = record.Version,
-                ModelSizeBytes = 0,
-                ConfigSizeBytes = 0,
-                ModelSha256 = record.ModelSha256 ?? string.Empty,
-                ConfigSha256 = record.ConfigSha256 ?? string.Empty,
-                ModelUrl = record.ModelSourceUrl ?? string.Empty,
-                ConfigUrl = record.ConfigSourceUrl ?? string.Empty,
-                ModelFileName = record.ModelFileName,
-                ConfigFileName = record.ConfigFileName
-            });
-            knownIds.Add(record.Id);
-        }
-
-        foreach (var modelPath in Directory.EnumerateFiles(_installStore.VoicesDirectory, "*.onnx", SearchOption.TopDirectoryOnly))
-        {
-            var modelFileName = Path.GetFileName(modelPath);
-            var configFileName = $"{modelFileName}.json";
-            if (!File.Exists(Path.Combine(_installStore.VoicesDirectory, configFileName)))
-            {
-                continue;
-            }
-
-            var voiceId = Path.GetFileNameWithoutExtension(modelFileName);
-            if (knownIds.Contains(voiceId))
-            {
-                continue;
-            }
-
-            var (locale, quality) = ParseVoiceIdParts(voiceId);
-            catalogVoices.Add(new DownloadableVoice
-            {
-                Id = voiceId,
-                DisplayName = voiceId,
-                Locale = locale,
-                Quality = quality,
-                LicenseId = string.Empty,
-                Status = VoiceInstallState.Installed,
-                InstalledVersion = availableVersion,
-                AvailableVersion = availableVersion,
-                ModelSizeBytes = 0,
-                ConfigSizeBytes = 0,
-                ModelSha256 = string.Empty,
-                ConfigSha256 = string.Empty,
-                ModelUrl = string.Empty,
-                ConfigUrl = string.Empty,
-                ModelFileName = modelFileName,
-                ConfigFileName = configFileName
-            });
-            knownIds.Add(voiceId);
-        }
-
         AppDiagnostics.Info(
             "voice_catalog_local_installed_overlay",
             new Dictionary<string, string?>
             {
                 ["catalogCount"] = entries.Count.ToString(),
-                ["finalCount"] = catalogVoices.Count.ToString()
+                ["finalCount"] = catalogVoices.Count.ToString(),
+                ["preinstalledVoiceId"] = PreinstalledVoiceId
             });
 
         return catalogVoices

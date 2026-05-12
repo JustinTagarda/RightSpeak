@@ -53,13 +53,13 @@ Preferred in-project folders:
 - `Resources/`
 
 Current implementation target:
-1. manual text reading, paragraph reading, selected-text reading, and document reading
+1. manual text reading, selected-text reading, and document reading are production-facing; paragraph retrieval code exists but is not currently exposed in the production UI/tray/global-hotkey surface
 2. local text-to-speech with Windows OneCore, `System.Speech`, and Piper support
-3. voice selection, speed control, and Piper voice downloads
-4. pause/resume playback, global hotkeys, and tray quick actions
-5. theme switching, always-on-top window behavior, and background Store update handling
+3. voice selection, speed control, voice preview, and Piper voice downloads/updates/removal
+4. pause/resume playback, cancel-before-speech for external reads, global hotkeys, and tray quick actions
+5. theme switching, always-on-top window behavior, version display, and background Store update handling
 6. browser-specific retrieval hardening, especially PDF fallback paths
-7. package/build support for Microsoft Store submission
+7. package/build support for Microsoft Store submission on `x64` and `ARM64`
 
 ---
 
@@ -183,7 +183,6 @@ Rules:
 
 Likely initial defaults:
 - read selected text
-- read paragraph
 - read document
 - stop reading
 

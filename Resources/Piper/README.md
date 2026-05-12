@@ -3,6 +3,12 @@
 RightSpeak will automatically prefer Piper for speech when it finds a usable
 local Piper runtime and at least one voice model.
 
+## Pre-installed voice model policy
+
+- Only `en_US-ljspeech-high` is pre-installed.
+- All other Piper voice models must be downloaded and installed through the
+  `Manage Voices` modal.
+
 ## Auto-discovery paths
 
 RightSpeak checks these locations for `piper.exe`:
