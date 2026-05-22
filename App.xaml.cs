@@ -444,10 +444,25 @@ public partial class App : WpfApplication
             return new UnsupportedStoreUpdateClient();
         }
 
-        return new StoreContextUpdateClient(
-            StoreContext.GetDefault(),
-            isSupported: true,
-            ownerWindowHandleProvider: () => _mainWindow is null ? nint.Zero : new WindowInteropHelper(_mainWindow).Handle);
+        try
+        {
+            return new StoreContextUpdateClient(
+                StoreContext.GetDefault(),
+                isSupported: true,
+                ownerWindowHandleProvider: () => _mainWindow is null ? nint.Zero : new WindowInteropHelper(_mainWindow).Handle);
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Warn(
+                "store_update_context_unavailable",
+                new Dictionary<string, string?>
+                {
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+
+            return new UnsupportedStoreUpdateClient();
+        }
     }
 
     private void OnAppUpdateSnapshotChanged(object? sender, AppUpdateSnapshot snapshot)

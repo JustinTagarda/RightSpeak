@@ -307,7 +307,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             if (_updateState == AppUpdateState.Completed)
             {
-                return "Updated - takes effect after restarting RightSpeak.";
+                return "Update will take effect the next time you open RightSpeak.";
             }
 
             if (string.IsNullOrWhiteSpace(_updateStatusMessage))

@@ -201,6 +201,44 @@ public sealed class AppUpdateServiceTests
     }
 
     [Fact]
+    public async Task Startup_with_silent_download_unavailable_uses_store_fallback_ui_without_deferred_state()
+    {
+        var pendingStore = new InMemoryDeferredUpdateStateStore();
+        var historyStore = new InMemoryDeferredUpdateHistoryStore();
+        var client = new FakeStoreUpdateClient
+        {
+            CanSilentlyDownloadUpdates = false,
+            Updates =
+            [
+                new StorePackageUpdateInfo
+                {
+                    PackageFamilyName = "RightSpeak",
+                    Version = "2.3.0.0",
+                    IsMandatory = false
+                }
+            ],
+            RequestInstallResult = StoreUpdateOperationResult.Completed()
+        };
+        var service = new StoreAppUpdateService(
+            client,
+            new PackageVersionProvider(isPackaged: true, installedVersion: "2.0.0.0"),
+            pendingStore,
+            historyStore);
+
+        await service.StartAsync();
+
+        Assert.Equal(0, client.SilentDownloadCalls);
+        Assert.Equal(1, client.RequestInstallCalls);
+        Assert.False(service.HasDeferredInstallPending);
+        Assert.Null(pendingStore.CurrentState);
+        Assert.NotNull(historyStore.CurrentState);
+        Assert.False(historyStore.CurrentState!.HasPendingInstall);
+        Assert.NotNull(historyStore.CurrentState.LastCheckUtc);
+        Assert.Equal(AppUpdateState.Completed, service.CurrentSnapshot.State);
+        Assert.Contains("next time the app opens", service.CurrentSnapshot.StatusMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Deferred_exit_install_clears_state_after_success()
     {
         var pendingState = DeferredUpdateState.CreatePending(

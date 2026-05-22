@@ -176,6 +176,14 @@ internal sealed class StoreAppUpdateService : IAppUpdateService
                     Message: "Update installation is unavailable outside the Microsoft Store package.");
             }
 
+            AppDiagnostics.Info(
+                "deferred_update_install_started",
+                new Dictionary<string, string?>
+                {
+                    ["packageIdentitySnapshot"] = deferredState.PackageIdentitySnapshot,
+                    ["availableVersion"] = deferredState.AvailableVersion
+                });
+
             PublishSnapshot(
                 new AppUpdateSnapshot(
                     AppUpdateState.Installing,
@@ -669,11 +677,11 @@ internal sealed class StoreAppUpdateService : IAppUpdateService
             if (operationResult.OverallState == StoreUpdateOperationState.Completed)
             {
                 PublishSnapshot(
-                    BuildDeferredSnapshot(
+                    BuildCompletedSnapshot(
                         hasMandatoryUpdate,
                         availableVersion,
                         _versionProvider.InstalledVersion,
-                        "Microsoft Store handled the update request."),
+                        "The Microsoft Store update will take effect the next time the app opens."),
                     publishSnapshots);
 
                 AppDiagnostics.Info(
@@ -1076,6 +1084,23 @@ internal sealed class StoreAppUpdateService : IAppUpdateService
     {
         return new AppUpdateSnapshot(
             AppUpdateState.Deferred,
+            hasMandatoryUpdate ? "Mandatory update available" : "Update available",
+            message,
+            hasMandatoryUpdate,
+            isProgressVisible: false,
+            progressValue: 1d,
+            installedVersion: installedVersion,
+            availableVersion: availableVersion);
+    }
+
+    private static AppUpdateSnapshot BuildCompletedSnapshot(
+        bool hasMandatoryUpdate,
+        string? availableVersion,
+        string installedVersion,
+        string message)
+    {
+        return new AppUpdateSnapshot(
+            AppUpdateState.Completed,
             hasMandatoryUpdate ? "Mandatory update available" : "Update available",
             message,
             hasMandatoryUpdate,

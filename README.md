@@ -136,6 +136,9 @@ Runtime update behavior for packaged installs:
 - clicking the footer version text checks for updates, shows a small "No update available" toast when appropriate, and opens the Microsoft Store app page when an update exists
 - the footer status control presents Basic/Premium mode, a Restore action, and the clickable version text in one reusable control
 - deferred install-on-exit is used when a silent download succeeds
+- successful Store fallback UI updates are treated as completed/queued and do not create an app-owned deferred install state
+- if `StoreContext` creation is unavailable in a packaged environment, the app degrades update checking safely instead of failing startup
+- the footer version text uses the same Store update service for user-initiated checks, while the startup check stays hidden and non-blocking
 - exit-time install shows an app-owned modal progress window
 - deferred update pending state is cleared after completion, while last-check and retry history are persisted separately
 - the app does not auto-restart or force-close the current session to apply a Store update
