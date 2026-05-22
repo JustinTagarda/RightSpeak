@@ -9,6 +9,7 @@ public enum StorePurchaseOutcome
     AlreadyOwned,
     Canceled,
     NotSupported,
+    Blocked,
     Failed
 }
 

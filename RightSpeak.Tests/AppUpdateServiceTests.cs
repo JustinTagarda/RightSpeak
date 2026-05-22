@@ -124,7 +124,7 @@ public sealed class AppUpdateServiceTests
     }
 
     [Fact]
-    public async Task Manual_check_uses_store_fallback_when_silent_download_is_unavailable()
+    public async Task Manual_check_reports_available_without_queueing_install()
     {
         var pendingStore = new InMemoryDeferredUpdateStateStore();
         var historyStore = new InMemoryDeferredUpdateHistoryStore();
@@ -139,8 +139,7 @@ public sealed class AppUpdateServiceTests
                     Version = "2.1.0.0",
                     IsMandatory = false
                 }
-            ],
-            RequestInstallResult = StoreUpdateOperationResult.Completed()
+            ]
         };
         var service = new StoreAppUpdateService(
             client,
@@ -150,15 +149,15 @@ public sealed class AppUpdateServiceTests
 
         var result = await service.CheckForUpdatesOnDemandAsync();
 
-        Assert.Equal(UserInitiatedUpdateAvailability.InstalledOrQueued, result.Availability);
+        Assert.Equal(UserInitiatedUpdateAvailability.Available, result.Availability);
         Assert.Equal(0, client.SilentDownloadCalls);
-        Assert.Equal(1, client.RequestInstallCalls);
+        Assert.Equal(0, client.RequestInstallCalls);
         Assert.False(service.HasDeferredInstallPending);
         Assert.Null(pendingStore.CurrentState);
         Assert.NotNull(historyStore.CurrentState);
         Assert.False(historyStore.CurrentState!.HasPendingInstall);
         Assert.NotNull(historyStore.CurrentState.LastCheckUtc);
-        Assert.Equal(AppUpdateState.Deferred, service.CurrentSnapshot.State);
+        Assert.Equal(AppUpdateState.Idle, service.CurrentSnapshot.State);
     }
 
     [Fact]

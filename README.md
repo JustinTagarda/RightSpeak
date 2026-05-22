@@ -43,7 +43,7 @@ Reliability matters more than UI polish.
 - Use tray quick actions for `Read Selected Text`, `Read Document`, `Stop Reading`, `Show RightSpeak`, and `Exit`.
 - Configure global hotkeys in-app for `Read Selected Text`, `Read Document`, and `Stop` using `Alt+Shift`, `Ctrl+Shift`, or `Ctrl+Alt`.
 - Persist theme, always-on-top, selected voice, speech rate, typed text draft, and hotkey settings.
-- Show focused-window context for external reads, packaged app version text in the footer, and background Store update handling with deferred install-on-exit and Store fallback UI when packaged.
+- Show focused-window context for external reads, a single Premium entitlement source with restore-purchase support, packaged app version text in the footer, and background Store update handling with deferred install-on-exit and Store fallback UI when packaged.
 
 ## Planned Capabilities
 Target capabilities still under consideration include:
@@ -109,6 +109,8 @@ dotnet run --project .\RightSpeak.csproj
 Before creating a real Store upload package:
 - verify the `Identity` values in `RightSpeak.Package\Package.appxmanifest` match the identity and publisher from Partner Center association
 - keep the WPF app project as the only application payload; the packaging project is deployment-only
+- promo codes for the Premium durable add-on are redeemed through the Microsoft Store redeem flow, and RightSpeak picks up the resulting entitlement on startup or through the Restore action
+- if a Partner Center association export is available for the app, compare it with the manifest and publish profile before submission; this repository does not include the Partner Center export itself
 
 Create a Store upload package from the command line:
 ```powershell
@@ -131,6 +133,8 @@ Runtime update behavior for packaged installs:
 - the check stays hidden and does not block startup
 - silent background download is attempted first when Store support allows it
 - if silent download is unavailable, blocked, canceled, or fails during the automatic startup flow, the app falls back to the Microsoft Store / OS update UI
+- clicking the footer version text checks for updates, shows a small "No update available" toast when appropriate, and opens the Microsoft Store app page when an update exists
+- the footer status control presents Basic/Premium mode, a Restore action, and the clickable version text in one reusable control
 - deferred install-on-exit is used when a silent download succeeds
 - exit-time install shows an app-owned modal progress window
 - deferred update pending state is cleared after completion, while last-check and retry history are persisted separately

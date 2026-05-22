@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using RightSpeak.Services.Store;
 using Windows.Services.Store;
 
 namespace RightSpeak.Services;
@@ -33,7 +34,6 @@ public sealed class StorePremiumEntitlementOptions
     public IReadOnlyList<string> PremiumProductIds { get; init; } = Array.Empty<string>();
     public int RefreshRetryCount { get; init; } = 3;
     public TimeSpan[] RefreshRetryDelays { get; init; } = [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(7)];
-    public TimeSpan PremiumGraceWindow { get; init; } = TimeSpan.FromDays(7);
 }
 
 public interface IPremiumEntitlementService
@@ -43,21 +43,31 @@ public interface IPremiumEntitlementService
     Task RefreshAsync(CancellationToken cancellationToken = default);
 }
 
-public sealed class StorePremiumEntitlementService : IPremiumEntitlementService
+public class StorePremiumEntitlementService : IPremiumEntitlementService
 {
     private readonly IAppVersionProvider _appVersionProvider;
+    private readonly IPremiumEntitlementCache _premiumEntitlementCache;
     private readonly Func<IntPtr>? _ownerWindowHandleProvider;
     private readonly StorePremiumEntitlementOptions _options;
     private readonly object _sync = new();
     private PremiumEntitlementSnapshot _currentSnapshot;
-    private DateTimeOffset? _lastVerifiedOwnedUtc;
 
     public StorePremiumEntitlementService(
         IAppVersionProvider appVersionProvider,
         Func<IntPtr>? ownerWindowHandleProvider = null,
         StorePremiumEntitlementOptions? options = null)
+        : this(appVersionProvider, new PremiumEntitlementCache(), ownerWindowHandleProvider, options)
+    {
+    }
+
+    public StorePremiumEntitlementService(
+        IAppVersionProvider appVersionProvider,
+        IPremiumEntitlementCache premiumEntitlementCache,
+        Func<IntPtr>? ownerWindowHandleProvider = null,
+        StorePremiumEntitlementOptions? options = null)
     {
         _appVersionProvider = appVersionProvider ?? throw new ArgumentNullException(nameof(appVersionProvider));
+        _premiumEntitlementCache = premiumEntitlementCache ?? throw new ArgumentNullException(nameof(premiumEntitlementCache));
         _ownerWindowHandleProvider = ownerWindowHandleProvider;
         _options = options ?? new StorePremiumEntitlementOptions();
 
@@ -152,7 +162,7 @@ public sealed class StorePremiumEntitlementService : IPremiumEntitlementService
                 bool hasPremium = hasActiveLicenseMatch || userCollectionOwned;
                 if (hasPremium)
                 {
-                    _lastVerifiedOwnedUtc = DateTimeOffset.UtcNow;
+                    _premiumEntitlementCache.SaveVerifiedPremium(DateTimeOffset.UtcNow);
                 }
 
                 bool hasQueryFailure = userCollectionResult.Error is not null || associatedProductsResult.Error is not null;
@@ -161,6 +171,34 @@ public sealed class StorePremiumEntitlementService : IPremiumEntitlementService
                 string statusMessage;
                 if (!hasPremium && hasQueryFailure)
                 {
+                    var cachedVerifiedUtc = _premiumEntitlementCache.TryGetLastVerifiedPremiumUtc();
+                    if (cachedVerifiedUtc is DateTimeOffset cachedUtc)
+                    {
+                        state = PremiumEntitlementState.VerificationFailed;
+                        hasPremium = true;
+                        statusMessage = $"Using cached {_options.PremiumProductDisplayName} access while Microsoft Store entitlement is being re-verified.";
+                        Publish(new PremiumEntitlementSnapshot(
+                            IsPackaged: true,
+                            HasPremium: hasPremium,
+                            State: state,
+                            IsPremiumProductAvailable: isProductAvailable,
+                            PremiumProductDisplayName: _options.PremiumProductDisplayName,
+                            StatusMessage: statusMessage,
+                            LastVerifiedOwnedUtc: cachedUtc,
+                            IsUsingGracePremium: true));
+
+                        LogRefresh(
+                            attempt,
+                            state,
+                            hasPremium,
+                            license,
+                            userCollectionResult,
+                            associatedProductsResult,
+                            "cached_verification_fallback");
+                        return;
+                    }
+
+                    _premiumEntitlementCache.Clear();
                     state = PremiumEntitlementState.VerificationFailed;
                     statusMessage = $"Unable to verify {_options.PremiumProductDisplayName} entitlement right now.";
                 }
@@ -171,10 +209,14 @@ public sealed class StorePremiumEntitlementService : IPremiumEntitlementService
                 }
                 else
                 {
+                    _premiumEntitlementCache.Clear();
                     state = PremiumEntitlementState.VerifiedNotOwned;
                     statusMessage = $"{_options.PremiumProductDisplayName} is available in Microsoft Store.";
                 }
 
+                var lastVerifiedUtc = hasPremium
+                    ? _premiumEntitlementCache.TryGetLastVerifiedPremiumUtc() ?? DateTimeOffset.UtcNow
+                    : _premiumEntitlementCache.TryGetLastVerifiedPremiumUtc();
                 Publish(new PremiumEntitlementSnapshot(
                     IsPackaged: true,
                     HasPremium: hasPremium,
@@ -182,8 +224,8 @@ public sealed class StorePremiumEntitlementService : IPremiumEntitlementService
                     IsPremiumProductAvailable: isProductAvailable,
                     PremiumProductDisplayName: _options.PremiumProductDisplayName,
                     StatusMessage: statusMessage,
-                    LastVerifiedOwnedUtc: _lastVerifiedOwnedUtc,
-                    IsUsingGracePremium: false));
+                    LastVerifiedOwnedUtc: lastVerifiedUtc,
+                    IsUsingGracePremium: hasQueryFailure && hasPremium && state == PremiumEntitlementState.VerificationFailed));
 
                 LogRefresh(
                     attempt,
@@ -222,8 +264,7 @@ public sealed class StorePremiumEntitlementService : IPremiumEntitlementService
                 }
 
                 bool allowGracePremium =
-                    _lastVerifiedOwnedUtc is DateTimeOffset lastVerified &&
-                    DateTimeOffset.UtcNow - lastVerified <= _options.PremiumGraceWindow;
+                    _premiumEntitlementCache.TryGetLastVerifiedPremiumUtc() is DateTimeOffset;
                 Publish(new PremiumEntitlementSnapshot(
                     IsPackaged: true,
                     HasPremium: allowGracePremium,
@@ -231,9 +272,9 @@ public sealed class StorePremiumEntitlementService : IPremiumEntitlementService
                     IsPremiumProductAvailable: false,
                     PremiumProductDisplayName: _options.PremiumProductDisplayName,
                     StatusMessage: allowGracePremium
-                        ? $"Using temporary {_options.PremiumProductDisplayName} access while Microsoft Store entitlement is being re-verified."
+                        ? $"Using cached {_options.PremiumProductDisplayName} access while Microsoft Store entitlement is being re-verified."
                         : $"Unable to verify {_options.PremiumProductDisplayName} entitlement right now.",
-                    LastVerifiedOwnedUtc: _lastVerifiedOwnedUtc,
+                    LastVerifiedOwnedUtc: _premiumEntitlementCache.TryGetLastVerifiedPremiumUtc(),
                     IsUsingGracePremium: allowGracePremium));
                 return;
             }
@@ -377,7 +418,7 @@ public sealed class StorePremiumEntitlementService : IPremiumEntitlementService
         }
     }
 
-    private StoreContext CreateStoreContext()
+    protected virtual StoreContext CreateStoreContext()
     {
         StoreContext context = StoreContext.GetDefault();
         IntPtr ownerWindowHandle = _ownerWindowHandleProvider?.Invoke() ?? IntPtr.Zero;

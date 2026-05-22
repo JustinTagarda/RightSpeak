@@ -519,6 +519,14 @@ internal sealed class StoreAppUpdateService : IAppUpdateService
                 ["packageIdentitySnapshot"] = packageIdentitySnapshot
             });
 
+        if (userInitiated)
+        {
+            PublishSnapshot(AppUpdateSnapshot.Idle(_versionProvider.InstalledVersion), publishSnapshots);
+            return new UserInitiatedUpdateResult(
+                UserInitiatedUpdateAvailability.Available,
+                "Update available.");
+        }
+
         if (GetStoreUpdateClient().CanSilentlyDownloadUpdates)
         {
             var silentDownloadResult = await TrySilentDownloadAsync(

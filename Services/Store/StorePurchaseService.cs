@@ -26,7 +26,7 @@ public sealed class StorePurchaseService : IStorePurchaseService
 
         if (IsRunningElevated())
         {
-            return new PremiumPurchaseResult(StorePurchaseOutcome.NotSupported, "Microsoft Store purchase is unavailable while running as administrator.");
+            return new PremiumPurchaseResult(StorePurchaseOutcome.Blocked, "Microsoft Store purchase is unavailable while running as administrator.");
         }
 
         var context = _storeContextProvider.TryGetContext();

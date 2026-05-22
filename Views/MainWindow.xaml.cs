@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Forms;
@@ -9,6 +8,7 @@ using System.Windows.Input;
 using RightSpeak.Interop;
 using Rect = System.Windows.Rect;
 using RightSpeak.Services;
+using RightSpeak.Services.Store;
 using RightSpeak.ViewModels;
 using RightSpeak.Views.Controls;
 
@@ -16,7 +16,6 @@ namespace RightSpeak.Views;
 
 public partial class MainWindow : Window
 {
-    private const string PremiumAddOnStoreId = "9PG6LR8K5M0Z";
     private readonly MainViewModel _viewModel;
     private readonly IGlobalHotkeyService _hotkeyService;
     private readonly IWebpageMainContextAnalyzer _webpageMainContextAnalyzer;
@@ -24,6 +23,7 @@ public partial class MainWindow : Window
     private readonly Func<string, string, Func<Task>, Task>? _executeFocusSensitiveReadAsync;
     private readonly Func<VoiceManagerViewModel>? _createVoiceManagerViewModel;
     private readonly IAppSettingsService? _appSettingsService;
+    private readonly IStoreNavigationService _storeNavigationService;
     private readonly uint _activateWindowMessageId;
     private readonly bool _placeOnStartup;
     private readonly AppStatusViewModel _appStatusViewModel;
@@ -38,6 +38,7 @@ public partial class MainWindow : Window
         Func<nint>? getExternalWindowHandle,
         uint activateWindowMessageId,
         AppStatusViewModel appStatusViewModel,
+        IStoreNavigationService storeNavigationService,
         IAppSettingsService? appSettingsService = null,
         Func<string, string, Func<Task>, Task>? executeFocusSensitiveReadAsync = null,
         Func<VoiceManagerViewModel>? createVoiceManagerViewModel = null,
@@ -54,6 +55,7 @@ public partial class MainWindow : Window
         _createVoiceManagerViewModel = createVoiceManagerViewModel;
         _appSettingsService = appSettingsService;
         _appStatusViewModel = appStatusViewModel ?? throw new ArgumentNullException(nameof(appStatusViewModel));
+        _storeNavigationService = storeNavigationService ?? throw new ArgumentNullException(nameof(storeNavigationService));
         DataContext = _viewModel;
         AppStatusDisplay.DataContext = _appStatusViewModel;
         _viewModel.PremiumUpsellRequested += OnPremiumUpsellRequested;
@@ -796,29 +798,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        OpenPremiumStorePage();
-    }
-
-    private static void OpenPremiumStorePage()
-    {
-        try
+        if (!_storeNavigationService.OpenPremiumPage())
         {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = $"ms-windows-store://pdp/?productid={PremiumAddOnStoreId}",
-                UseShellExecute = true
-            });
-        }
-        catch (Exception ex)
-        {
-            AppDiagnostics.Error(
-                "open_premium_store_page_failed",
-                new Dictionary<string, string?>
-                {
-                    ["storeId"] = PremiumAddOnStoreId,
-                    ["exceptionType"] = ex.GetType().FullName,
-                    ["message"] = ex.Message
-                });
+            _viewModel.SetStatusMessage("Premium purchase unavailable in this build.");
         }
     }
 }

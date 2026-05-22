@@ -38,6 +38,7 @@ public partial class App : WpfApplication
     private IAppVersionProvider? _appVersionProvider;
     private IAppUpdateService? _appUpdateService;
     private IPremiumEntitlementService? _premiumEntitlementService;
+    private IStoreNavigationService? _storeNavigationService;
     private MainViewModel? _mainViewModel;
     private AppStatusViewModel? _appStatusViewModel;
     private IReadingService? _readingService;
@@ -126,8 +127,10 @@ public partial class App : WpfApplication
             _appVersionProvider,
             new DeferredUpdateStateStore(),
             new DeferredUpdateHistoryStore());
+        var premiumEntitlementCache = new PremiumEntitlementCache();
         _premiumEntitlementService = new StorePremiumEntitlementService(
             _appVersionProvider,
+            premiumEntitlementCache,
             () => _mainWindow is null ? nint.Zero : new WindowInteropHelper(_mainWindow).Handle,
             new StorePremiumEntitlementOptions
             {
@@ -141,20 +144,13 @@ public partial class App : WpfApplication
             _appVersionProvider,
             () => _mainWindow is null ? nint.Zero : new WindowInteropHelper(_mainWindow).Handle);
         var appStatusVersionService = new AppVersionService(_appVersionProvider);
-        var premiumEntitlementCache = new PremiumEntitlementCache();
-        var storeLicenseService = new StoreLicenseService(
-            storeContextProvider,
-            premiumEntitlementCache,
-            "RightSpeak Premium",
-            [PremiumAddOnStoreId],
-            [PremiumAddOnProductId]);
         var storePurchaseService = new StorePurchaseService(storeContextProvider, PremiumAddOnStoreId);
-        var storeNavigationService = new StoreNavigationService(PremiumAddOnStoreId);
+        _storeNavigationService = new StoreNavigationService(PremiumAddOnStoreId);
         _appStatusViewModel = new AppStatusViewModel(
             storePurchaseService,
-            storeLicenseService,
+            _premiumEntitlementService,
             _appUpdateService,
-            storeNavigationService,
+            _storeNavigationService,
             appStatusVersionService);
         _mainViewModel = new MainViewModel(
             _readingService,
@@ -182,17 +178,18 @@ public partial class App : WpfApplication
         ApplyTrayHotkeyHints();
         UpdateFocusedWindowText();
 
-        _mainWindow = new MainWindow(
-            _mainViewModel,
-            _hotkeyService,
-            webpageMainContextAnalyzer,
-            () => _trayService?.LastExternalForegroundWindow ?? nint.Zero,
-            _activateWindowMessageId,
-            _appStatusViewModel,
-            _appSettingsService,
-            ExecuteTrayFocusSensitiveReadAsync,
-            CreateVoiceManagerViewModel,
-            placeOnStartup: true);
+            _mainWindow = new MainWindow(
+                _mainViewModel,
+                _hotkeyService,
+                webpageMainContextAnalyzer,
+                () => _trayService?.LastExternalForegroundWindow ?? nint.Zero,
+                _activateWindowMessageId,
+                _appStatusViewModel,
+                _storeNavigationService,
+                _appSettingsService,
+                ExecuteTrayFocusSensitiveReadAsync,
+                CreateVoiceManagerViewModel,
+                placeOnStartup: true);
         _mainWindow.ContentRendered += OnMainWindowContentRendered;
         _mainWindow.Closing += OnMainWindowClosing;
         AppDiagnostics.Info("main_window_created");
@@ -782,30 +779,7 @@ public partial class App : WpfApplication
             _readingService,
             _mainViewModel.RefreshVoiceOptions,
             _premiumEntitlementService,
-            OpenPremiumStorePage);
-    }
-
-    private static void OpenPremiumStorePage()
-    {
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = $"ms-windows-store://pdp/?productid={PremiumAddOnStoreId}",
-                UseShellExecute = true
-            });
-        }
-        catch (Exception ex)
-        {
-            AppDiagnostics.Error(
-                "open_premium_store_page_failed",
-                new Dictionary<string, string?>
-                {
-                    ["storeId"] = PremiumAddOnStoreId,
-                    ["exceptionType"] = ex.GetType().FullName,
-                    ["message"] = ex.Message
-                });
-        }
+            () => _storeNavigationService?.OpenPremiumPage());
     }
 
     private Dictionary<string, string?> BuildFocusRestoreDiagnostics(string trigger)

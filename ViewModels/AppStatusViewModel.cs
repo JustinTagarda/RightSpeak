@@ -11,7 +11,7 @@ namespace RightSpeak.ViewModels;
 public sealed class AppStatusViewModel : INotifyPropertyChanged
 {
     private readonly IStorePurchaseService _storePurchaseService;
-    private readonly IStoreLicenseService _storeLicenseService;
+    private readonly IPremiumEntitlementService _premiumEntitlementService;
     private readonly IAppUpdateService _appUpdateService;
     private readonly IStoreNavigationService _storeNavigationService;
     private bool _isBusy;
@@ -24,13 +24,13 @@ public sealed class AppStatusViewModel : INotifyPropertyChanged
 
     public AppStatusViewModel(
         IStorePurchaseService storePurchaseService,
-        IStoreLicenseService storeLicenseService,
+        IPremiumEntitlementService premiumEntitlementService,
         IAppUpdateService appUpdateService,
         IStoreNavigationService storeNavigationService,
         IAppVersionService appVersionService)
     {
         _storePurchaseService = storePurchaseService ?? throw new ArgumentNullException(nameof(storePurchaseService));
-        _storeLicenseService = storeLicenseService ?? throw new ArgumentNullException(nameof(storeLicenseService));
+        _premiumEntitlementService = premiumEntitlementService ?? throw new ArgumentNullException(nameof(premiumEntitlementService));
         _appUpdateService = appUpdateService ?? throw new ArgumentNullException(nameof(appUpdateService));
         _storeNavigationService = storeNavigationService ?? throw new ArgumentNullException(nameof(storeNavigationService));
         _versionText = appVersionService?.GetVersionText() ?? "v0.0.0.0";
@@ -134,13 +134,22 @@ public sealed class AppStatusViewModel : INotifyPropertyChanged
             StatusMessage = purchaseResult.Message;
             if (purchaseResult.Outcome == StorePurchaseOutcome.NotSupported)
             {
-                _storeNavigationService.OpenPremiumPage();
+                if (!_storeNavigationService.OpenPremiumPage())
+                {
+                    StatusMessage = "Premium purchase unavailable in this build.";
+                }
+                return;
+            }
+
+            if (purchaseResult.Outcome == StorePurchaseOutcome.Blocked)
+            {
                 return;
             }
 
             if (purchaseResult.Outcome is StorePurchaseOutcome.Succeeded or StorePurchaseOutcome.AlreadyOwned)
             {
-                var snapshot = await _storeLicenseService.RefreshAsync();
+                await _premiumEntitlementService.RefreshAsync();
+                var snapshot = _premiumEntitlementService.CurrentSnapshot;
                 ApplyPremiumSnapshot(snapshot);
                 if (snapshot.HasPremium)
                 {
@@ -154,13 +163,15 @@ public sealed class AppStatusViewModel : INotifyPropertyChanged
     {
         await RunBusyAsync(async () =>
         {
-            var snapshot = await _storeLicenseService.RefreshAsync();
+            await _premiumEntitlementService.RefreshAsync();
+            var snapshot = _premiumEntitlementService.CurrentSnapshot;
             ApplyPremiumSnapshot(snapshot);
-            StatusMessage = snapshot.HasPremium
-                ? "Premium restored"
-                : snapshot.State == PremiumEntitlementState.VerifiedNotOwned
-                    ? "No Premium purchase found"
-                    : "Unable to verify purchase right now";
+            StatusMessage = snapshot.State switch
+            {
+                PremiumEntitlementState.VerifiedOwned => "Premium restored",
+                PremiumEntitlementState.VerifiedNotOwned => "No Premium purchase found",
+                _ => "Unable to verify purchase right now"
+            };
         });
     }
 
@@ -170,14 +181,26 @@ public sealed class AppStatusViewModel : INotifyPropertyChanged
         {
             IsNoUpdateToastVisible = false;
             var result = await _appUpdateService.CheckForUpdatesOnDemandAsync();
-            StatusMessage = result.Message;
-
             if (result.Availability == UserInitiatedUpdateAvailability.NotAvailable)
             {
+                StatusMessage = result.Message;
                 IsNoUpdateToastVisible = true;
                 _ = HideNoUpdateToastAsync();
                 return;
             }
+
+            if (result.Availability == UserInitiatedUpdateAvailability.Available)
+            {
+                StatusMessage = "Update available. Opening Microsoft Store.";
+                if (!_storeNavigationService.OpenAppPage())
+                {
+                    StatusMessage = "Update available, but Microsoft Store couldn't be opened.";
+                }
+
+                return;
+            }
+
+            StatusMessage = result.Message;
         });
     }
 

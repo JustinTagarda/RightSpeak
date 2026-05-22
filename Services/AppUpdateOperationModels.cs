@@ -2,6 +2,7 @@ namespace RightSpeak.Services;
 
 public enum UserInitiatedUpdateAvailability
 {
+    Available,
     InstalledOrQueued,
     NotAvailable,
     Unavailable,
