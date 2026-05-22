@@ -113,6 +113,13 @@ public sealed class ReadingService : IReadingService
         IProgress<ReadingProgressUpdate>? progress = null)
     {
         var operationId = Guid.NewGuid().ToString("N");
+        using var scope = AppDiagnostics.BeginScope(new Dictionary<string, string?>
+        {
+            ["readOperationId"] = operationId,
+            ["readWorkflow"] = "selected_external",
+            ["readVoice"] = _settingsService.Current.VoiceName,
+            ["readRate"] = _settingsService.Current.SpeechRate.ToString()
+        });
         var readStopwatch = Stopwatch.StartNew();
         AppDiagnostics.Info(
             "focused_read_selected_started",
@@ -447,29 +454,49 @@ public sealed class ReadingService : IReadingService
         string timeoutMessage,
         CancellationToken cancellationToken)
     {
-        using var timeoutCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCancellationTokenSource.CancelAfter(timeout);
-
+        var retrievalStopwatch = Stopwatch.StartNew();
         try
         {
-            return await RetrieveTextWithRetryAsync(
-                    workflowName,
-                    operationId,
-                    retrieveAsync,
-                    timeoutCancellationTokenSource.Token)
-                .ConfigureAwait(false);
+            var retrievalTask = RetrieveTextWithRetryAsync(
+                workflowName,
+                operationId,
+                retrieveAsync,
+                cancellationToken);
+
+            return await retrievalTask.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeoutCancellationTokenSource.IsCancellationRequested)
+        catch (TimeoutException)
         {
+            retrievalStopwatch.Stop();
             AppDiagnostics.Warn(
                 "focused_read_retrieval_timeout",
                 new Dictionary<string, string?>
                 {
                     ["operationId"] = operationId,
                     ["workflow"] = workflowName,
-                    ["timeoutSeconds"] = timeout.TotalSeconds.ToString()
+                    ["timeoutSeconds"] = timeout.TotalSeconds.ToString(),
+                    ["elapsedMs"] = retrievalStopwatch.ElapsedMilliseconds.ToString()
                 });
             return (TextRetrievalResult.Failed(timeoutMessage, shouldRetry: true), false);
+        }
+        catch (OperationCanceledException)
+        {
+            retrievalStopwatch.Stop();
+            AppDiagnostics.Warn(
+                "focused_read_retrieval_cancelled",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["workflow"] = workflowName,
+                    ["timeoutSeconds"] = timeout.TotalSeconds.ToString(),
+                    ["elapsedMs"] = retrievalStopwatch.ElapsedMilliseconds.ToString(),
+                    ["cancelledByToken"] = cancellationToken.IsCancellationRequested.ToString()
+                });
+            throw;
+        }
+        finally
+        {
+            retrievalStopwatch.Stop();
         }
     }
 

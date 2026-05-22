@@ -16,7 +16,6 @@ namespace RightSpeak.Services;
 public sealed class PiperVoiceCatalogService : IVoiceCatalogService
 {
     private const string CatalogResourcePath = "Resources/Piper/CuratedVoices.json";
-    private const string PreinstalledVoiceId = "en_US-ljspeech-high";
     private readonly IVoiceInstallStore _installStore;
     private readonly HttpClient _httpClient;
     private readonly Func<PiperCatalogOptions> _optionsResolver;
@@ -245,13 +244,14 @@ public sealed class PiperVoiceCatalogService : IVoiceCatalogService
     {
         var manifest = _installStore.LoadManifest();
         var installedById = manifest.Voices.ToDictionary(voice => voice.Id, StringComparer.OrdinalIgnoreCase);
+        var installSupported = PiperRuntimeEnvironment.IsRuntimeSupportedOnCurrentArchitecture(out var installBlockedReason);
         var catalogVoices = entries
             .Select(entry =>
             {
                 installedById.TryGetValue(entry.Id, out var installed);
-                var isPreinstalledLjspeech = string.Equals(entry.Id, PreinstalledVoiceId, StringComparison.OrdinalIgnoreCase) &&
-                                             HasVoiceFiles(entry.ModelFileName, entry.ConfigFileName);
-                var status = installed is null && !isPreinstalledLjspeech
+                var isBundledVoice = string.Equals(entry.Id, PiperRuntimeEnvironment.PreinstalledVoiceId, StringComparison.OrdinalIgnoreCase) &&
+                                     HasVoiceFiles(entry.ModelFileName, entry.ConfigFileName);
+                var status = installed is null && !isBundledVoice
                     ? VoiceInstallState.NotInstalled
                     : installed is not null &&
                       !string.IsNullOrWhiteSpace(installed.Version) &&
@@ -265,9 +265,12 @@ public sealed class PiperVoiceCatalogService : IVoiceCatalogService
                     DisplayName = entry.DisplayName,
                     Locale = entry.Locale,
                     Quality = entry.Quality,
+                    IsBundled = isBundledVoice,
+                    IsInstallSupported = installSupported,
+                    InstallBlockedReason = installBlockedReason,
                     LicenseId = entry.LicenseId,
                     Status = status,
-                    InstalledVersion = installed?.Version ?? (isPreinstalledLjspeech ? availableVersion : null),
+                    InstalledVersion = installed?.Version ?? (isBundledVoice ? availableVersion : null),
                     AvailableVersion = entry.AvailableVersion,
                     ModelSizeBytes = entry.ModelSizeBytes,
                     ConfigSizeBytes = entry.ConfigSizeBytes,
@@ -287,7 +290,8 @@ public sealed class PiperVoiceCatalogService : IVoiceCatalogService
             {
                 ["catalogCount"] = entries.Count.ToString(),
                 ["finalCount"] = catalogVoices.Count.ToString(),
-                ["preinstalledVoiceId"] = PreinstalledVoiceId
+                ["preinstalledVoiceId"] = PiperRuntimeEnvironment.PreinstalledVoiceId,
+                ["installSupported"] = installSupported.ToString()
             });
 
         return catalogVoices
@@ -303,9 +307,17 @@ public sealed class PiperVoiceCatalogService : IVoiceCatalogService
             return false;
         }
 
-        var modelPath = Path.Combine(_installStore.VoicesDirectory, modelFileName);
-        var configPath = Path.Combine(_installStore.VoicesDirectory, configFileName);
-        return File.Exists(modelPath) && File.Exists(configPath);
+        foreach (var directory in PiperRuntimeEnvironment.EnumerateVoiceDirectoryCandidates(_installStore.PiperRootDirectory, PiperRuntimeEnvironment.GetBaseDirectory()))
+        {
+            var modelPath = Path.Combine(directory, modelFileName);
+            var configPath = Path.Combine(directory, configFileName);
+            if (File.Exists(modelPath) && File.Exists(configPath))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static (string Locale, string Quality) ParseVoiceIdParts(string voiceId)

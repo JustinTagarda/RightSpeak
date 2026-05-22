@@ -6,6 +6,9 @@ public sealed class DownloadableVoice
     public required string DisplayName { get; init; }
     public required string Locale { get; init; }
     public required string Quality { get; init; }
+    public bool IsBundled { get; init; }
+    public bool IsInstallSupported { get; init; } = true;
+    public string? InstallBlockedReason { get; init; }
     public string? LicenseId { get; init; }
     public string? ExclusionReason { get; init; }
     public string Engine { get; init; } = "Piper";

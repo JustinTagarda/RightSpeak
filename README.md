@@ -43,7 +43,7 @@ Reliability matters more than UI polish.
 - Use tray quick actions for `Read Selected Text`, `Read Document`, `Stop Reading`, `Show RightSpeak`, and `Exit`.
 - Configure global hotkeys in-app for `Read Selected Text`, `Read Document`, and `Stop` using `Alt+Shift`, `Ctrl+Shift`, or `Ctrl+Alt`.
 - Persist theme, always-on-top, selected voice, speech rate, typed text draft, and hotkey settings.
-- Show focused-window context for external reads, packaged app version text in the footer, and Store update progress in the footer and taskbar when packaged.
+- Show focused-window context for external reads, packaged app version text in the footer, and background Store update handling with deferred install-on-exit and Store fallback UI when packaged.
 
 ## Planned Capabilities
 Target capabilities still under consideration include:
@@ -117,21 +117,24 @@ $env:DOTNET_MSBUILD_SDK_RESOLVER_CLI_DIR='C:\Program Files\dotnet'
 $env:DOTNET_MSBUILD_SDK_RESOLVER_SDKS_DIR='C:\Program Files\dotnet\sdk\10.0.202\Sdks'
 $env:DOTNET_MSBUILD_SDK_RESOLVER_SDKS_VER='10.0.202'
 & 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe' .\RightSpeak.Package\RightSpeak.Package.wapproj /restore /p:Configuration=Release /p:Platform=x64 /p:UapAppxPackageBuildMode=StoreUpload
-& 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe' .\RightSpeak.Package\RightSpeak.Package.wapproj /restore /p:Configuration=Release /p:Platform=ARM64 /p:UapAppxPackageBuildMode=StoreUpload
 ```
 
 Expected output:
 - `.msixupload` or `.appxupload` under `RightSpeak.Package\AppPackages\`
 - install/test artifacts for local validation in the same output folder
-- build `Platform=x64` for an x64-only upload package
-- build `Platform=ARM64` for an ARM64-only upload package
-- `x86` Store packaging is not currently configured in the app project runtime identifiers
-- upload the architecture-specific files, not any older bundle artifacts
+- build `Platform=x64` for the only supported upload package
+- only x64 Store packaging is configured
+- upload the x64 file, not any older bundle artifacts
 
 Runtime update behavior for packaged installs:
-- RightSpeak checks Store updates asynchronously after startup
-- silent background download/install is attempted only when Store automatic app updates are allowed
-- update progress is shown in the footer center and on the Windows taskbar button
+- RightSpeak checks Store updates asynchronously after the main window has rendered
+- the check stays hidden and does not block startup
+- silent background download is attempted first when Store support allows it
+- if silent download is unavailable, blocked, canceled, or fails during the automatic startup flow, the app falls back to the Microsoft Store / OS update UI
+- deferred install-on-exit is used when a silent download succeeds
+- exit-time install shows an app-owned modal progress window
+- deferred update pending state is cleared after completion, while last-check and retry history are persisted separately
+- the app does not auto-restart or force-close the current session to apply a Store update
 - the footer-right version text shows the installed packaged version when the app has package identity
 
 ## Current Implementation
@@ -169,7 +172,8 @@ Runtime update behavior for packaged installs:
   - stop reading
   - show app / exit
   - menu items display current hotkey hints
-- background Microsoft Store update checks with footer and taskbar progress
+- background Microsoft Store update checks with deferred install-on-exit and Store fallback UI
+- deferred update pending state and update history are persisted separately
 - packaged version display in the footer for Store installs
 - voice manager filtering by language and quality, with refresh/cancel/install/update/remove actions
 

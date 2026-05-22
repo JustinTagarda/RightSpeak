@@ -101,6 +101,12 @@ public partial class VoiceManagerWindow : Window
         }
     }
 
+    protected override void OnClosed(EventArgs e)
+    {
+        _viewModel.Dispose();
+        base.OnClosed(e);
+    }
+
     private async Task WaitForOperationIdleAsync()
     {
         var deadline = DateTime.UtcNow + CloseCancellationWaitTimeout;

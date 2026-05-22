@@ -18,7 +18,7 @@ public sealed class PackageVersionProvider : IAppVersionProvider
     {
         IsPackaged = isPackaged;
         _installedVersion = string.IsNullOrWhiteSpace(installedVersion)
-            ? "0.0.0"
+            ? "0.0.0.0"
             : installedVersion;
     }
 
@@ -28,7 +28,7 @@ public sealed class PackageVersionProvider : IAppVersionProvider
 
     public string GetDisplayVersionText()
     {
-        return $"Version: {_installedVersion}";
+        return $"v{_installedVersion}";
     }
 
     private static bool TryGetPackageVersion(out string? version)
@@ -51,7 +51,7 @@ public sealed class PackageVersionProvider : IAppVersionProvider
         var version = Assembly.GetEntryAssembly()?.GetName().Version;
         if (version is null)
         {
-            return "0.0.0";
+            return "0.0.0.0";
         }
 
         if (version.Revision >= 0)

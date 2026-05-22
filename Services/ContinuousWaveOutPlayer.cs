@@ -12,6 +12,7 @@ internal sealed class ContinuousWaveOutPlayer : IDisposable
     private const uint CallbackFunction = 0x00030000;
     private const uint WomDoneMessage = 0x03BD;
     private const int WaverrStillPlaying = 33;
+    private const int MmSysErrInvalidHandle = 5;
     private const int DisposeCallbackWaitMilliseconds = 750;
     private const int UnprepareRetryDelayMilliseconds = 25;
     private const int UnprepareRetryCount = 20;
@@ -30,6 +31,7 @@ internal sealed class ContinuousWaveOutPlayer : IDisposable
     private int _pendingBufferCount;
     private bool _stopRequested;
     private bool _resetIssued;
+    private bool _closeIssued;
     private bool _isPaused;
     private bool _disposed;
 
@@ -293,6 +295,7 @@ internal sealed class ContinuousWaveOutPlayer : IDisposable
 
         lock (_sync)
         {
+            _closeIssued = true;
             if (unreleasedBuffers.Count == 0)
             {
                 _waveOutHandle = nint.Zero;
@@ -315,33 +318,50 @@ internal sealed class ContinuousWaveOutPlayer : IDisposable
 
     private void OnWaveOutCallback(nint waveOutHandle, uint message, nuint instance, nint param1, nint param2)
     {
-        if (message != WomDoneMessage || param1 == nint.Zero)
+        try
         {
-            return;
-        }
-
-        lock (_sync)
-        {
-            if (!_queuedBuffers.Remove(param1, out var buffer))
+            if (message != WomDoneMessage || param1 == nint.Zero)
             {
                 return;
             }
 
-            _completedBuffers.Add(buffer);
-            _pendingBufferCount = Math.Max(0, _pendingBufferCount - 1);
-            AppDiagnostics.Info(
-                "continuous_stream_buffer_completed",
+            lock (_sync)
+            {
+                if (!_queuedBuffers.Remove(param1, out var buffer))
+                {
+                    return;
+                }
+
+                _completedBuffers.Add(buffer);
+                _pendingBufferCount = Math.Max(0, _pendingBufferCount - 1);
+                AppDiagnostics.Info(
+                    "continuous_stream_buffer_completed",
+                    new Dictionary<string, string?>
+                    {
+                        ["streamId"] = _streamId,
+                        ["pendingBuffers"] = _pendingBufferCount.ToString(),
+                        ["completedBuffers"] = _completedBuffers.Count.ToString(),
+                        ["waveOutHandle"] = waveOutHandle.ToString("X")
+                    });
+                if (_pendingBufferCount == 0)
+                {
+                    _drainedCompletionSource.TrySetResult(true);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "continuous_stream_callback_failed",
                 new Dictionary<string, string?>
                 {
                     ["streamId"] = _streamId,
-                    ["pendingBuffers"] = _pendingBufferCount.ToString(),
-                    ["completedBuffers"] = _completedBuffers.Count.ToString(),
-                    ["waveOutHandle"] = waveOutHandle.ToString("X")
+                    ["message"] = ex.Message,
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["waveOutHandle"] = waveOutHandle.ToString("X"),
+                    ["callbackMessage"] = message.ToString(),
+                    ["headerPointer"] = param1.ToString("X")
                 });
-            if (_pendingBufferCount == 0)
-            {
-                _drainedCompletionSource.TrySetResult(true);
-            }
         }
     }
 
@@ -518,6 +538,23 @@ internal sealed class ContinuousWaveOutPlayer : IDisposable
             return;
         }
 
+        lock (_sync)
+        {
+            if (_closeIssued)
+            {
+                AppDiagnostics.Warn(
+                    "continuous_stream_device_close_skipped_duplicate",
+                    new Dictionary<string, string?>
+                    {
+                        ["streamId"] = _streamId,
+                        ["waveOutHandle"] = waveOutHandle.ToString("X")
+                    });
+                return;
+            }
+
+            _closeIssued = true;
+        }
+
         AppDiagnostics.Info(
             "continuous_stream_device_closing",
             new Dictionary<string, string?>
@@ -527,15 +564,27 @@ internal sealed class ContinuousWaveOutPlayer : IDisposable
             });
 
         var closeResult = waveOutClose(waveOutHandle);
-        AppDiagnostics.Info(
-            "continuous_stream_device_closed",
-            new Dictionary<string, string?>
-            {
-                ["streamId"] = _streamId,
-                ["waveOutHandle"] = waveOutHandle.ToString("X"),
-                ["closeResult"] = closeResult.ToString(),
-                ["closeResultMessage"] = closeResult == 0 ? "MMSYSERR_NOERROR" : GetWaveOutErrorMessage(closeResult)
-            });
+        var closeData = new Dictionary<string, string?>
+        {
+            ["streamId"] = _streamId,
+            ["waveOutHandle"] = waveOutHandle.ToString("X"),
+            ["closeResult"] = closeResult.ToString(),
+            ["closeResultMessage"] = closeResult == 0 ? "MMSYSERR_NOERROR" : GetWaveOutErrorMessage(closeResult)
+        };
+
+        if (closeResult == 0)
+        {
+            AppDiagnostics.Info("continuous_stream_device_closed", closeData);
+            return;
+        }
+
+        if (closeResult == MmSysErrInvalidHandle)
+        {
+            AppDiagnostics.Warn("continuous_stream_device_close_invalid_handle", closeData);
+            return;
+        }
+
+        AppDiagnostics.Warn("continuous_stream_device_close_failed", closeData);
     }
 
     private void WaitForPendingCallbacks()

@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Text.Json;
+using Windows.ApplicationModel;
 
 namespace RightSpeak.Services;
 
@@ -36,6 +37,7 @@ internal static class AppDiagnostics
     {
         WriteIndented = false
     };
+    private static readonly bool IsLoggingEnabled = BuildIsLoggingEnabled();
     private static readonly string LogFilePath = BuildLogFilePath();
     private static readonly AsyncLocal<Dictionary<string, string?>?> ScopeData = new();
 
@@ -82,6 +84,11 @@ internal static class AppDiagnostics
 
     private static void Write(string level, string eventName, IReadOnlyDictionary<string, string?>? data)
     {
+        if (!IsLoggingEnabled)
+        {
+            return;
+        }
+
         try
         {
             Dictionary<string, string?>? mergedData = null;
@@ -122,10 +129,31 @@ internal static class AppDiagnostics
 
     private static string BuildLogFilePath()
     {
-        var logDirectory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "RightSpeak",
-            "logs");
-        return Path.Combine(logDirectory, "rightspeak.log");
+        // Debug diagnostics live beside the launched executable.
+        return Path.Combine(AppContext.BaseDirectory, "rightspeak.log");
+    }
+
+    private static bool BuildIsLoggingEnabled()
+    {
+        if (!BuildConfiguration.IsDebugDiagnosticsEnabled)
+        {
+            return false;
+        }
+
+        // Store-packaged installs should never emit debug diagnostics logs.
+        return !IsPackagedProcess();
+    }
+
+    private static bool IsPackagedProcess()
+    {
+        try
+        {
+            _ = Package.Current;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

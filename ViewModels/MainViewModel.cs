@@ -38,6 +38,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private PremiumEntitlementSnapshot _premiumEntitlementSnapshot;
     private CancellationTokenSource? _hotkeyModifierWarningCts;
     private CancellationTokenSource? _activeExternalReadCancellationTokenSource;
+    private Stopwatch? _activeExternalReadStopwatch;
 
     private string _inputText = string.Empty;
     private string _statusMessage = "Select text in another app, then choose a read action.";
@@ -89,11 +90,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _applyTheme = applyTheme;
         _premiumEntitlementSnapshot = premiumEntitlementSnapshot ?? new PremiumEntitlementSnapshot(
             IsPackaged: false,
-            HasPremium: true,
-            State: PremiumEntitlementState.VerifiedOwned,
+            HasPremium: false,
+            State: PremiumEntitlementState.VerificationFailed,
             IsPremiumProductAvailable: false,
             PremiumProductDisplayName: "RightSpeak Premium",
-            StatusMessage: "Development build: Premium features unlocked.");
+            StatusMessage: "Premium entitlement is unavailable outside the Microsoft Store package.");
 
         _speechRate = _readingService.SpeechRate;
         _inputText = _readingService.TypedTextDraft ?? string.Empty;
@@ -285,12 +286,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public bool IsUpdateInProgress => _updateState is AppUpdateState.Downloading or AppUpdateState.Installing;
 
-    public bool IsFooterStaticInfoVisible => !IsUpdateInProgress;
+    public bool IsFooterStaticInfoVisible => !IsUpdateVisible;
 
     public bool IsFooterUpdateCardVisible => IsUpdateVisible;
 
     public bool IsFooterUpdateProgressVisible =>
         _updateState is AppUpdateState.Downloading or AppUpdateState.Installing && _isUpdateProgressVisible;
+
+    public string ApplicationAccessTierText => !_premiumEntitlementSnapshot.IsPackaged
+        ? "Development"
+        : _premiumEntitlementSnapshot.State == PremiumEntitlementState.Checking
+            ? string.Empty
+            : _premiumEntitlementSnapshot.HasPremium
+                ? "Premium"
+                : "Basic";
 
     public string FooterUpdateBannerText
     {
@@ -560,7 +569,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         IsUpdateProgressVisible = snapshot.IsProgressVisible &&
                                   snapshot.State is AppUpdateState.Downloading or AppUpdateState.Installing;
         UpdateProgressPercent = snapshot.ProgressValue * 100d;
-        IsUpdateVisible = snapshot.State is AppUpdateState.Downloading or AppUpdateState.Installing or AppUpdateState.Completed;
+        IsUpdateVisible = IsFooterUpdateUiVisible(snapshot.State);
         OnPropertyChanged(nameof(IsFooterUpdateBannerVisible));
         OnPropertyChanged(nameof(IsFooterDefaultVisible));
         OnPropertyChanged(nameof(IsFooterUpdateProgressVisible));
@@ -568,6 +577,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(IsUpdateInProgress));
         OnPropertyChanged(nameof(IsFooterStaticInfoVisible));
         OnPropertyChanged(nameof(IsFooterUpdateCardVisible));
+    }
+
+    private static bool IsFooterUpdateUiVisible(AppUpdateState state)
+    {
+        return state is not AppUpdateState.Idle and not AppUpdateState.Checking;
     }
 
     private static string FormatFocusedWindowTitle(string title)
@@ -676,6 +690,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         var operationId = Guid.NewGuid().ToString("N");
         var cancelStage = _externalReadStage;
+        var stopStopwatch = Stopwatch.StartNew();
         AppDiagnostics.Info(
             "stop_command_started",
             new Dictionary<string, string?>
@@ -692,6 +707,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (_activeExternalReadCancellationTokenSource is not null && IsExternalReadCancellationStage)
         {
             StatusMessage = "Canceling...";
+            var stageAtCancelRequest = _externalReadStage;
             _activeExternalReadCancellationTokenSource.Cancel();
             SetPausedState(false);
             AppDiagnostics.Info(
@@ -699,7 +715,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 new Dictionary<string, string?>
                 {
                     ["operationId"] = operationId,
-                    ["cancel_stage"] = GetCancelStageTag(cancelStage)
+                    ["cancel_stage"] = GetCancelStageTag(cancelStage),
+                    ["cancel_requested_stage"] = stageAtCancelRequest.ToString(),
+                    ["tokenCanBeCanceled"] = _activeExternalReadCancellationTokenSource.Token.CanBeCanceled.ToString(),
+                    ["tokenIsCancellationRequested"] = _activeExternalReadCancellationTokenSource.IsCancellationRequested.ToString(),
+                    ["externalReadElapsedMs"] = _activeExternalReadStopwatch?.ElapsedMilliseconds.ToString(),
+                    ["elapsedMs"] = stopStopwatch.ElapsedMilliseconds.ToString()
                 });
             return;
         }
@@ -712,7 +733,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 new Dictionary<string, string?>
                 {
                     ["operationId"] = operationId,
-                    ["cancel_stage"] = GetCancelStageTag(cancelStage)
+                    ["cancel_stage"] = GetCancelStageTag(cancelStage),
+                    ["tokenCanBeCanceled"] = _activeExternalReadCancellationTokenSource?.Token.CanBeCanceled.ToString(),
+                    ["tokenIsCancellationRequested"] = _activeExternalReadCancellationTokenSource?.IsCancellationRequested.ToString(),
+                    ["externalReadElapsedMs"] = _activeExternalReadStopwatch?.ElapsedMilliseconds.ToString()
                 });
         }
 
@@ -730,7 +754,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     ["success"] = result.Success.ToString(),
                     ["cancelled"] = result.WasCancelled.ToString(),
                     ["cancel_stage"] = GetCancelStageTag(cancelStage),
-                    ["message"] = result.Message
+                    ["message"] = result.Message,
+                    ["elapsedMs"] = stopStopwatch.ElapsedMilliseconds.ToString()
                 });
         }
         catch (Exception ex)
@@ -740,7 +765,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 new Dictionary<string, string?>
                 {
                     ["operationId"] = operationId,
-                    ["message"] = ex.Message
+                    ["message"] = ex.Message,
+                    ["elapsedMs"] = stopStopwatch.ElapsedMilliseconds.ToString()
                 });
             StatusMessage = "Couldn't stop reading. Please try again.";
         }
@@ -772,6 +798,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private async Task ReadSelectedTextAsync()
     {
         var operationId = Guid.NewGuid().ToString("N");
+        using var scope = AppDiagnostics.BeginScope(new Dictionary<string, string?>
+        {
+            ["externalCommandOperationId"] = operationId,
+            ["externalCommand"] = "read_selected_text"
+        });
         var stopwatch = Stopwatch.StartNew();
         var cancellationTokenSource = BeginExternalReadOperation(
             ReadingProgressStage.Retrieving,
@@ -926,6 +957,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private async Task ReadDocumentAsync()
     {
         var operationId = Guid.NewGuid().ToString("N");
+        using var scope = AppDiagnostics.BeginScope(new Dictionary<string, string?>
+        {
+            ["externalCommandOperationId"] = operationId,
+            ["externalCommand"] = "read_document"
+        });
         var stopwatch = Stopwatch.StartNew();
         var cancellationTokenSource = BeginExternalReadOperation(
             ReadingProgressStage.Retrieving,
@@ -1444,6 +1480,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             SetStatusMessage("Custom hotkeys are now locked to Basic defaults.");
         }
 
+        OnPropertyChanged(nameof(ApplicationAccessTierText));
         UpdateCommandStates();
     }
 
@@ -1458,6 +1495,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _activeExternalReadCancellationTokenSource?.Dispose();
         var cancellationTokenSource = new CancellationTokenSource();
         _activeExternalReadCancellationTokenSource = cancellationTokenSource;
+        _activeExternalReadStopwatch = Stopwatch.StartNew();
 
         SetExternalReadActive(true);
         SetSpeakingState(true);
@@ -1474,6 +1512,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             _activeExternalReadCancellationTokenSource = null;
         }
 
+        _activeExternalReadStopwatch?.Stop();
+        _activeExternalReadStopwatch = null;
         cancellationTokenSource.Dispose();
         SetExternalReadStage(ReadingProgressStage.Idle);
     }
@@ -1483,6 +1523,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (_activeExternalReadCancellationTokenSource is null)
         {
             return;
+        }
+
+        var previousStage = _externalReadStage;
+        var stageChanged = previousStage != update.Stage;
+        if (stageChanged || !string.IsNullOrWhiteSpace(update.Message))
+        {
+            AppDiagnostics.Info(
+                "external_read_progress_updated",
+                new Dictionary<string, string?>
+                {
+                    ["previousStage"] = previousStage.ToString(),
+                    ["currentStage"] = update.Stage.ToString(),
+                    ["stageChanged"] = stageChanged.ToString(),
+                    ["message"] = update.Message,
+                    ["elapsedMs"] = _activeExternalReadStopwatch?.ElapsedMilliseconds.ToString()
+                });
         }
 
         SetExternalReadStage(update.Stage);

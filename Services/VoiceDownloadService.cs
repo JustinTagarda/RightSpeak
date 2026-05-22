@@ -54,6 +54,21 @@ public sealed class VoiceDownloadService : IVoiceDownloadService
                 ["configUrl"] = voice.ConfigUrl
             });
 
+        if (!PiperRuntimeEnvironment.IsRuntimeSupportedOnCurrentArchitecture(out var installBlockedReason))
+        {
+            stopwatch.Stop();
+            AppDiagnostics.Warn(
+                "voice_install_blocked_unsupported_architecture",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["voiceId"] = voice.Id,
+                    ["message"] = installBlockedReason,
+                    ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
+                });
+            return VoiceInstallResult.Failed(installBlockedReason ?? "Piper installs are unavailable on this build.");
+        }
+
         if (string.IsNullOrWhiteSpace(voice.ModelSha256) || string.IsNullOrWhiteSpace(voice.ConfigSha256))
         {
             stopwatch.Stop();
@@ -182,7 +197,9 @@ public sealed class VoiceDownloadService : IVoiceDownloadService
                     ["finalConfigPath"] = finalConfigPath
                 });
 
-            var runtimeVersion = PiperVoiceCatalogService.LoadCatalogOptions().Runtime.Version;
+            var runtimeVersion = PiperVoiceCatalogService.LoadCatalogOptions().ResolveRuntimeVersion(PiperRuntimeEnvironment.GetCurrentProcessArchitecture())
+                                 ?? _installStore.LoadManifest().PiperRuntimeVersion
+                                 ?? string.Empty;
             _installStore.UpsertInstalledVoice(voice, runtimeVersion);
             stopwatch.Stop();
             AppDiagnostics.Info(

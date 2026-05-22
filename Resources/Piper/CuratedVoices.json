@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 3,
+  "catalogVersion": 4,
   "upstreamVoicesUrl": "https://raw.githubusercontent.com/rhasspy/piper/master/src/python_run/piper/voices.json",
   "voiceBaseUrl": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/",
   "huggingFaceTreeApiBaseUrl": "https://huggingface.co/api/models/rhasspy/piper-voices/tree/",
@@ -24,5 +24,14 @@
     "downloadUrl": "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip",
     "sizeBytes": 22477236,
     "sha256": "f3c58906402b24f3a96d92145f58acba6d86c9b5db896d207f78dc80811efcea"
+  },
+  "runtimeByArchitecture": {
+    "win-x64": {
+      "version": "2023.11.14-2",
+      "assetName": "piper_windows_amd64.zip",
+      "downloadUrl": "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip",
+      "sizeBytes": 22477236,
+      "sha256": "f3c58906402b24f3a96d92145f58acba6d86c9b5db896d207f78dc80811efcea"
+    }
   }
 }

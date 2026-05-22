@@ -6,6 +6,12 @@
 - Treat the global file as mandatory unless this file explicitly overrides it for RightSpeak-specific behavior.
 - If any instruction conflicts, the more specific RightSpeak rule wins, but the global file still applies everywhere else.
 
+## Mandatory Requirements Pointer
+
+- `D:\Projects\DEBUG-LOGGING.md` is mandatory implementation guidance for logging behavior.
+- Any logging-related code change in this repository must comply with `D:\Projects\DEBUG-LOGGING.md`.
+- Do not merge or ship logging changes that violate those requirements.
+
 ## Project Purpose
 RightSpeak is a Windows desktop utility built with WPF and .NET 10.
 Its core job is simple:
@@ -42,6 +48,17 @@ Until the codebase clearly needs more separation:
 - organize code so it can split later without a rewrite
 - do not introduce multi-project churn prematurely
 
+## Build Mode Metadata
+
+- `FAST_BUILD_PROJECT`: `RightSpeak.csproj`
+- `DEBUG_EXE_PATH`: `bin\Debug\net10.0-windows10.0.19041.0\RightSpeak.exe`
+
+## Package Architecture Rule
+
+- RightSpeak is x64 package only.
+- Do not add, restore, build, document, or ship ARM64, x86, AnyCPU, or multi-architecture Store package targets for this app unless explicitly instructed by the user in the current conversation.
+- Keep `RightSpeak.csproj`, `RightSpeak.Package\RightSpeak.Package.wapproj`, publish profiles, runtime assets, docs, and tests aligned with x64-only packaging.
+
 Preferred in-project folders:
 - `Views/`
 - `ViewModels/`
@@ -59,7 +76,7 @@ Current implementation target:
 4. pause/resume playback, cancel-before-speech for external reads, global hotkeys, and tray quick actions
 5. theme switching, always-on-top window behavior, version display, and background Store update handling
 6. browser-specific retrieval hardening, especially PDF fallback paths
-7. package/build support for Microsoft Store submission on `x64` and `ARM64`
+7. package/build support for Microsoft Store submission on `x64` only
 
 ---
 

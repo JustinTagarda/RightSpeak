@@ -22,3 +22,6 @@ Resources/QA/Results/*.md
 
 # Local store packaging assets
 store-assets/
+
+# Temporary downloads and cached archives
+download/

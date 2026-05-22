@@ -21,14 +21,11 @@ public sealed class VoiceInstallStore : IVoiceInstallStore
     public VoiceInstallStore(string? piperRootDirectory)
     {
         PiperRootDirectory = string.IsNullOrWhiteSpace(piperRootDirectory)
-            ? Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "RightSpeak",
-                "Piper")
+            ? PiperRuntimeEnvironment.GetDefaultPiperRootDirectory()
             : piperRootDirectory;
-        VoicesDirectory = Path.Combine(PiperRootDirectory, "voices");
-        DownloadsDirectory = Path.Combine(PiperRootDirectory, "downloads");
-        ManifestPath = Path.Combine(PiperRootDirectory, "installed-voices.json");
+        VoicesDirectory = PiperRuntimeEnvironment.GetVoicesDirectory(PiperRootDirectory);
+        DownloadsDirectory = PiperRuntimeEnvironment.GetDownloadsDirectory(PiperRootDirectory);
+        ManifestPath = PiperRuntimeEnvironment.GetManifestPath(PiperRootDirectory);
 
         Directory.CreateDirectory(PiperRootDirectory);
         Directory.CreateDirectory(VoicesDirectory);

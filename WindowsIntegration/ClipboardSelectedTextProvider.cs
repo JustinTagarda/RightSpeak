@@ -59,6 +59,20 @@ public sealed class ClipboardSelectedTextProvider : ISelectedTextProvider
 
             var foregroundWindowClass = WindowFocusInterop.GetWindowClassName(foregroundWindow);
             var foregroundWindowTitle = WindowFocusInterop.GetWindowText(foregroundWindow);
+            if (WindowFocusInterop.IsIgnoredReadTargetWindow(foregroundWindowClass, foregroundWindowTitle))
+            {
+                failureMessage = "Selected-text capture is blocked because the current foreground window is a transient overlay, not the source app.";
+                AppDiagnostics.Warn(
+                    "clipboard_fallback_ignored_foreground_window",
+                    new Dictionary<string, string?>
+                    {
+                        ["foregroundWindowHwnd"] = $"0x{foregroundWindow.ToInt64():X}",
+                        ["foregroundWindowClass"] = foregroundWindowClass,
+                        ["foregroundWindowTitle"] = foregroundWindowTitle
+                    });
+                return TextRetrievalResult.Failed(failureMessage, Source);
+            }
+
             var isBrowserPdfContext = IsBrowserPdfContext(foregroundWindowClass, foregroundWindowTitle);
             AppDiagnostics.Info(
                 "selected_workflow_clipboard_copy_started",
@@ -396,6 +410,19 @@ public sealed class ClipboardSelectedTextProvider : ISelectedTextProvider
     private static Task<TextRetrievalResult> RunOnStaThreadAsync(Func<TextRetrievalResult> action, CancellationToken cancellationToken)
     {
         var completion = new TaskCompletionSource<TextRetrievalResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationRegistration = cancellationToken.Register(
+            static state =>
+            {
+                var (taskCompletionSource, token) = ((TaskCompletionSource<TextRetrievalResult>, CancellationToken))state!;
+                taskCompletionSource.TrySetCanceled(token);
+            },
+            (completion, cancellationToken));
+        _ = completion.Task.ContinueWith(
+            static (_, state) => ((CancellationTokenRegistration)state!).Dispose(),
+            cancellationRegistration,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
 
         var worker = new Thread(() =>
         {

@@ -11,5 +11,13 @@ public interface IAppUpdateService
 
     AppUpdateSnapshot CurrentSnapshot { get; }
 
+    bool HasDeferredInstallPending { get; }
+
     Task StartAsync(CancellationToken cancellationToken = default);
+
+    Task<UserInitiatedUpdateResult> CheckForUpdatesOnDemandAsync(CancellationToken cancellationToken = default);
+
+    Task<DeferredInstallAttemptResult> TryApplyDeferredInstallOnExitAsync(
+        IProgress<AppUpdateSnapshot>? progress = null,
+        CancellationToken cancellationToken = default);
 }

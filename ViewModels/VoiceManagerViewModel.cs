@@ -14,14 +14,15 @@ using RightSpeak.Views;
 
 namespace RightSpeak.ViewModels;
 
-public sealed class VoiceManagerViewModel : INotifyPropertyChanged
+public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
 {
     private readonly IVoiceCatalogService _voiceCatalogService;
     private readonly IVoiceDownloadService _voiceDownloadService;
     private readonly IReadingService _readingService;
     private readonly Action _refreshMainVoiceOptions;
     private readonly Action _goToPremiumAction;
-    private readonly PremiumEntitlementSnapshot _entitlementSnapshot;
+    private readonly IPremiumEntitlementService _premiumEntitlementService;
+    private PremiumEntitlementSnapshot _entitlementSnapshot;
     private readonly List<DownloadableVoice> _allVoices = [];
     private CancellationTokenSource? _downloadCancellationTokenSource;
     private CancellationTokenSource? _catalogLoadCancellationTokenSource;
@@ -30,13 +31,14 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
     private bool _isLoading;
     private LanguageFilterOption? _selectedLanguageFilter;
     private string _selectedQualityFilter = "All qualities";
+    private bool _hasPremiumAccess;
 
     public VoiceManagerViewModel(
         IVoiceCatalogService voiceCatalogService,
         IVoiceDownloadService voiceDownloadService,
         IReadingService readingService,
         Action refreshMainVoiceOptions,
-        PremiumEntitlementSnapshot entitlementSnapshot,
+        IPremiumEntitlementService premiumEntitlementService,
         Action goToPremiumAction)
     {
         _voiceCatalogService = voiceCatalogService ?? throw new ArgumentNullException(nameof(voiceCatalogService));
@@ -44,8 +46,10 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
         _readingService = readingService ?? throw new ArgumentNullException(nameof(readingService));
         _refreshMainVoiceOptions = refreshMainVoiceOptions ?? throw new ArgumentNullException(nameof(refreshMainVoiceOptions));
         _goToPremiumAction = goToPremiumAction ?? throw new ArgumentNullException(nameof(goToPremiumAction));
-        _entitlementSnapshot = entitlementSnapshot ?? throw new ArgumentNullException(nameof(entitlementSnapshot));
-        HasPremiumAccess = _entitlementSnapshot.HasPremium;
+        _premiumEntitlementService = premiumEntitlementService ?? throw new ArgumentNullException(nameof(premiumEntitlementService));
+        _entitlementSnapshot = _premiumEntitlementService.CurrentSnapshot;
+        _hasPremiumAccess = _entitlementSnapshot.HasPremium;
+        _premiumEntitlementService.SnapshotChanged += OnPremiumEntitlementSnapshotChanged;
 
         RefreshCommand = new AsyncCommand(RefreshFromScratchAsync, CanRefresh);
         CancelCommand = new AsyncCommand(CancelAsync, CanCancel);
@@ -141,8 +145,24 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
     }
 
     public bool IsOperationIdle => !IsBusy && !IsLoading;
-    public bool HasPremiumAccess { get; }
-    public bool IsPremiumUpsellVisible => !HasPremiumAccess;
+    public bool HasPremiumAccess
+    {
+        get => _hasPremiumAccess;
+        private set
+        {
+            if (_hasPremiumAccess == value)
+            {
+                return;
+            }
+
+            _hasPremiumAccess = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsPremiumUpsellVisible));
+        }
+    }
+
+    public bool IsPremiumUpsellVisible =>
+        !HasPremiumAccess && _entitlementSnapshot.State == PremiumEntitlementState.VerifiedNotOwned;
     public string PremiumUpsellMessage =>
         _entitlementSnapshot.State switch
         {
@@ -195,9 +215,16 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
 
             StatusMessage = Voices.Count == 0
                 ? "No downloadable voices are available right now."
+                : !PiperRuntimeEnvironment.IsRuntimeSupportedOnCurrentArchitecture(out var installBlockedReason)
+                    ? installBlockedReason ?? "Piper installs are unavailable on this build."
                 : HasPremiumAccess
                     ? "Choose a voice to install."
-                    : "Browse available Premium voice models.";
+                    : _entitlementSnapshot.State switch
+                    {
+                        PremiumEntitlementState.Checking => "Checking license. Install and remove actions will be available after verification.",
+                        PremiumEntitlementState.VerificationFailed => "Unable to verify license right now. Please ensure Microsoft Store is signed in and try again.",
+                        _ => "Browse available Premium voice models."
+                    };
         }
         catch (OperationCanceledException)
         {
@@ -235,6 +262,12 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
 
     private async Task InstallOrUpdateAsync(VoiceManagerVoiceViewModel item)
     {
+        if (!item.Voice.IsInstallSupported)
+        {
+            StatusMessage = item.Voice.InstallBlockedReason ?? "Piper installs are unavailable on this build.";
+            return;
+        }
+
         if (!ConfirmLicenseTerms())
         {
             StatusMessage = "Voice download cancelled. You must accept license terms before install/update.";
@@ -380,6 +413,11 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
         _downloadCancellationTokenSource?.Cancel();
     }
 
+    public void Dispose()
+    {
+        _premiumEntitlementService.SnapshotChanged -= OnPremiumEntitlementSnapshotChanged;
+    }
+
     private Task GoToPremiumAsync()
     {
         _goToPremiumAction();
@@ -389,6 +427,34 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged
     private bool CanGoToPremium()
     {
         return !HasPremiumAccess && _entitlementSnapshot.State == PremiumEntitlementState.VerifiedNotOwned;
+    }
+
+    private void OnPremiumEntitlementSnapshotChanged(object? sender, PremiumEntitlementSnapshot snapshot)
+    {
+        _ = sender;
+        var app = System.Windows.Application.Current;
+        if (app is not null && !app.Dispatcher.CheckAccess())
+        {
+            _ = app.Dispatcher.InvokeAsync(() => ApplyPremiumEntitlementSnapshot(snapshot));
+            return;
+        }
+
+        ApplyPremiumEntitlementSnapshot(snapshot);
+    }
+
+    public void ApplyPremiumEntitlementSnapshot(PremiumEntitlementSnapshot snapshot)
+    {
+        _entitlementSnapshot = snapshot;
+        HasPremiumAccess = snapshot.HasPremium;
+        OnPropertyChanged(nameof(PremiumUpsellMessage));
+        OnPropertyChanged(nameof(IsPremiumUpsellVisible));
+        RefreshCommandStates();
+        if (GoToPremiumCommand is AsyncCommand goToPremiumCommand)
+        {
+            goToPremiumCommand.RaiseCanExecuteChanged();
+        }
+
+        ApplyFilters();
     }
 
     private void RefreshCommandStates()

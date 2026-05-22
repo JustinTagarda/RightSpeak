@@ -10,6 +10,7 @@ using RightSpeak.Interop;
 using Rect = System.Windows.Rect;
 using RightSpeak.Services;
 using RightSpeak.ViewModels;
+using RightSpeak.Views.Controls;
 
 namespace RightSpeak.Views;
 
@@ -25,7 +26,7 @@ public partial class MainWindow : Window
     private readonly IAppSettingsService? _appSettingsService;
     private readonly uint _activateWindowMessageId;
     private readonly bool _placeOnStartup;
-    private readonly string _appVersionText;
+    private readonly AppStatusViewModel _appStatusViewModel;
     private bool _hasPlacedOnStartup;
     private bool _suspendTopmostPersistence;
     private HwndSource? _windowSource;
@@ -36,7 +37,7 @@ public partial class MainWindow : Window
         IWebpageMainContextAnalyzer webpageMainContextAnalyzer,
         Func<nint>? getExternalWindowHandle,
         uint activateWindowMessageId,
-        string appVersionText,
+        AppStatusViewModel appStatusViewModel,
         IAppSettingsService? appSettingsService = null,
         Func<string, string, Func<Task>, Task>? executeFocusSensitiveReadAsync = null,
         Func<VoiceManagerViewModel>? createVoiceManagerViewModel = null,
@@ -52,8 +53,9 @@ public partial class MainWindow : Window
         _placeOnStartup = placeOnStartup;
         _createVoiceManagerViewModel = createVoiceManagerViewModel;
         _appSettingsService = appSettingsService;
-        _appVersionText = appVersionText;
+        _appStatusViewModel = appStatusViewModel ?? throw new ArgumentNullException(nameof(appStatusViewModel));
         DataContext = _viewModel;
+        AppStatusDisplay.DataContext = _appStatusViewModel;
         _viewModel.PremiumUpsellRequested += OnPremiumUpsellRequested;
         ApplyPersistedAlwaysOnTop();
 
@@ -61,8 +63,6 @@ public partial class MainWindow : Window
         Loaded += OnLoaded;
         Closed += OnClosed;
     }
-
-    public string AppVersionText => _appVersionText;
 
     private void OnSourceInitialized(object? sender, System.EventArgs e)
     {
@@ -443,14 +443,33 @@ public partial class MainWindow : Window
 
     private nint WndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
     {
-        if ((uint)msg != _activateWindowMessageId)
+        try
         {
+            if ((uint)msg != _activateWindowMessageId)
+            {
+                return nint.Zero;
+            }
+
+            RevealWindow();
+            handled = true;
             return nint.Zero;
         }
-
-        RevealWindow();
-        handled = true;
-        return nint.Zero;
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "main_window_wndproc_failed",
+                new Dictionary<string, string?>
+                {
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message,
+                    ["msg"] = msg.ToString(),
+                    ["wParam"] = wParam.ToString(),
+                    ["lParam"] = lParam.ToString(),
+                    ["hwnd"] = hwnd.ToString("X")
+                });
+            handled = false;
+            return nint.Zero;
+        }
     }
 
     public void RevealWindow()

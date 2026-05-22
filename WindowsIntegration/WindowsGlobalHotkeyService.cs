@@ -99,33 +99,52 @@ public sealed class WindowsGlobalHotkeyService : IGlobalHotkeyService
 
     private nint WndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
     {
-        if (msg != HotKeyInterop.WmHotKey)
+        try
         {
+            if (msg != HotKeyInterop.WmHotKey)
+            {
+                return nint.Zero;
+            }
+
+            var hotkeyId = wParam.ToInt32();
+            if (hotkeyId == ReadSelectedHotkeyId)
+            {
+                RaiseHotkeyEvent(ReadSelectedHotkeyPressed, "read_selected");
+                handled = true;
+                return nint.Zero;
+            }
+
+            if (hotkeyId == ReadDocumentHotkeyId)
+            {
+                RaiseHotkeyEvent(ReadDocumentHotkeyPressed, "read_document");
+                handled = true;
+                return nint.Zero;
+            }
+
+            if (hotkeyId == StopHotkeyId)
+            {
+                RaiseHotkeyEvent(StopHotkeyPressed, "stop");
+                handled = true;
+            }
+
             return nint.Zero;
         }
-
-        var hotkeyId = wParam.ToInt32();
-        if (hotkeyId == ReadSelectedHotkeyId)
+        catch (Exception ex)
         {
-            RaiseHotkeyEvent(ReadSelectedHotkeyPressed, "read_selected");
-            handled = true;
+            AppDiagnostics.Error(
+                "hotkey_wndproc_failed",
+                new Dictionary<string, string?>
+                {
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message,
+                    ["msg"] = msg.ToString(),
+                    ["wParam"] = wParam.ToString(),
+                    ["lParam"] = lParam.ToString(),
+                    ["hwnd"] = hwnd.ToString("X")
+                });
+            handled = false;
             return nint.Zero;
         }
-
-        if (hotkeyId == ReadDocumentHotkeyId)
-        {
-            RaiseHotkeyEvent(ReadDocumentHotkeyPressed, "read_document");
-            handled = true;
-            return nint.Zero;
-        }
-
-        if (hotkeyId == StopHotkeyId)
-        {
-            RaiseHotkeyEvent(StopHotkeyPressed, "stop");
-            handled = true;
-        }
-
-        return nint.Zero;
     }
 
     private void RaiseHotkeyEvent(EventHandler? handler, string hotkeyName)

@@ -41,6 +41,7 @@ public sealed class VoiceManagerVoiceViewModel : INotifyPropertyChanged
     public string Metadata => $"{Voice.Locale.Replace('_', '-')} - {FormatQuality(Voice.Quality)} - {FormatSize(Voice.TotalSizeBytes)}";
     public string StatusText => Status switch
     {
+        VoiceInstallState.Installed when Voice.IsBundled => "Included",
         VoiceInstallState.Installed => "Installed",
         VoiceInstallState.UpdateAvailable => "Update available",
         VoiceInstallState.Downloading => "Downloading",
@@ -133,12 +134,22 @@ public sealed class VoiceManagerVoiceViewModel : INotifyPropertyChanged
             return false;
         }
 
+        if (!Voice.IsInstallSupported)
+        {
+            return false;
+        }
+
         return Status is VoiceInstallState.NotInstalled or VoiceInstallState.UpdateAvailable or VoiceInstallState.Failed;
     }
 
     private bool CanRemove()
     {
         if (!_canManageVoices)
+        {
+            return false;
+        }
+
+        if (Voice.IsBundled)
         {
             return false;
         }

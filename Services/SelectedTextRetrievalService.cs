@@ -4,12 +4,20 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using RightSpeak.Interop;
 using RightSpeak.Models;
 
 namespace RightSpeak.Services;
 
 public sealed class SelectedTextRetrievalService : ISelectedTextRetrievalService
 {
+    private static readonly string[] BrowserProcessNames =
+    {
+        "chrome",
+        "msedge",
+        "firefox"
+    };
+
     private readonly IReadOnlyList<ISelectedTextProvider> _providers;
 
     public SelectedTextRetrievalService(IReadOnlyList<ISelectedTextProvider> providers)
@@ -26,25 +34,53 @@ public sealed class SelectedTextRetrievalService : ISelectedTextRetrievalService
 
         var operationId = Guid.NewGuid().ToString("N");
         var overallStopwatch = Stopwatch.StartNew();
+        var providerSequence = ResolveProviderSequence();
         AppDiagnostics.Info(
             "selected_workflow_retrieval_started",
             new Dictionary<string, string?>
             {
                 ["operationId"] = operationId,
-                ["providerCount"] = _providers.Count.ToString(),
-                ["providerOrder"] = string.Join(" -> ", _providers.Select(provider => provider.GetType().Name))
+                ["providerCount"] = providerSequence.Count.ToString(),
+                ["providerOrder"] = string.Join(" -> ", providerSequence.Select(provider => provider.GetType().Name))
             });
 
         TextRetrievalResult? lastFailure = null;
         var failureDetails = new List<string>();
         var shouldRetry = false;
 
-        foreach (var provider in _providers)
+        foreach (var provider in providerSequence)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             var providerStopwatch = Stopwatch.StartNew();
-            var result = await provider.TryGetSelectedTextAsync(cancellationToken).ConfigureAwait(false);
+            TextRetrievalResult result;
+            try
+            {
+                result = await provider.TryGetSelectedTextAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                providerStopwatch.Stop();
+                AppDiagnostics.Error(
+                    "selected_workflow_provider_exception",
+                    new Dictionary<string, string?>
+                    {
+                        ["operationId"] = operationId,
+                        ["provider"] = provider.GetType().Name,
+                        ["exceptionType"] = ex.GetType().FullName,
+                        ["message"] = ex.Message,
+                        ["elapsedMs"] = providerStopwatch.ElapsedMilliseconds.ToString()
+                    });
+                result = TextRetrievalResult.Failed(
+                    $"Provider exception: {ex.Message}",
+                    provider.Source,
+                    shouldRetry: true);
+            }
+
             providerStopwatch.Stop();
             var retryableByHeuristic = IsRetryableSelectedFailure(result);
             AppDiagnostics.Info(
@@ -117,6 +153,65 @@ public sealed class SelectedTextRetrievalService : ISelectedTextRetrievalService
 
         return (lastFailure ?? TextRetrievalResult.Failed("Selected-text retrieval is unavailable."))
             .WithRetrySuggested(shouldRetry);
+    }
+
+    private IReadOnlyList<ISelectedTextProvider> ResolveProviderSequence()
+    {
+        if (!ShouldBypassUiAutomationForForegroundBrowser())
+        {
+            return _providers;
+        }
+
+        var clipboardFirst = _providers
+            .Where(static provider => provider.Source == TextRetrievalSource.ClipboardFallback)
+            .Concat(_providers.Where(static provider => provider.Source != TextRetrievalSource.ClipboardFallback))
+            .ToArray();
+
+        AppDiagnostics.Info(
+            "selected_workflow_browser_provider_bypass_enabled",
+            new Dictionary<string, string?>
+            {
+                ["providerOrder"] = string.Join(" -> ", clipboardFirst.Select(provider => provider.GetType().Name))
+            });
+        return clipboardFirst;
+    }
+
+    private static bool ShouldBypassUiAutomationForForegroundBrowser()
+    {
+        try
+        {
+            var foregroundWindow = WindowFocusInterop.GetForegroundWindow();
+            if (foregroundWindow == nint.Zero)
+            {
+                return false;
+            }
+
+            var windowClass = WindowFocusInterop.GetWindowClassName(foregroundWindow);
+            if (!string.Equals(windowClass, "Chrome_WidgetWin_1", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            WindowFocusInterop.GetWindowThreadProcessId(foregroundWindow, out var processId);
+            if (processId == 0)
+            {
+                return false;
+            }
+
+            using var process = Process.GetProcessById((int)processId);
+            return BrowserProcessNames.Any(name => string.Equals(process.ProcessName, name, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Warn(
+                "selected_workflow_browser_bypass_probe_failed",
+                new Dictionary<string, string?>
+                {
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+            return false;
+        }
     }
 
     private static string? BuildPreview(string? text)

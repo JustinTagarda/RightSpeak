@@ -67,44 +67,81 @@ internal static class WindowFocusInterop
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool IsWindow(nint hWnd);
 
+    private static readonly string[] IgnoredReadTargetWindowClasses =
+    {
+        "Shell_TrayWnd",
+        "TrayNotifyWnd",
+        "NotifyIconOverflowWindow",
+        "TopLevelWindowForOverflowXamlIsland"
+    };
+
     public static bool IsValidWindow(nint hWnd)
     {
         return hWnd != nint.Zero && IsWindow(hWnd);
     }
 
+    public static bool IsIgnoredReadTargetWindow(nint hWnd)
+    {
+        return IsIgnoredReadTargetWindow(GetWindowClassName(hWnd), GetWindowText(hWnd));
+    }
+
+    internal static bool IsIgnoredReadTargetWindow(string? className, string? windowTitle)
+    {
+        if (!string.IsNullOrWhiteSpace(className))
+        {
+            foreach (var ignoredClass in IgnoredReadTargetWindowClasses)
+            {
+                if (string.Equals(className, ignoredClass, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return !string.IsNullOrWhiteSpace(windowTitle) &&
+               windowTitle.IndexOf("Snipping Tool Overlay", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
     public static bool TryActivateWindow(nint hWnd)
     {
-        if (!IsValidWindow(hWnd))
-        {
-            return false;
-        }
-
-        var foregroundWindow = GetForegroundWindow();
-        var foregroundThreadId = foregroundWindow == nint.Zero ? 0 : GetWindowThreadProcessId(foregroundWindow, nint.Zero);
-        var currentThreadId = GetCurrentThreadId();
-        var attached = false;
-
         try
         {
-            if (foregroundThreadId != 0 && foregroundThreadId != currentThreadId)
+            if (!IsValidWindow(hWnd))
             {
-                attached = AttachThreadInput(currentThreadId, foregroundThreadId, true);
+                return false;
             }
 
-            if (IsIconic(hWnd))
-            {
-                ShowWindow(hWnd, SwRestore);
-            }
+            var foregroundWindow = GetForegroundWindow();
+            var foregroundThreadId = foregroundWindow == nint.Zero ? 0 : GetWindowThreadProcessId(foregroundWindow, nint.Zero);
+            var currentThreadId = GetCurrentThreadId();
+            var attached = false;
 
-            BringWindowToTop(hWnd);
-            return SetForegroundWindow(hWnd);
+            try
+            {
+                if (foregroundThreadId != 0 && foregroundThreadId != currentThreadId)
+                {
+                    attached = AttachThreadInput(currentThreadId, foregroundThreadId, true);
+                }
+
+                if (IsIconic(hWnd))
+                {
+                    ShowWindow(hWnd, SwRestore);
+                }
+
+                BringWindowToTop(hWnd);
+                return SetForegroundWindow(hWnd);
+            }
+            finally
+            {
+                if (attached)
+                {
+                    AttachThreadInput(currentThreadId, foregroundThreadId, false);
+                }
+            }
         }
-        finally
+        catch
         {
-            if (attached)
-            {
-                AttachThreadInput(currentThreadId, foregroundThreadId, false);
-            }
+            return false;
         }
     }
 
@@ -115,9 +152,16 @@ internal static class WindowFocusInterop
             return string.Empty;
         }
 
-        var builder = new StringBuilder(ClassNameBufferLength);
-        var length = GetClassName(hWnd, builder, builder.Capacity);
-        return length > 0 ? builder.ToString() : string.Empty;
+        try
+        {
+            var builder = new StringBuilder(ClassNameBufferLength);
+            var length = GetClassName(hWnd, builder, builder.Capacity);
+            return length > 0 ? builder.ToString() : string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
     }
 
     public static string GetWindowText(nint hWnd)
@@ -127,21 +171,35 @@ internal static class WindowFocusInterop
             return string.Empty;
         }
 
-        var builder = new StringBuilder(WindowTextBufferLength);
-        var length = GetWindowText(hWnd, builder, builder.Capacity);
-        return length > 0 ? builder.ToString() : string.Empty;
+        try
+        {
+            var builder = new StringBuilder(WindowTextBufferLength);
+            var length = GetWindowText(hWnd, builder, builder.Capacity);
+            return length > 0 ? builder.ToString() : string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
     }
 
     public static nint SetForegroundChangedHook(WinEventProc callback)
     {
-        return SetWinEventHook(
-            EventSystemForeground,
-            EventSystemForeground,
-            nint.Zero,
-            callback,
-            0,
-            0,
-            WineventOutOfContext);
+        try
+        {
+            return SetWinEventHook(
+                EventSystemForeground,
+                EventSystemForeground,
+                nint.Zero,
+                callback,
+                0,
+                0,
+                WineventOutOfContext);
+        }
+        catch
+        {
+            return nint.Zero;
+        }
     }
 
     public static bool UnsetForegroundChangedHook(nint hookHandle)
@@ -151,7 +209,14 @@ internal static class WindowFocusInterop
             return true;
         }
 
-        return UnhookWinEvent(hookHandle);
+        try
+        {
+            return UnhookWinEvent(hookHandle);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     public delegate void WinEventProc(

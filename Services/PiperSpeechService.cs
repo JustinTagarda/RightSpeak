@@ -62,7 +62,7 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
     private const double ShortTextPrimerBoostSeconds = 0.18;
     private const double PiperPrimerMinSeconds = 0.00;
     private const double PiperPrimerMaxSeconds = 1.25;
-    private const string PreinstalledPiperModelName = "en_US-ljspeech-high";
+    private const string PreinstalledPiperModelName = PiperRuntimeEnvironment.PreinstalledVoiceId;
     private static readonly string[] PreferredDefaultVoices =
     {
         $"{PiperVoicePrefix}{PreinstalledPiperModelName}"
@@ -1187,16 +1187,47 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
             .FirstOrDefault();
     }
 
+    internal static string? LocatePiperExecutableForTests()
+    {
+        return LocatePiperExecutable();
+    }
+
     private static string? LocatePiperExecutable()
     {
-        foreach (var candidate in EnumeratePiperExecutableCandidates())
+        var piperRootDirectory = PiperRuntimeEnvironment.GetDefaultPiperRootDirectory();
+        foreach (var candidate in PiperRuntimeEnvironment.EnumeratePiperExecutableCandidates(piperRootDirectory, PiperRuntimeEnvironment.GetBaseDirectory()))
         {
             if (File.Exists(candidate))
             {
+                var runtimeDirectory = Path.GetDirectoryName(candidate);
+                List<string> missingRuntimeItems = [];
+                var hasRequiredRuntimeItems = !string.IsNullOrWhiteSpace(runtimeDirectory) &&
+                    PiperRuntimeEnvironment.HasRequiredRuntimeItems(runtimeDirectory, out missingRuntimeItems);
+                if (!hasRequiredRuntimeItems)
+                {
+                    AppDiagnostics.Warn(
+                        "piper_runtime_candidate_skipped_incomplete",
+                        new Dictionary<string, string?>
+                        {
+                            ["executablePath"] = candidate,
+                            ["missingDependencies"] = missingRuntimeItems.Count == 0
+                                ? "runtime directory unavailable"
+                                : string.Join(", ", missingRuntimeItems)
+                        });
+                    continue;
+                }
+
+                AppDiagnostics.Info(
+                    "piper_runtime_candidate_selected",
+                    new Dictionary<string, string?>
+                    {
+                        ["executablePath"] = candidate
+                    });
                 return candidate;
             }
         }
 
+        AppDiagnostics.Warn("piper_runtime_candidate_not_found");
         return null;
     }
 
@@ -1209,7 +1240,8 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
 
         var allowedModelNames = LoadAllowedPiperModelNames();
         var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var voicesDirectory in EnumerateVoiceDirectoryCandidates())
+        var piperRootDirectory = PiperRuntimeEnvironment.GetDefaultPiperRootDirectory();
+        foreach (var voicesDirectory in PiperRuntimeEnvironment.EnumerateVoiceDirectoryCandidates(piperRootDirectory, PiperRuntimeEnvironment.GetBaseDirectory()))
         {
             if (!Directory.Exists(voicesDirectory))
             {
@@ -1275,32 +1307,6 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
         }
 
         return allowed;
-    }
-
-    private static IEnumerable<string> EnumeratePiperExecutableCandidates()
-    {
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var baseDirectory = AppContext.BaseDirectory;
-
-        yield return Path.Combine(localAppData, "RightSpeak", "Piper", "piper.exe");
-        yield return Path.Combine(localAppData, "RightSpeak", "Piper", "piper", "piper.exe");
-        yield return Path.Combine(baseDirectory, "Resources", "Piper", "piper.exe");
-        yield return Path.Combine(baseDirectory, "Resources", "Piper", "piper", "piper.exe");
-        yield return Path.Combine(baseDirectory, "Piper", "piper.exe");
-        yield return Path.Combine(baseDirectory, "Piper", "piper", "piper.exe");
-    }
-
-    private static IEnumerable<string> EnumerateVoiceDirectoryCandidates()
-    {
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var baseDirectory = AppContext.BaseDirectory;
-
-        yield return Path.Combine(localAppData, "RightSpeak", "Piper", "voices");
-        yield return Path.Combine(localAppData, "RightSpeak", "Piper");
-        yield return Path.Combine(baseDirectory, "Resources", "Piper", "voices");
-        yield return Path.Combine(baseDirectory, "Resources", "Piper");
-        yield return Path.Combine(baseDirectory, "Piper", "voices");
-        yield return Path.Combine(baseDirectory, "Piper");
     }
 
     private static string BuildDisplayName(string modelName)
@@ -1720,9 +1726,9 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
 
     private static PiperAvailability ProbeAvailability(string? executablePath, IReadOnlyList<PiperVoiceDefinition> voices)
     {
-        if (Environment.Is64BitOperatingSystem && RuntimeInformation.ProcessArchitecture != Architecture.X64)
+        if (!PiperRuntimeEnvironment.IsRuntimeSupportedOnCurrentArchitecture(out var unsupportedArchitectureReason))
         {
-            var failureReason = $"Piper unavailable: current process architecture is {RuntimeInformation.ProcessArchitecture}.";
+            var failureReason = $"Piper unavailable: {unsupportedArchitectureReason}";
             LogAvailabilityFailure(failureReason);
             return PiperAvailability.Unavailable(failureReason);
         }
@@ -1742,24 +1748,17 @@ internal sealed class PiperSpeechService : ISpeechService, IDisposable
             return PiperAvailability.Unavailable(failureReason);
         }
 
-        var missingRuntimeDependencies = new List<string>();
-        foreach (var dependency in new[]
-                 {
-                     "onnxruntime.dll",
-                     "espeak-ng.dll",
-                     "piper_phonemize.dll"
-                 })
-        {
-            if (!File.Exists(Path.Combine(runtimeDirectory, dependency)))
+        PiperRuntimeEnvironment.HasRequiredRuntimeItems(runtimeDirectory, out var missingRuntimeDependencies);
+        AppDiagnostics.Info(
+            "piper_runtime_dependency_probe",
+            new Dictionary<string, string?>
             {
-                missingRuntimeDependencies.Add(dependency);
-            }
-        }
-
-        if (!Directory.Exists(Path.Combine(runtimeDirectory, "espeak-ng-data")))
-        {
-            missingRuntimeDependencies.Add("espeak-ng-data");
-        }
+                ["executablePath"] = executablePath,
+                ["runtimeDirectory"] = runtimeDirectory,
+                ["missingDependencies"] = missingRuntimeDependencies.Count == 0
+                    ? string.Empty
+                    : string.Join(", ", missingRuntimeDependencies)
+            });
 
         if (missingRuntimeDependencies.Count > 0)
         {

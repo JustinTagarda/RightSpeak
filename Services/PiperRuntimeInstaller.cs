@@ -13,15 +13,6 @@ namespace RightSpeak.Services;
 
 public sealed class PiperRuntimeInstaller : IPiperRuntimeInstaller
 {
-    private static readonly string[] RequiredRuntimeItems =
-    {
-        "piper.exe",
-        "onnxruntime.dll",
-        "espeak-ng.dll",
-        "piper_phonemize.dll",
-        "espeak-ng-data"
-    };
-
     private readonly IVoiceInstallStore _installStore;
     private readonly HttpClient _httpClient;
 
@@ -38,11 +29,12 @@ public sealed class PiperRuntimeInstaller : IPiperRuntimeInstaller
 
     public bool IsRuntimeInstalled()
     {
-        return RequiredRuntimeItems.All(item =>
+        if (TryGetInstalledRuntimeDirectory(out _, out _))
         {
-            var path = Path.Combine(_installStore.PiperRootDirectory, item);
-            return File.Exists(path) || Directory.Exists(path);
-        });
+            return true;
+        }
+
+        return false;
     }
 
     public async Task<VoiceInstallResult> EnsureRuntimeInstalledAsync(
@@ -56,10 +48,25 @@ public sealed class PiperRuntimeInstaller : IPiperRuntimeInstaller
             new Dictionary<string, string?>
             {
                 ["operationId"] = operationId,
-                ["runtimeRoot"] = _installStore.PiperRootDirectory
+                ["runtimeRoot"] = _installStore.PiperRootDirectory,
+                ["activeRuntimeDirectory"] = PiperRuntimeEnvironment.GetActiveRuntimeDirectory(_installStore.PiperRootDirectory)
             });
 
-        if (IsRuntimeInstalled())
+        if (!PiperRuntimeEnvironment.IsRuntimeSupportedOnCurrentArchitecture(out var unsupportedArchitectureReason))
+        {
+            stopwatch.Stop();
+            AppDiagnostics.Warn(
+                "piper_runtime_install_blocked_unsupported_architecture",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["message"] = unsupportedArchitectureReason,
+                    ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
+                });
+            return VoiceInstallResult.Failed(unsupportedArchitectureReason ?? "Piper installs are unavailable on this build.");
+        }
+
+        if (TryGetInstalledRuntimeDirectory(out var installedRuntimeDirectory, out var installedRuntimeVersion))
         {
             stopwatch.Stop();
             AppDiagnostics.Info(
@@ -67,12 +74,71 @@ public sealed class PiperRuntimeInstaller : IPiperRuntimeInstaller
                 new Dictionary<string, string?>
                 {
                     ["operationId"] = operationId,
+                    ["runtimeDirectory"] = installedRuntimeDirectory,
+                    ["runtimeVersion"] = installedRuntimeVersion,
                     ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
                 });
             return VoiceInstallResult.Completed("Piper runtime is already installed.");
         }
 
-        var options = PiperVoiceCatalogService.LoadCatalogOptions().Runtime;
+        var architecture = PiperRuntimeEnvironment.GetCurrentProcessArchitecture();
+        var runtimeMoniker = PiperRuntimeEnvironment.GetRuntimeMoniker(architecture);
+        PiperRuntimeOptions? runtimeOptions = null;
+        try
+        {
+            var catalogOptions = PiperVoiceCatalogService.LoadCatalogOptions();
+            catalogOptions.TryResolveRuntimeOptions(architecture, out _, out runtimeOptions);
+        }
+        catch
+        {
+            runtimeOptions = null;
+        }
+        foreach (var packagedRuntimeDirectory in PiperRuntimeEnvironment.EnumeratePackagedRuntimeDirectories(
+                     PiperRuntimeEnvironment.GetBaseDirectory(),
+                     architecture))
+        {
+            if (!ValidateRuntimeDirectory(packagedRuntimeDirectory, out _))
+            {
+                continue;
+            }
+
+            ActivateRuntimeDirectory(packagedRuntimeDirectory);
+            var manifest = _installStore.LoadManifest();
+            manifest.PiperRuntimeVersion = runtimeOptions?.Version ?? $"{runtimeMoniker}-packaged";
+            _installStore.SaveManifest(manifest);
+            stopwatch.Stop();
+            AppDiagnostics.Info(
+                "piper_runtime_installed_from_packaged_assets",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["version"] = manifest.PiperRuntimeVersion,
+                    ["packagedRuntimeDirectory"] = packagedRuntimeDirectory,
+                    ["activeRuntimeDirectory"] = PiperRuntimeEnvironment.GetActiveRuntimeDirectory(_installStore.PiperRootDirectory),
+                    ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
+                });
+            return VoiceInstallResult.Completed("Piper runtime installed from packaged assets.");
+        }
+
+        if (runtimeOptions is null)
+        {
+            stopwatch.Stop();
+            AppDiagnostics.Warn(
+                "piper_runtime_install_blocked_missing_runtime_configuration",
+                new Dictionary<string, string?>
+                {
+                    ["operationId"] = operationId,
+                    ["architecture"] = architecture.ToString(),
+                    ["runtimeMoniker"] = runtimeMoniker,
+                    ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
+                });
+            return VoiceInstallResult.Failed(
+                string.IsNullOrWhiteSpace(runtimeMoniker)
+                    ? $"Piper installs are currently unavailable on {architecture} builds."
+                    : $"Piper installs are currently unavailable on {architecture} builds because no bundled or downloadable {runtimeMoniker} runtime is configured.");
+        }
+
+        var options = runtimeOptions;
         if (string.IsNullOrWhiteSpace(options.Sha256))
         {
             stopwatch.Stop();
@@ -164,7 +230,39 @@ public sealed class PiperRuntimeInstaller : IPiperRuntimeInstaller
                 return VoiceInstallResult.Failed("Piper runtime archive did not contain piper.exe.");
             }
 
-            CopyDirectory(runtimeSourceDirectory, _installStore.PiperRootDirectory);
+            if (!ValidateRuntimeDirectory(runtimeSourceDirectory, out var sourceValidationFailure))
+            {
+                stopwatch.Stop();
+                AppDiagnostics.Warn(
+                    "piper_runtime_install_failed_invalid_archive_layout",
+                    new Dictionary<string, string?>
+                    {
+                        ["operationId"] = operationId,
+                        ["runtimeSourceDirectory"] = runtimeSourceDirectory,
+                        ["message"] = sourceValidationFailure,
+                        ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
+                    });
+                return VoiceInstallResult.Failed(sourceValidationFailure ?? "Piper runtime archive was incomplete.");
+            }
+
+            var versionDirectory = PiperRuntimeEnvironment.GetVersionedRuntimeDirectory(_installStore.PiperRootDirectory, options.Version);
+            StageDirectory(runtimeSourceDirectory, versionDirectory);
+            if (!ValidateRuntimeDirectory(versionDirectory, out var versionValidationFailure))
+            {
+                stopwatch.Stop();
+                AppDiagnostics.Warn(
+                    "piper_runtime_install_failed_invalid_staged_runtime",
+                    new Dictionary<string, string?>
+                    {
+                        ["operationId"] = operationId,
+                        ["versionDirectory"] = versionDirectory,
+                        ["message"] = versionValidationFailure,
+                        ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
+                    });
+                return VoiceInstallResult.Failed(versionValidationFailure ?? "Piper runtime staging failed.");
+            }
+
+            ActivateRuntimeDirectory(versionDirectory);
             var manifest = _installStore.LoadManifest();
             manifest.PiperRuntimeVersion = options.Version;
             _installStore.SaveManifest(manifest);
@@ -177,6 +275,7 @@ public sealed class PiperRuntimeInstaller : IPiperRuntimeInstaller
                     ["operationId"] = operationId,
                     ["version"] = options.Version,
                     ["root"] = _installStore.PiperRootDirectory,
+                    ["activeRuntimeDirectory"] = PiperRuntimeEnvironment.GetActiveRuntimeDirectory(_installStore.PiperRootDirectory),
                     ["elapsedMs"] = stopwatch.ElapsedMilliseconds.ToString()
                 });
             return VoiceInstallResult.Completed("Piper runtime installed.");
@@ -272,6 +371,38 @@ public sealed class PiperRuntimeInstaller : IPiperRuntimeInstaller
             : Path.GetDirectoryName(piperExecutable);
     }
 
+    private bool TryGetInstalledRuntimeDirectory(out string? runtimeDirectory, out string? runtimeVersion)
+    {
+        runtimeDirectory = null;
+        runtimeVersion = null;
+
+        var activeRuntimeDirectory = PiperRuntimeEnvironment.GetActiveRuntimeDirectory(_installStore.PiperRootDirectory);
+        if (ValidateRuntimeDirectory(activeRuntimeDirectory, out _))
+        {
+            runtimeDirectory = activeRuntimeDirectory;
+            runtimeVersion = _installStore.LoadManifest().PiperRuntimeVersion;
+            return true;
+        }
+
+        foreach (var legacyDirectory in new[]
+                 {
+                     _installStore.PiperRootDirectory,
+                     Path.Combine(_installStore.PiperRootDirectory, "piper")
+                 })
+        {
+            if (!ValidateRuntimeDirectory(legacyDirectory, out _))
+            {
+                continue;
+            }
+
+            runtimeDirectory = legacyDirectory;
+            runtimeVersion = _installStore.LoadManifest().PiperRuntimeVersion;
+            return true;
+        }
+
+        return false;
+    }
+
     private static void CopyDirectory(string sourceDirectory, string targetDirectory)
     {
         Directory.CreateDirectory(targetDirectory);
@@ -287,6 +418,67 @@ public sealed class PiperRuntimeInstaller : IPiperRuntimeInstaller
             var targetPath = Path.Combine(targetDirectory, relativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
             File.Copy(file, targetPath, overwrite: true);
+        }
+    }
+
+    private static bool ValidateRuntimeDirectory(string runtimeDirectory, out string? failureReason)
+    {
+        failureReason = null;
+        if (string.IsNullOrWhiteSpace(runtimeDirectory) || !Directory.Exists(runtimeDirectory))
+        {
+            failureReason = "Piper runtime directory was not found.";
+            return false;
+        }
+
+        if (PiperRuntimeEnvironment.HasRequiredRuntimeItems(runtimeDirectory, out var missingRuntimeItems))
+        {
+            return true;
+        }
+
+        failureReason = $"Piper runtime is incomplete: {string.Join(", ", missingRuntimeItems)}.";
+        return false;
+    }
+
+    private static void StageDirectory(string sourceDirectory, string targetDirectory)
+    {
+        var tempDirectory = $"{targetDirectory}.tmp-{Guid.NewGuid():N}";
+        if (Directory.Exists(tempDirectory))
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+
+        CopyDirectory(sourceDirectory, tempDirectory);
+        ReplaceDirectory(tempDirectory, targetDirectory);
+    }
+
+    private void ActivateRuntimeDirectory(string sourceDirectory)
+    {
+        var activeRuntimeDirectory = PiperRuntimeEnvironment.GetActiveRuntimeDirectory(_installStore.PiperRootDirectory);
+        StageDirectory(sourceDirectory, activeRuntimeDirectory);
+    }
+
+    private static void ReplaceDirectory(string sourceDirectory, string targetDirectory)
+    {
+        var backupDirectory = $"{targetDirectory}.bak-{Guid.NewGuid():N}";
+        try
+        {
+            if (Directory.Exists(targetDirectory))
+            {
+                Directory.Move(targetDirectory, backupDirectory);
+            }
+
+            Directory.Move(sourceDirectory, targetDirectory);
+            TryDeleteDirectory(backupDirectory);
+        }
+        catch
+        {
+            TryDeleteDirectory(sourceDirectory);
+            if (Directory.Exists(backupDirectory) && !Directory.Exists(targetDirectory))
+            {
+                Directory.Move(backupDirectory, targetDirectory);
+            }
+
+            throw;
         }
     }
 

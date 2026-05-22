@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,6 +12,7 @@ using Microsoft.Win32;
 using RightSpeak.Interop;
 using RightSpeak.Models;
 using RightSpeak.Services;
+using RightSpeak.Services.Store;
 using RightSpeak.ViewModels;
 using RightSpeak.Views;
 using RightSpeak.WindowsIntegration;
@@ -37,17 +39,21 @@ public partial class App : WpfApplication
     private IAppUpdateService? _appUpdateService;
     private IPremiumEntitlementService? _premiumEntitlementService;
     private MainViewModel? _mainViewModel;
+    private AppStatusViewModel? _appStatusViewModel;
     private IReadingService? _readingService;
     private MainWindow? _mainWindow;
     private Mutex? _singleInstanceMutex;
     private uint _activateWindowMessageId;
     private bool _isExiting;
+    private bool _isDeferredUpdateExitFlowRunning;
+    private bool _startupUpdateCheckScheduled;
     private readonly CancellationTokenSource _updateCancellationTokenSource = new();
 
     public App()
     {
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += OnAppDomainUnhandledException;
+        AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
         TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
     }
 
@@ -116,18 +122,40 @@ public partial class App : WpfApplication
             documentTextRetrievalService,
             _appSettingsService);
         _appUpdateService = new StoreAppUpdateService(
-            CreateStoreUpdateClient(),
+            CreateStoreUpdateClient,
             _appVersionProvider,
-            () => _readingService?.IsReading == true);
+            new DeferredUpdateStateStore(),
+            new DeferredUpdateHistoryStore());
         _premiumEntitlementService = new StorePremiumEntitlementService(
             _appVersionProvider,
             () => _mainWindow is null ? nint.Zero : new WindowInteropHelper(_mainWindow).Handle,
             new StorePremiumEntitlementOptions
             {
+                TreatUnpackagedBuildsAsPremium = false,
                 PremiumProductDisplayName = "RightSpeak Premium",
                 PremiumStoreIds = [PremiumAddOnStoreId],
                 PremiumProductIds = [PremiumAddOnProductId]
             });
+
+        var storeContextProvider = new StoreContextProvider(
+            _appVersionProvider,
+            () => _mainWindow is null ? nint.Zero : new WindowInteropHelper(_mainWindow).Handle);
+        var appStatusVersionService = new AppVersionService(_appVersionProvider);
+        var premiumEntitlementCache = new PremiumEntitlementCache();
+        var storeLicenseService = new StoreLicenseService(
+            storeContextProvider,
+            premiumEntitlementCache,
+            "RightSpeak Premium",
+            [PremiumAddOnStoreId],
+            [PremiumAddOnProductId]);
+        var storePurchaseService = new StorePurchaseService(storeContextProvider, PremiumAddOnStoreId);
+        var storeNavigationService = new StoreNavigationService(PremiumAddOnStoreId);
+        _appStatusViewModel = new AppStatusViewModel(
+            storePurchaseService,
+            storeLicenseService,
+            _appUpdateService,
+            storeNavigationService,
+            appStatusVersionService);
         _mainViewModel = new MainViewModel(
             _readingService,
             _hotkeySettingsService,
@@ -140,6 +168,8 @@ public partial class App : WpfApplication
         _premiumEntitlementService.SnapshotChanged += OnPremiumEntitlementSnapshotChanged;
         _mainViewModel.ApplyUpdateSnapshot(_appUpdateService.CurrentSnapshot);
         _mainViewModel.ApplyPremiumEntitlementSnapshot(_premiumEntitlementService.CurrentSnapshot);
+        _appStatusViewModel.ApplyPremiumSnapshot(_premiumEntitlementService.CurrentSnapshot);
+        _appStatusViewModel.StatusMessageChanged += OnAppStatusMessageChanged;
 
         _trayService = new WindowsTrayService();
         _trayService.ReadSelectedRequested += OnTrayReadSelectedRequested;
@@ -158,11 +188,13 @@ public partial class App : WpfApplication
             webpageMainContextAnalyzer,
             () => _trayService?.LastExternalForegroundWindow ?? nint.Zero,
             _activateWindowMessageId,
-            _appVersionProvider.GetDisplayVersionText(),
+            _appStatusViewModel,
             _appSettingsService,
             ExecuteTrayFocusSensitiveReadAsync,
             CreateVoiceManagerViewModel,
             placeOnStartup: true);
+        _mainWindow.ContentRendered += OnMainWindowContentRendered;
+        _mainWindow.Closing += OnMainWindowClosing;
         AppDiagnostics.Info("main_window_created");
         _mainWindow.RevealWindow();
         AppDiagnostics.Info(
@@ -205,22 +237,6 @@ public partial class App : WpfApplication
         }, DispatcherPriority.ApplicationIdle);
         ObserveBackgroundTask(revealOperation.Task, "main_window_reveal_post_startup");
 
-        var updateOperation = Dispatcher.BeginInvoke(async () =>
-        {
-            try
-            {
-                await Task.Delay(700, _updateCancellationTokenSource.Token).ConfigureAwait(true);
-                if (_appUpdateService is not null)
-                {
-                    await _appUpdateService.StartAsync(_updateCancellationTokenSource.Token).ConfigureAwait(true);
-                }
-            }
-            catch (OperationCanceledException)
-            {
-            }
-        }, DispatcherPriority.Background);
-        ObserveBackgroundTask(updateOperation.Task, "app_update_startup");
-
         var entitlementOperation = Dispatcher.BeginInvoke(async () =>
         {
             try
@@ -239,10 +255,18 @@ public partial class App : WpfApplication
 
     protected override void OnExit(ExitEventArgs e)
     {
+        AppDiagnostics.Info(
+            "app_exit_started",
+            new Dictionary<string, string?>
+            {
+                ["processId"] = Environment.ProcessId.ToString(),
+                ["exitCode"] = e.ApplicationExitCode.ToString()
+            });
         _isExiting = true;
         TryRunCleanup("app_exit_cancel_updates", () => _updateCancellationTokenSource.Cancel());
         TryRunCleanup("app_exit_unsubscribe_dispatcher_unhandled", () => DispatcherUnhandledException -= OnDispatcherUnhandledException);
         TryRunCleanup("app_exit_unsubscribe_domain_unhandled", () => AppDomain.CurrentDomain.UnhandledException -= OnAppDomainUnhandledException);
+        TryRunCleanup("app_exit_unsubscribe_process_exit", () => AppDomain.CurrentDomain.ProcessExit -= OnProcessExit);
         TryRunCleanup("app_exit_unsubscribe_task_unobserved", () => TaskScheduler.UnobservedTaskException -= OnUnobservedTaskException);
         TryRunCleanup("app_exit_dispose_hotkeys", () => _hotkeyService?.Dispose());
         TryRunCleanup("app_exit_dispose_tray", () =>
@@ -270,10 +294,26 @@ public partial class App : WpfApplication
             {
                 _premiumEntitlementService.SnapshotChanged -= OnPremiumEntitlementSnapshotChanged;
             }
+            if (_appStatusViewModel is not null)
+            {
+                _appStatusViewModel.StatusMessageChanged -= OnAppStatusMessageChanged;
+            }
+            if (_mainWindow is not null)
+            {
+                _mainWindow.ContentRendered -= OnMainWindowContentRendered;
+                _mainWindow.Closing -= OnMainWindowClosing;
+            }
         });
         TryRunCleanup("app_exit_dispose_speech", () => _speechService?.Dispose());
         TryRunCleanup("app_exit_save_settings", () => _appSettingsService?.Save());
         TryRunCleanup("app_exit_dispose_single_instance_mutex", () => _singleInstanceMutex?.Dispose());
+        AppDiagnostics.Info(
+            "app_exit_completed",
+            new Dictionary<string, string?>
+            {
+                ["processId"] = Environment.ProcessId.ToString(),
+                ["exitCode"] = e.ApplicationExitCode.ToString()
+            });
         base.OnExit(e);
     }
 
@@ -407,7 +447,10 @@ public partial class App : WpfApplication
             return new UnsupportedStoreUpdateClient();
         }
 
-        return new StoreContextUpdateClient(StoreContext.GetDefault(), isSupported: true);
+        return new StoreContextUpdateClient(
+            StoreContext.GetDefault(),
+            isSupported: true,
+            ownerWindowHandleProvider: () => _mainWindow is null ? nint.Zero : new WindowInteropHelper(_mainWindow).Handle);
     }
 
     private void OnAppUpdateSnapshotChanged(object? sender, AppUpdateSnapshot snapshot)
@@ -417,11 +460,184 @@ public partial class App : WpfApplication
             "app_update_snapshot_changed");
     }
 
+    private void OnMainWindowContentRendered(object? sender, EventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (_startupUpdateCheckScheduled || _isExiting || _appUpdateService is null)
+        {
+            return;
+        }
+
+        _startupUpdateCheckScheduled = true;
+        var startupUpdateOperation = Dispatcher.BeginInvoke(async () =>
+        {
+            try
+            {
+                await _appUpdateService.StartAsync(_updateCancellationTokenSource.Token).ConfigureAwait(true);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                AppDiagnostics.Error(
+                    "app_update_startup_failed",
+                    new Dictionary<string, string?>
+                    {
+                        ["exceptionType"] = ex.GetType().FullName,
+                        ["message"] = ex.Message
+                    });
+            }
+        }, DispatcherPriority.Background);
+
+        ObserveBackgroundTask(startupUpdateOperation.Task, "app_update_startup");
+    }
+
+    private void OnMainWindowClosing(object? sender, CancelEventArgs e)
+    {
+        _ = sender;
+
+        if (_isExiting || _isDeferredUpdateExitFlowRunning)
+        {
+            return;
+        }
+
+        if (_appUpdateService?.HasDeferredInstallPending != true)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        TryRunCleanup("app_deferred_update_exit_cancel_background", () => _updateCancellationTokenSource.Cancel());
+        _isDeferredUpdateExitFlowRunning = true;
+        ObserveBackgroundTask(RunDeferredUpdateExitFlowAsync(), "app_deferred_update_exit_flow");
+    }
+
+    private async Task RunDeferredUpdateExitFlowAsync()
+    {
+        DeferredUpdateProgressWindow? progressWindow = null;
+        try
+        {
+            if (_appUpdateService is null || _mainWindow is null)
+            {
+                return;
+            }
+
+            progressWindow = new DeferredUpdateProgressWindow
+            {
+                Owner = _mainWindow
+            };
+            progressWindow.SetStatus("Applying update...");
+            progressWindow.SetProgress(null);
+
+            var progressReporter = new Progress<AppUpdateSnapshot>(snapshot => progressWindow.SetSnapshot(snapshot));
+            var installTask = _appUpdateService.TryApplyDeferredInstallOnExitAsync(
+                progressReporter,
+                CancellationToken.None);
+
+            _ = installTask.ContinueWith(
+                _ =>
+                {
+                    try
+                    {
+                        Dispatcher.Invoke(() =>
+                        {
+                            if (progressWindow is not null && progressWindow.IsVisible)
+                            {
+                                progressWindow.Close();
+                            }
+                        });
+                    }
+                    catch
+                    {
+                        // Closing the progress window is best-effort during shutdown.
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default);
+
+            progressWindow.ShowDialog();
+            var result = await installTask.ConfigureAwait(true);
+
+            if (result.Attempted && !result.Succeeded)
+            {
+                ShowDeferredUpdateFailureMessageSafe(result.Message, result.TimedOut);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "app_deferred_update_exit_flow_failed",
+                new Dictionary<string, string?>
+                {
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+        }
+        finally
+        {
+            TryRunCleanup("app_deferred_update_exit_flow_close_window", () =>
+            {
+                if (progressWindow is not null && progressWindow.IsVisible)
+                {
+                    progressWindow.Close();
+                }
+            });
+
+            _isDeferredUpdateExitFlowRunning = false;
+            _isExiting = true;
+            Shutdown();
+        }
+    }
+
+    private void ShowDeferredUpdateFailureMessageSafe(string message, bool timedOut)
+    {
+        try
+        {
+            System.Windows.MessageBox.Show(
+                string.IsNullOrWhiteSpace(message)
+                    ? (timedOut
+                        ? "The update installation timed out. The app will close normally."
+                        : "The update could not be installed. The app will close normally.")
+                    : message,
+                "Update installation failed",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Error(
+                "app_deferred_update_failure_message_failed",
+                new Dictionary<string, string?>
+                {
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+        }
+    }
+
     private void OnPremiumEntitlementSnapshotChanged(object? sender, PremiumEntitlementSnapshot snapshot)
     {
         ObserveBackgroundTask(
-            Dispatcher.InvokeAsync(() => _mainViewModel?.ApplyPremiumEntitlementSnapshot(snapshot)).Task,
+            Dispatcher.InvokeAsync(() =>
+            {
+                _mainViewModel?.ApplyPremiumEntitlementSnapshot(snapshot);
+                _appStatusViewModel?.ApplyPremiumSnapshot(snapshot);
+            }).Task,
             "premium_entitlement_snapshot_changed");
+    }
+
+    private void OnAppStatusMessageChanged(object? sender, string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        _mainViewModel?.SetStatusMessage(message);
     }
 
     private static string GetModifierLabel(RightSpeak.Models.HotkeyModifierPreset preset)
@@ -554,7 +770,8 @@ public partial class App : WpfApplication
         if (_voiceCatalogService is null ||
             _voiceDownloadService is null ||
             _readingService is null ||
-            _mainViewModel is null)
+            _mainViewModel is null ||
+            _premiumEntitlementService is null)
         {
             throw new InvalidOperationException("Voice manager services are not available.");
         }
@@ -564,13 +781,7 @@ public partial class App : WpfApplication
             _voiceDownloadService,
             _readingService,
             _mainViewModel.RefreshVoiceOptions,
-            _premiumEntitlementService?.CurrentSnapshot ?? new PremiumEntitlementSnapshot(
-                IsPackaged: false,
-                HasPremium: true,
-                State: PremiumEntitlementState.VerifiedOwned,
-                IsPremiumProductAvailable: false,
-                PremiumProductDisplayName: "RightSpeak Premium",
-                StatusMessage: "Development build: Premium features unlocked."),
+            _premiumEntitlementService,
             OpenPremiumStorePage);
     }
 
@@ -718,7 +929,18 @@ public partial class App : WpfApplication
             {
                 ["exceptionType"] = exception?.GetType().FullName ?? e.ExceptionObject?.GetType().FullName,
                 ["message"] = exception?.Message ?? "Unknown unhandled exception",
+                ["stackTrace"] = exception?.StackTrace,
                 ["isTerminating"] = e.IsTerminating.ToString()
+            });
+    }
+
+    private static void OnProcessExit(object? sender, EventArgs e)
+    {
+        AppDiagnostics.Info(
+            "process_exit_event",
+            new Dictionary<string, string?>
+            {
+                ["processId"] = Environment.ProcessId.ToString()
             });
     }
 

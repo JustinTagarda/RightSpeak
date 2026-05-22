@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Windows.ApplicationModel;
 using Windows.Services.Store;
+using WinRT.Interop;
 
 namespace RightSpeak.Services;
 
@@ -12,11 +13,16 @@ internal sealed class StoreContextUpdateClient : IStoreUpdateClient
 {
     private readonly StoreContext _context;
     private IReadOnlyList<StorePackageUpdate> _cachedUpdates = [];
+    private readonly Func<IntPtr>? _ownerWindowHandleProvider;
 
-    public StoreContextUpdateClient(StoreContext context, bool isSupported)
+    public StoreContextUpdateClient(
+        StoreContext context,
+        bool isSupported,
+        Func<IntPtr>? ownerWindowHandleProvider = null)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         IsSupported = isSupported;
+        _ownerWindowHandleProvider = ownerWindowHandleProvider;
     }
 
     public bool IsSupported { get; }
@@ -50,6 +56,7 @@ internal sealed class StoreContextUpdateClient : IStoreUpdateClient
         CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
+        TryInitializeWithWindow();
         if (_cachedUpdates.Count == 0)
         {
             return StoreUpdateOperationResult.Completed();
@@ -66,11 +73,34 @@ internal sealed class StoreContextUpdateClient : IStoreUpdateClient
         return MapResult(result);
     }
 
+    public async Task<StoreUpdateOperationResult> RequestDownloadAsync(
+        Action<StoreUpdateOperationProgress>? onProgress,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        TryInitializeWithWindow();
+        if (_cachedUpdates.Count == 0)
+        {
+            return StoreUpdateOperationResult.Completed();
+        }
+
+        var operation = _context.RequestDownloadStorePackageUpdatesAsync(_cachedUpdates);
+        operation.Progress = (_, progress) => onProgress?.Invoke(new StoreUpdateOperationProgress
+        {
+            PackageFamilyName = progress.PackageFamilyName,
+            Progress = ClampProgress(progress.PackageDownloadProgress)
+        });
+
+        var result = await operation;
+        return MapResult(result);
+    }
+
     public async Task<StoreUpdateOperationResult> TrySilentDownloadAndInstallAsync(
         Action<StoreUpdateOperationProgress>? onProgress,
         CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
+        TryInitializeWithWindow();
         if (_cachedUpdates.Count == 0)
         {
             return StoreUpdateOperationResult.Completed();
@@ -85,6 +115,36 @@ internal sealed class StoreContextUpdateClient : IStoreUpdateClient
 
         var result = await operation;
         return MapResult(result);
+    }
+
+    public async Task<StoreUpdateOperationResult> RequestDownloadAndInstallAsync(
+        Action<StoreUpdateOperationProgress>? onProgress,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        TryInitializeWithWindow();
+        if (_cachedUpdates.Count == 0)
+        {
+            return StoreUpdateOperationResult.Completed();
+        }
+
+        TryInitializeWithWindow();
+        var operation = _context.RequestDownloadAndInstallStorePackageUpdatesAsync(_cachedUpdates);
+        operation.Progress = (_, progress) => onProgress?.Invoke(new StoreUpdateOperationProgress
+        {
+            PackageFamilyName = progress.PackageFamilyName,
+            Progress = ClampProgress(progress.PackageDownloadProgress)
+        });
+
+        var result = await operation;
+        return MapResult(result);
+    }
+
+    public async Task<IReadOnlyList<StoreQueueItem>> GetAssociatedStoreQueueItemsAsync(CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        TryInitializeWithWindow();
+        return await _context.GetAssociatedStoreQueueItemsAsync();
     }
 
     private static StoreUpdateOperationResult MapResult(StorePackageUpdateResult result)
@@ -119,5 +179,32 @@ internal sealed class StoreContextUpdateClient : IStoreUpdateClient
     private static string FormatVersion(PackageVersion version)
     {
         return $"{version.Major}.{version.Minor}.{version.Build}.{version.Revision}";
+    }
+
+    private void TryInitializeWithWindow()
+    {
+        if (_ownerWindowHandleProvider is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var ownerWindowHandle = _ownerWindowHandleProvider.Invoke();
+            if (ownerWindowHandle != IntPtr.Zero)
+            {
+                InitializeWithWindow.Initialize(_context, ownerWindowHandle);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Warn(
+                "store_update_owner_window_initialize_failed",
+                new Dictionary<string, string?>
+                {
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+        }
     }
 }

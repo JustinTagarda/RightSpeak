@@ -1,6 +1,7 @@
 <Window x:Class="RightSpeak.Views.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:RightSpeak.Views.Controls"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="RightSpeak"
         Icon="/Resources/Icons/RightSpeak.ico"
@@ -300,7 +301,12 @@
                         <TextBlock VerticalAlignment="Center"
                                    Foreground="{DynamicResource TitleBarForegroundBrush}"
                                    Text="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=Title}" />
-                        <CheckBox Margin="20,0,0,0"
+                        <TextBlock Margin="12,0,0,0"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource FooterTextBrush}"
+                                   FontWeight="Bold"
+                                   Text="{Binding ApplicationAccessTierText}" />
+                        <CheckBox Margin="12,0,0,0"
                                   Style="{StaticResource TitleBarCompactCheckBoxStyle}"
                                   Content="Always on top"
                                   Checked="AlwaysOnTopCheckBox_OnCheckedChanged"
@@ -670,6 +676,7 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Text="© 2026 JustinTagarda. All rights reserved."
                        Foreground="{DynamicResource FooterTextBrush}"
@@ -684,19 +691,20 @@
                     BorderBrush="{DynamicResource CardBorderBrush}"
                     BorderThickness="1"
                     Visibility="{Binding IsFooterUpdateCardVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
-                <StackPanel Width="210">
-                    <TextBlock Text="{Binding UpdateStageText}"
+                <StackPanel Width="360"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <TextBlock Width="220"
+                               VerticalAlignment="Center"
+                               Text="{Binding FooterUpdateBannerText}"
                                FontSize="11"
                                FontWeight="SemiBold"
                                Foreground="{DynamicResource FooterTextBrush}"
                                TextTrimming="CharacterEllipsis" />
-                    <TextBlock Text="{Binding UpdateStatusMessage}"
-                               Margin="0,1,0,0"
-                               FontSize="11"
-                               Foreground="{DynamicResource SubtleTextBrush}"
-                               TextTrimming="CharacterEllipsis" />
-                    <ProgressBar Margin="0,4,0,0"
+                    <ProgressBar Width="90"
                                  Height="4"
+                                 Margin="8,0,0,0"
+                                 VerticalAlignment="Center"
                                  Minimum="0"
                                  Maximum="100"
                                  Value="{Binding UpdateProgressPercent, Mode=OneWay}"
@@ -722,12 +730,12 @@
                           ItemsSource="{Binding ThemeOptions}"
                           SelectedItem="{Binding SelectedTheme, UpdateSourceTrigger=PropertyChanged}" />
             </StackPanel>
-            <TextBlock Grid.Column="3"
-                       Text="{Binding AppVersionText, RelativeSource={RelativeSource AncestorType=Window}}"
-                       Foreground="{DynamicResource FooterTextBrush}"
-                       FontSize="12"
-                       VerticalAlignment="Center"
-                       HorizontalAlignment="Right" />
+            <controls:AppStatusDisplay x:Name="AppStatusDisplay"
+                                       Grid.Column="4"
+                                       VerticalAlignment="Center"
+                                       HorizontalAlignment="Right"
+                                       Foreground="{DynamicResource FooterTextBrush}"
+                                       FontSize="12" />
         </Grid>
             </Grid>
         </Grid>

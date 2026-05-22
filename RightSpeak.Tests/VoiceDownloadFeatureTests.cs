@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using System.Text;
+using RightSpeak.Interop;
 using RightSpeak.Models;
 using RightSpeak.Services;
 using Xunit;
@@ -145,6 +147,130 @@ public sealed class VoiceDownloadFeatureTests
         }
     }
 
+    [Fact]
+    public void Bundled_piper_runtime_assets_exist_in_repo()
+    {
+        var resourcesDirectory = GetPiperResourcesDirectory();
+
+        Assert.True(File.Exists(Path.Combine(resourcesDirectory, "runtime", "piper.exe")));
+        Assert.True(File.Exists(Path.Combine(resourcesDirectory, "runtime", "onnxruntime.dll")));
+        Assert.True(File.Exists(Path.Combine(resourcesDirectory, "runtime", "espeak-ng.dll")));
+        Assert.True(File.Exists(Path.Combine(resourcesDirectory, "runtime", "piper_phonemize.dll")));
+        Assert.True(Directory.Exists(Path.Combine(resourcesDirectory, "runtime", "espeak-ng-data")));
+    }
+
+    [Fact]
+    public void Bundled_ljspeech_voice_assets_exist_in_repo()
+    {
+        var resourcesDirectory = GetPiperResourcesDirectory();
+
+        Assert.True(File.Exists(Path.Combine(resourcesDirectory, "voices", "en_US-ljspeech-high.onnx")));
+        Assert.True(File.Exists(Path.Combine(resourcesDirectory, "voices", "en_US-ljspeech-high.onnx.json")));
+    }
+
+    [Fact]
+    public void Piper_executable_discovery_skips_incomplete_local_runtime()
+    {
+        var root = CreateTempDirectory();
+        var baseDirectory = CreateTempDirectory();
+        try
+        {
+            using var baseDirectoryScope = PiperRuntimeEnvironment.UseBaseDirectoryForTests(baseDirectory);
+            using var rootScope = PiperRuntimeEnvironment.UsePiperRootDirectoryForTests(root);
+            var localRoot = root;
+            var incompleteLocalRuntime = PiperRuntimeEnvironment.GetActiveRuntimeDirectory(localRoot);
+            var packagedRuntime = PiperRuntimeEnvironment.GetPackagedRuntimeDirectory(baseDirectory);
+            Directory.CreateDirectory(incompleteLocalRuntime);
+            Directory.CreateDirectory(packagedRuntime);
+            File.WriteAllText(Path.Combine(incompleteLocalRuntime, "piper.exe"), string.Empty);
+            CreateMinimalRuntime(packagedRuntime);
+
+            var executablePath = PiperSpeechService.LocatePiperExecutableForTests();
+
+            Assert.Equal(Path.Combine(packagedRuntime, "piper.exe"), executablePath);
+        }
+        finally
+        {
+            DeleteDirectory(root);
+            DeleteDirectory(baseDirectory);
+        }
+    }
+
+    [Fact]
+    public async Task Runtime_installer_activates_packaged_runtime_before_network_download()
+    {
+        var root = CreateTempDirectory();
+        var baseDirectory = CreateTempDirectory();
+        try
+        {
+            using var baseDirectoryScope = PiperRuntimeEnvironment.UseBaseDirectoryForTests(baseDirectory);
+            using var rootScope = PiperRuntimeEnvironment.UsePiperRootDirectoryForTests(root);
+            var packagedRuntime = PiperRuntimeEnvironment.GetPackagedRuntimeDirectory(baseDirectory);
+            CreateMinimalRuntime(packagedRuntime);
+            var store = new VoiceInstallStore(root);
+            using var httpClient = new HttpClient(new ThrowingHttpHandler());
+            var service = new PiperRuntimeInstaller(store, httpClient);
+
+            var result = await service.EnsureRuntimeInstalledAsync();
+
+            Assert.True(result.Success);
+            Assert.True(File.Exists(Path.Combine(PiperRuntimeEnvironment.GetActiveRuntimeDirectory(root), "piper.exe")));
+        }
+        finally
+        {
+            DeleteDirectory(root);
+            DeleteDirectory(baseDirectory);
+        }
+    }
+
+    [Fact]
+    public void Arm64_runtime_is_not_supported()
+    {
+        using var architectureScope = PiperRuntimeEnvironment.UseProcessArchitectureForTests(Architecture.Arm64);
+        using var baseDirectoryScope = PiperRuntimeEnvironment.UseBaseDirectoryForTests(GetRepositoryRoot());
+
+        var supported = PiperRuntimeEnvironment.IsRuntimeSupportedOnCurrentArchitecture(out var failureReason);
+
+        Assert.False(supported);
+        Assert.Contains("x64 Windows", failureReason);
+    }
+
+    [Fact]
+    public void Catalog_runtime_resolution_prefers_architecture_map_for_x64()
+    {
+        var root = CreateTempDirectory();
+        var options = BuildOptions(root);
+        try
+        {
+            var resolved = options.TryResolveRuntimeOptions(Architecture.X64, out var runtimeMoniker, out var runtimeOptions);
+
+            Assert.True(resolved);
+            Assert.Equal("win-x64", runtimeMoniker);
+            Assert.NotNull(runtimeOptions);
+            Assert.Equal("piper_windows_amd64.zip", runtimeOptions!.AssetName);
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void Ignored_read_target_window_matches_tray_shell_windows()
+    {
+        Assert.True(WindowFocusInterop.IsIgnoredReadTargetWindow("Shell_TrayWnd", string.Empty));
+        Assert.True(WindowFocusInterop.IsIgnoredReadTargetWindow("TrayNotifyWnd", string.Empty));
+        Assert.True(WindowFocusInterop.IsIgnoredReadTargetWindow("NotifyIconOverflowWindow", string.Empty));
+        Assert.True(WindowFocusInterop.IsIgnoredReadTargetWindow("TopLevelWindowForOverflowXamlIsland", string.Empty));
+    }
+
+    [Fact]
+    public void Ignored_read_target_window_matches_snipping_tool_overlay_title()
+    {
+        Assert.True(WindowFocusInterop.IsIgnoredReadTargetWindow(string.Empty, "Snipping Tool Overlay"));
+        Assert.False(WindowFocusInterop.IsIgnoredReadTargetWindow("Chrome_WidgetWin_1", "Microsoft Edge"));
+    }
+
     private static PiperCatalogOptions BuildOptions(string root)
     {
         var denylistPath = Path.Combine(root, "VoiceDenylist.json");
@@ -166,6 +292,17 @@ public sealed class VoiceDownloadFeatureTests
                 DownloadUrl = "https://example.test/piper.zip",
                 SizeBytes = 123,
                 Sha256 = new string('a', 64)
+            },
+            RuntimeByArchitecture = new Dictionary<string, PiperRuntimeOptions>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["win-x64"] = new()
+                {
+                    Version = "2023.11.14-2",
+                    AssetName = "piper_windows_amd64.zip",
+                    DownloadUrl = "https://example.test/piper.zip",
+                    SizeBytes = 123,
+                    Sha256 = new string('a', 64)
+                }
             }
         };
     }
@@ -264,6 +401,26 @@ public sealed class VoiceDownloadFeatureTests
         return path;
     }
 
+    private static string GetPiperResourcesDirectory()
+    {
+        return Path.Combine(GetRepositoryRoot(), "Resources", "Piper");
+    }
+
+    private static string GetRepositoryRoot()
+    {
+        return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+    }
+
+    private static void CreateMinimalRuntime(string runtimeDirectory)
+    {
+        Directory.CreateDirectory(runtimeDirectory);
+        File.WriteAllText(Path.Combine(runtimeDirectory, "piper.exe"), string.Empty);
+        File.WriteAllText(Path.Combine(runtimeDirectory, "onnxruntime.dll"), string.Empty);
+        File.WriteAllText(Path.Combine(runtimeDirectory, "espeak-ng.dll"), string.Empty);
+        File.WriteAllText(Path.Combine(runtimeDirectory, "piper_phonemize.dll"), string.Empty);
+        Directory.CreateDirectory(Path.Combine(runtimeDirectory, "espeak-ng-data"));
+    }
+
     private static void DeleteDirectory(string path)
     {
         if (Directory.Exists(path))
@@ -314,6 +471,14 @@ public sealed class VoiceDownloadFeatureTests
             {
                 Content = new StringContent($"No mocked response for {url}")
             });
+        }
+    }
+
+    private sealed class ThrowingHttpHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            throw new InvalidOperationException("HTTP should not be called.");
         }
     }
 }
