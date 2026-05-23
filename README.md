@@ -43,7 +43,7 @@ Reliability matters more than UI polish.
 - Use tray quick actions for `Read Selected Text`, `Read Document`, `Stop Reading`, `Show RightSpeak`, and `Exit`.
 - Configure global hotkeys in-app for `Read Selected Text`, `Read Document`, and `Stop` using `Alt+Shift`, `Ctrl+Shift`, or `Ctrl+Alt`.
 - Persist theme, always-on-top, selected voice, speech rate, typed text draft, and hotkey settings.
-- Show focused-window context for external reads, a single Premium entitlement source with restore-purchase support, packaged app version text in the footer, and background Store update handling with deferred install-on-exit and Store fallback UI when packaged.
+- Show focused-window context for external reads, a single Premium entitlement source, packaged app version text in the footer, and background Store update handling with deferred install-on-exit and Store fallback UI when packaged.
 
 ## Planned Capabilities
 Target capabilities still under consideration include:
@@ -109,16 +109,18 @@ dotnet run --project .\RightSpeak.csproj
 Before creating a real Store upload package:
 - verify the `Identity` values in `RightSpeak.Package\Package.appxmanifest` match the identity and publisher from Partner Center association
 - keep the WPF app project as the only application payload; the packaging project is deployment-only
-- promo codes for the Premium durable add-on are redeemed through the Microsoft Store redeem flow, and RightSpeak picks up the resulting entitlement on startup or through the Restore action
+- promo codes for the Premium durable add-on are redeemed through the Microsoft Store redeem flow, and RightSpeak picks up the resulting entitlement on startup and after successful in-app Premium purchase checks
 - if a Partner Center association export is available for the app, compare it with the manifest and publish profile before submission; this repository does not include the Partner Center export itself
 
 Create a Store upload package from the command line:
 ```powershell
-$env:DOTNET_ROOT='C:\Program Files\dotnet'
-$env:DOTNET_MSBUILD_SDK_RESOLVER_CLI_DIR='C:\Program Files\dotnet'
-$env:DOTNET_MSBUILD_SDK_RESOLVER_SDKS_DIR='C:\Program Files\dotnet\sdk\10.0.202\Sdks'
-$env:DOTNET_MSBUILD_SDK_RESOLVER_SDKS_VER='10.0.202'
-& 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe' .\RightSpeak.Package\RightSpeak.Package.wapproj /restore /p:Configuration=Release /p:Platform=x64 /p:UapAppxPackageBuildMode=StoreUpload
+.\tools\msstore-generate-package.ps1
+```
+
+Optional overrides:
+```powershell
+.\tools\msstore-generate-package.ps1 -SdkVersion 10.0.202
+.\tools\msstore-generate-package.ps1 -ManifestVersion 1.0.13.0
 ```
 
 Expected output:
@@ -134,7 +136,7 @@ Runtime update behavior for packaged installs:
 - silent background download is attempted first when Store support allows it
 - if silent download is unavailable, blocked, canceled, or fails during the automatic startup flow, the app falls back to the Microsoft Store / OS update UI
 - clicking the footer version text checks for updates, shows a small "No update available" toast when appropriate, and opens the Microsoft Store app page when an update exists
-- the footer status control presents Basic/Premium mode, a Restore action, and the clickable version text in one reusable control
+- the footer status control presents Basic/Premium mode and the clickable version text in one reusable control
 - deferred install-on-exit is used when a silent download succeeds
 - successful Store fallback UI updates are treated as completed/queued and do not create an app-owned deferred install state
 - if `StoreContext` creation is unavailable in a packaged environment, the app degrades update checking safely instead of failing startup

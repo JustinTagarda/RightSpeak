@@ -5,7 +5,7 @@
              xmlns:primitives="clr-namespace:System.Windows.Controls.Primitives;assembly=PresentationFramework">
     <Grid>
         <Popup DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=UserControl}}"
-               IsOpen="{Binding IsNoUpdateToastVisible}"
+               IsOpen="{Binding IsNoUpdateToastVisible, Mode=OneWay}"
                PlacementTarget="{Binding ElementName=VersionTextBlock}"
                Placement="Top"
                AllowsTransparency="True"
@@ -43,15 +43,6 @@
                 <TextBlock.InputBindings>
                     <MouseBinding MouseAction="LeftClick"
                                   Command="{Binding UpgradeCommand}" />
-                </TextBlock.InputBindings>
-            </TextBlock>
-            <TextBlock Text="   " />
-            <TextBlock Text="Restore"
-                       Cursor="Hand"
-                       ToolTip="Click to restore purchases.">
-                <TextBlock.InputBindings>
-                    <MouseBinding MouseAction="LeftClick"
-                                  Command="{Binding RestorePurchaseCommand}" />
                 </TextBlock.InputBindings>
             </TextBlock>
             <TextBlock Text="   " />

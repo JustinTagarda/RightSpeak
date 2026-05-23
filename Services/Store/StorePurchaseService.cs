@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Security.Principal;
 using System.Threading;
 using System.Threading.Tasks;
+using RightSpeak.Services;
 using Windows.Services.Store;
 
 namespace RightSpeak.Services.Store;
@@ -19,42 +21,79 @@ public sealed class StorePurchaseService : IStorePurchaseService
 
     public async Task<PremiumPurchaseResult> PurchasePremiumAsync(CancellationToken cancellationToken = default)
     {
-        if (!_storeContextProvider.IsStoreSupported)
+        var isStoreSupported = _storeContextProvider.IsStoreSupported;
+        var isElevated = IsRunningElevated();
+        AppDiagnostics.Info(
+            "premium_purchase_attempt_started",
+            new Dictionary<string, string?>
+            {
+                ["isStoreSupported"] = isStoreSupported.ToString(),
+                ["isElevated"] = isElevated.ToString()
+            });
+
+        if (!isStoreSupported)
         {
-            return new PremiumPurchaseResult(StorePurchaseOutcome.NotSupported, "Premium purchase unavailable in this build.");
+            AppDiagnostics.Warn("premium_purchase_not_supported");
+            return new PremiumPurchaseResult(
+                StorePurchaseOutcome.NotSupported,
+                "Premium purchase is available only in the Microsoft Store version.");
         }
 
-        if (IsRunningElevated())
+        if (isElevated)
         {
+            AppDiagnostics.Warn("premium_purchase_blocked_elevated");
             return new PremiumPurchaseResult(StorePurchaseOutcome.Blocked, "Microsoft Store purchase is unavailable while running as administrator.");
         }
 
         var context = _storeContextProvider.TryGetContext();
         if (context is null)
         {
-            return new PremiumPurchaseResult(StorePurchaseOutcome.NotSupported, "Premium purchase unavailable in this build.");
+            AppDiagnostics.Warn("premium_purchase_context_unavailable");
+            return new PremiumPurchaseResult(
+                StorePurchaseOutcome.NotSupported,
+                "Premium purchase is available only in the Microsoft Store version.");
         }
 
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
             var result = await context.RequestPurchaseAsync(_premiumStoreId).AsTask(cancellationToken);
-            return result.Status switch
+            var purchaseResult = result.Status switch
             {
                 StorePurchaseStatus.Succeeded => new PremiumPurchaseResult(StorePurchaseOutcome.Succeeded, "Premium purchase completed."),
                 StorePurchaseStatus.AlreadyPurchased => new PremiumPurchaseResult(StorePurchaseOutcome.AlreadyOwned, "Premium is already owned."),
                 StorePurchaseStatus.NotPurchased => new PremiumPurchaseResult(StorePurchaseOutcome.Canceled, "Premium purchase canceled."),
-                StorePurchaseStatus.NetworkError => new PremiumPurchaseResult(StorePurchaseOutcome.Failed, "Premium purchase failed due to a network error."),
-                StorePurchaseStatus.ServerError => new PremiumPurchaseResult(StorePurchaseOutcome.Failed, "Premium purchase failed due to a Store service error."),
+                StorePurchaseStatus.NetworkError => new PremiumPurchaseResult(
+                    StorePurchaseOutcome.NetworkError,
+                    "Premium purchase failed due to a network error. Check your connection and try again."),
+                StorePurchaseStatus.ServerError => new PremiumPurchaseResult(
+                    StorePurchaseOutcome.ServerError,
+                    "Microsoft Store could not complete the purchase right now. Try again later."),
                 _ => new PremiumPurchaseResult(StorePurchaseOutcome.Failed, "Premium purchase failed.")
             };
+            AppDiagnostics.Info(
+                "premium_purchase_attempt_completed",
+                new Dictionary<string, string?>
+                {
+                    ["storeStatus"] = result.Status.ToString(),
+                    ["outcome"] = purchaseResult.Outcome.ToString()
+                });
+            return purchaseResult;
         }
         catch (OperationCanceledException)
         {
+            AppDiagnostics.Warn("premium_purchase_attempt_canceled");
             throw;
         }
-        catch
+        catch (Exception ex)
         {
+            AppDiagnostics.Error(
+                "premium_purchase_attempt_failed",
+                new Dictionary<string, string?>
+                {
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
             return new PremiumPurchaseResult(StorePurchaseOutcome.Failed, "Premium purchase failed.");
         }
     }

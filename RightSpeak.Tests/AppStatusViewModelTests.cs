@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using RightSpeak.Models;
@@ -34,65 +35,9 @@ public sealed class AppStatusViewModelTests
         Assert.False(viewModel.IsNoUpdateToastVisible);
     }
 
-    [Fact]
-    public async Task Restore_purchase_refreshes_entitlement_and_reports_result()
-    {
-        var premiumSnapshot = CreatePremiumSnapshot();
-        var premiumService = new FakePremiumEntitlementService(premiumSnapshot);
-        var purchaseService = new FakeStorePurchaseService(new PremiumPurchaseResult(StorePurchaseOutcome.Canceled, "Premium purchase canceled."));
-        var updateService = new FakeAppUpdateService(new UserInitiatedUpdateResult(UserInitiatedUpdateAvailability.NotAvailable, "No update available."));
-        var navigationService = new FakeStoreNavigationService(openAppPageResult: true);
-        var viewModel = new AppStatusViewModel(
-            purchaseService,
-            premiumService,
-            updateService,
-            navigationService,
-            new FakeAppVersionService("1.2.3.4"));
-
-        viewModel.ApplyPremiumSnapshot(CreateBasicSnapshot());
-
-        await ((AsyncCommand)viewModel.RestorePurchaseCommand).ExecuteAsync();
-
-        Assert.Equal(1, premiumService.RefreshCalls);
-        Assert.Equal("Premium", viewModel.ModeText);
-        Assert.Equal("Premium restored", viewModel.StatusMessage);
-        Assert.Equal("Premium mode active.", viewModel.ModeTooltip);
-    }
 
     [Fact]
-    public async Task Restore_purchase_with_cached_premium_reports_verification_failure()
-    {
-        var cachedPremiumSnapshot = new PremiumEntitlementSnapshot(
-            IsPackaged: true,
-            HasPremium: true,
-            State: PremiumEntitlementState.VerificationFailed,
-            IsPremiumProductAvailable: false,
-            PremiumProductDisplayName: "RightSpeak Premium",
-            StatusMessage: "Using cached RightSpeak Premium access while Microsoft Store entitlement is being re-verified.",
-            LastVerifiedOwnedUtc: DateTimeOffset.UtcNow,
-            IsUsingGracePremium: true);
-        var premiumService = new FakePremiumEntitlementService(cachedPremiumSnapshot);
-        var purchaseService = new FakeStorePurchaseService(new PremiumPurchaseResult(StorePurchaseOutcome.Canceled, "Premium purchase canceled."));
-        var updateService = new FakeAppUpdateService(new UserInitiatedUpdateResult(UserInitiatedUpdateAvailability.NotAvailable, "No update available."));
-        var navigationService = new FakeStoreNavigationService(openAppPageResult: true);
-        var viewModel = new AppStatusViewModel(
-            purchaseService,
-            premiumService,
-            updateService,
-            navigationService,
-            new FakeAppVersionService("1.2.3.4"));
-
-        viewModel.ApplyPremiumSnapshot(CreateBasicSnapshot());
-
-        await ((AsyncCommand)viewModel.RestorePurchaseCommand).ExecuteAsync();
-
-        Assert.Equal("Premium", viewModel.ModeText);
-        Assert.Equal("Unable to verify purchase right now", viewModel.StatusMessage);
-        Assert.False(viewModel.IsModeClickable);
-    }
-
-    [Fact]
-    public async Task Upgrade_purchase_blocked_does_not_open_premium_page()
+    public async Task Upgrade_purchase_blocked_reports_blocked_message()
     {
         var premiumService = new FakePremiumEntitlementService(CreateBasicSnapshot());
         var purchaseService = new FakeStorePurchaseService(new PremiumPurchaseResult(StorePurchaseOutcome.Blocked, "Microsoft Store purchase is unavailable while running as administrator."));
@@ -109,9 +54,115 @@ public sealed class AppStatusViewModelTests
 
         await ((AsyncCommand)viewModel.UpgradeCommand).ExecuteAsync();
 
-        Assert.Equal(0, navigationService.OpenPremiumPageCalls);
         Assert.Equal("Microsoft Store purchase is unavailable while running as administrator.", viewModel.StatusMessage);
         Assert.Equal("Basic", viewModel.ModeText);
+    }
+
+    [Fact]
+    public async Task Upgrade_purchase_not_supported_reports_clear_message()
+    {
+        var premiumService = new FakePremiumEntitlementService(CreateBasicSnapshot());
+        var purchaseService = new FakeStorePurchaseService(new PremiumPurchaseResult(
+            StorePurchaseOutcome.NotSupported,
+            "Premium purchase is available only in the Microsoft Store version."));
+        var updateService = new FakeAppUpdateService(new UserInitiatedUpdateResult(UserInitiatedUpdateAvailability.NotAvailable, "No update available."));
+        var navigationService = new FakeStoreNavigationService(openAppPageResult: true);
+        var viewModel = new AppStatusViewModel(
+            purchaseService,
+            premiumService,
+            updateService,
+            navigationService,
+            new FakeAppVersionService("1.2.3.4"));
+        viewModel.ApplyPremiumSnapshot(CreateBasicSnapshot());
+
+        await ((AsyncCommand)viewModel.UpgradeCommand).ExecuteAsync();
+
+        Assert.Equal("Premium purchase is available only in the Microsoft Store version.", viewModel.StatusMessage);
+        Assert.Equal(0, premiumService.RefreshCalls);
+    }
+
+    [Fact]
+    public async Task Upgrade_purchase_succeeded_refreshes_entitlement_and_unlocks()
+    {
+        var premiumService = new FakePremiumEntitlementService(CreateBasicSnapshot())
+        {
+            SnapshotAfterRefresh = CreatePremiumSnapshot()
+        };
+        var purchaseService = new FakeStorePurchaseService(new PremiumPurchaseResult(
+            StorePurchaseOutcome.Succeeded,
+            "Premium purchase completed."));
+        var updateService = new FakeAppUpdateService(new UserInitiatedUpdateResult(UserInitiatedUpdateAvailability.NotAvailable, "No update available."));
+        var navigationService = new FakeStoreNavigationService(openAppPageResult: true);
+        var viewModel = new AppStatusViewModel(
+            purchaseService,
+            premiumService,
+            updateService,
+            navigationService,
+            new FakeAppVersionService("1.2.3.4"));
+        viewModel.ApplyPremiumSnapshot(CreateBasicSnapshot());
+
+        await ((AsyncCommand)viewModel.UpgradeCommand).ExecuteAsync();
+
+        Assert.Equal(1, premiumService.RefreshCalls);
+        Assert.Equal("Premium unlocked.", viewModel.StatusMessage);
+        Assert.Equal("Premium", viewModel.ModeText);
+        Assert.False(viewModel.IsModeClickable);
+    }
+
+    [Fact]
+    public async Task Upgrade_purchase_already_owned_refreshes_entitlement_and_unlocks()
+    {
+        var premiumService = new FakePremiumEntitlementService(CreateBasicSnapshot())
+        {
+            SnapshotAfterRefresh = CreatePremiumSnapshot()
+        };
+        var purchaseService = new FakeStorePurchaseService(new PremiumPurchaseResult(
+            StorePurchaseOutcome.AlreadyOwned,
+            "Premium is already owned."));
+        var updateService = new FakeAppUpdateService(new UserInitiatedUpdateResult(UserInitiatedUpdateAvailability.NotAvailable, "No update available."));
+        var navigationService = new FakeStoreNavigationService(openAppPageResult: true);
+        var viewModel = new AppStatusViewModel(
+            purchaseService,
+            premiumService,
+            updateService,
+            navigationService,
+            new FakeAppVersionService("1.2.3.4"));
+        viewModel.ApplyPremiumSnapshot(CreateBasicSnapshot());
+
+        await ((AsyncCommand)viewModel.UpgradeCommand).ExecuteAsync();
+
+        Assert.Equal(1, premiumService.RefreshCalls);
+        Assert.Equal("Premium unlocked.", viewModel.StatusMessage);
+        Assert.Equal("Premium", viewModel.ModeText);
+    }
+
+    [Fact]
+    public async Task Upgrade_purchase_network_and_server_errors_surface_messages()
+    {
+        var premiumService = new FakePremiumEntitlementService(CreateBasicSnapshot());
+        var purchaseService = new FakeStorePurchaseService(
+            new PremiumPurchaseResult(
+                StorePurchaseOutcome.NetworkError,
+                "Premium purchase failed due to a network error. Check your connection and try again."),
+            new PremiumPurchaseResult(
+                StorePurchaseOutcome.ServerError,
+                "Microsoft Store could not complete the purchase right now. Try again later."));
+        var updateService = new FakeAppUpdateService(new UserInitiatedUpdateResult(UserInitiatedUpdateAvailability.NotAvailable, "No update available."));
+        var navigationService = new FakeStoreNavigationService(openAppPageResult: true);
+        var viewModel = new AppStatusViewModel(
+            purchaseService,
+            premiumService,
+            updateService,
+            navigationService,
+            new FakeAppVersionService("1.2.3.4"));
+        viewModel.ApplyPremiumSnapshot(CreateBasicSnapshot());
+
+        await ((AsyncCommand)viewModel.UpgradeCommand).ExecuteAsync();
+        Assert.Equal("Premium purchase failed due to a network error. Check your connection and try again.", viewModel.StatusMessage);
+
+        await ((AsyncCommand)viewModel.UpgradeCommand).ExecuteAsync();
+        Assert.Equal("Microsoft Store could not complete the purchase right now. Try again later.", viewModel.StatusMessage);
+        Assert.Equal(0, premiumService.RefreshCalls);
     }
 
     private static PremiumEntitlementSnapshot CreateBasicSnapshot()
@@ -139,17 +190,30 @@ public sealed class AppStatusViewModelTests
 
     private sealed class FakeStorePurchaseService : IStorePurchaseService
     {
-        private readonly PremiumPurchaseResult _result;
+        private readonly Queue<PremiumPurchaseResult> _results;
 
-        public FakeStorePurchaseService(PremiumPurchaseResult result)
+        public FakeStorePurchaseService(params PremiumPurchaseResult[] results)
         {
-            _result = result;
+            _results = new Queue<PremiumPurchaseResult>(results);
         }
+
+        public int PurchaseCalls { get; private set; }
 
         public Task<PremiumPurchaseResult> PurchasePremiumAsync(CancellationToken cancellationToken = default)
         {
             _ = cancellationToken;
-            return Task.FromResult(_result);
+            PurchaseCalls++;
+            if (_results.Count == 0)
+            {
+                return Task.FromResult(new PremiumPurchaseResult(StorePurchaseOutcome.Failed, "No configured purchase result."));
+            }
+
+            if (_results.Count == 1)
+            {
+                return Task.FromResult(_results.Peek());
+            }
+
+            return Task.FromResult(_results.Dequeue());
         }
     }
 
@@ -199,14 +263,7 @@ public sealed class AppStatusViewModelTests
             _openAppPageResult = openAppPageResult;
         }
 
-        public int OpenPremiumPageCalls { get; private set; }
         public int OpenAppPageCalls { get; private set; }
-
-        public bool OpenPremiumPage()
-        {
-            OpenPremiumPageCalls++;
-            return true;
-        }
 
         public bool OpenAppPage()
         {
@@ -223,6 +280,7 @@ public sealed class AppStatusViewModelTests
         }
 
         public PremiumEntitlementSnapshot CurrentSnapshot { get; private set; }
+        public PremiumEntitlementSnapshot? SnapshotAfterRefresh { get; set; }
 
         public int RefreshCalls { get; private set; }
 
@@ -232,6 +290,10 @@ public sealed class AppStatusViewModelTests
         {
             _ = cancellationToken;
             RefreshCalls++;
+            if (SnapshotAfterRefresh is not null)
+            {
+                CurrentSnapshot = SnapshotAfterRefresh;
+            }
             SnapshotChanged?.Invoke(this, CurrentSnapshot);
             return Task.CompletedTask;
         }

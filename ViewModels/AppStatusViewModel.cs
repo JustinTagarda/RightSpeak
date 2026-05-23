@@ -37,7 +37,6 @@ public sealed class AppStatusViewModel : INotifyPropertyChanged
 
         UpgradeCommand = new AsyncCommand(UpgradeAsync, () => !_isBusy && !_hasPremium);
         CheckForUpdateCommand = new AsyncCommand(CheckForUpdateAsync, () => !_isBusy);
-        RestorePurchaseCommand = new AsyncCommand(RestoreAsync, () => !_isBusy);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -45,7 +44,6 @@ public sealed class AppStatusViewModel : INotifyPropertyChanged
 
     public ICommand UpgradeCommand { get; }
     public ICommand CheckForUpdateCommand { get; }
-    public ICommand RestorePurchaseCommand { get; }
 
     public string ModeText
     {
@@ -132,25 +130,26 @@ public sealed class AppStatusViewModel : INotifyPropertyChanged
         {
             var purchaseResult = await _storePurchaseService.PurchasePremiumAsync();
             StatusMessage = purchaseResult.Message;
-            if (purchaseResult.Outcome == StorePurchaseOutcome.NotSupported)
-            {
-                if (!_storeNavigationService.OpenPremiumPage())
-                {
-                    StatusMessage = "Premium purchase unavailable in this build.";
-                }
-                return;
-            }
-
-            if (purchaseResult.Outcome == StorePurchaseOutcome.Blocked)
-            {
-                return;
-            }
 
             if (purchaseResult.Outcome is StorePurchaseOutcome.Succeeded or StorePurchaseOutcome.AlreadyOwned)
             {
+                AppDiagnostics.Info(
+                    "premium_entitlement_refresh_started",
+                    new System.Collections.Generic.Dictionary<string, string?>
+                    {
+                        ["purchaseOutcome"] = purchaseResult.Outcome.ToString()
+                    });
                 await _premiumEntitlementService.RefreshAsync();
                 var snapshot = _premiumEntitlementService.CurrentSnapshot;
                 ApplyPremiumSnapshot(snapshot);
+                AppDiagnostics.Info(
+                    "premium_entitlement_refresh_completed",
+                    new System.Collections.Generic.Dictionary<string, string?>
+                    {
+                        ["purchaseOutcome"] = purchaseResult.Outcome.ToString(),
+                        ["hasPremium"] = snapshot.HasPremium.ToString(),
+                        ["state"] = snapshot.State.ToString()
+                    });
                 if (snapshot.HasPremium)
                 {
                     StatusMessage = "Premium unlocked.";
@@ -159,20 +158,14 @@ public sealed class AppStatusViewModel : INotifyPropertyChanged
         });
     }
 
-    private async Task RestoreAsync()
+    public Task RequestPremiumPurchaseAsync()
     {
-        await RunBusyAsync(async () =>
+        if (UpgradeCommand is AsyncCommand asyncCommand && asyncCommand.CanExecute(null))
         {
-            await _premiumEntitlementService.RefreshAsync();
-            var snapshot = _premiumEntitlementService.CurrentSnapshot;
-            ApplyPremiumSnapshot(snapshot);
-            StatusMessage = snapshot.State switch
-            {
-                PremiumEntitlementState.VerifiedOwned => "Premium restored",
-                PremiumEntitlementState.VerifiedNotOwned => "No Premium purchase found",
-                _ => "Unable to verify purchase right now"
-            };
-        });
+            return asyncCommand.ExecuteAsync();
+        }
+
+        return Task.CompletedTask;
     }
 
     private async Task CheckForUpdateAsync()
@@ -242,10 +235,6 @@ public sealed class AppStatusViewModel : INotifyPropertyChanged
             checkForUpdateCommand.RaiseCanExecuteChanged();
         }
 
-        if (RestorePurchaseCommand is AsyncCommand restorePurchaseCommand)
-        {
-            restorePurchaseCommand.RaiseCanExecuteChanged();
-        }
     }
 
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null)

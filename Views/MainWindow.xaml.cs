@@ -22,8 +22,8 @@ public partial class MainWindow : Window
     private readonly Func<nint>? _getExternalWindowHandle;
     private readonly Func<string, string, Func<Task>, Task>? _executeFocusSensitiveReadAsync;
     private readonly Func<VoiceManagerViewModel>? _createVoiceManagerViewModel;
+    private readonly Func<Task> _requestPremiumPurchaseAsync;
     private readonly IAppSettingsService? _appSettingsService;
-    private readonly IStoreNavigationService _storeNavigationService;
     private readonly uint _activateWindowMessageId;
     private readonly bool _placeOnStartup;
     private readonly AppStatusViewModel _appStatusViewModel;
@@ -38,7 +38,7 @@ public partial class MainWindow : Window
         Func<nint>? getExternalWindowHandle,
         uint activateWindowMessageId,
         AppStatusViewModel appStatusViewModel,
-        IStoreNavigationService storeNavigationService,
+        Func<Task> requestPremiumPurchaseAsync,
         IAppSettingsService? appSettingsService = null,
         Func<string, string, Func<Task>, Task>? executeFocusSensitiveReadAsync = null,
         Func<VoiceManagerViewModel>? createVoiceManagerViewModel = null,
@@ -53,9 +53,9 @@ public partial class MainWindow : Window
         _activateWindowMessageId = activateWindowMessageId;
         _placeOnStartup = placeOnStartup;
         _createVoiceManagerViewModel = createVoiceManagerViewModel;
+        _requestPremiumPurchaseAsync = requestPremiumPurchaseAsync ?? throw new ArgumentNullException(nameof(requestPremiumPurchaseAsync));
         _appSettingsService = appSettingsService;
         _appStatusViewModel = appStatusViewModel ?? throw new ArgumentNullException(nameof(appStatusViewModel));
-        _storeNavigationService = storeNavigationService ?? throw new ArgumentNullException(nameof(storeNavigationService));
         DataContext = _viewModel;
         AppStatusDisplay.DataContext = _appStatusViewModel;
         _viewModel.PremiumUpsellRequested += OnPremiumUpsellRequested;
@@ -763,7 +763,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnPremiumUpsellRequested(object? sender, PremiumUpsellRequest request)
+    private async void OnPremiumUpsellRequested(object? sender, PremiumUpsellRequest request)
     {
         _ = sender;
         if (!request.CanShowPurchase)
@@ -798,9 +798,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!_storeNavigationService.OpenPremiumPage())
+        await RunSafeUiAsync("premium_upsell_purchase", async () =>
         {
-            _viewModel.SetStatusMessage("Premium purchase unavailable in this build.");
-        }
+            await _requestPremiumPurchaseAsync().ConfigureAwait(true);
+        }).ConfigureAwait(true);
     }
 }

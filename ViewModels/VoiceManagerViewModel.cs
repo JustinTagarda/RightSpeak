@@ -20,7 +20,7 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
     private readonly IVoiceDownloadService _voiceDownloadService;
     private readonly IReadingService _readingService;
     private readonly Action _refreshMainVoiceOptions;
-    private readonly Action _goToPremiumAction;
+    private readonly Func<Task> _goToPremiumAsyncAction;
     private readonly IPremiumEntitlementService _premiumEntitlementService;
     private PremiumEntitlementSnapshot _entitlementSnapshot;
     private readonly List<DownloadableVoice> _allVoices = [];
@@ -39,13 +39,13 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
         IReadingService readingService,
         Action refreshMainVoiceOptions,
         IPremiumEntitlementService premiumEntitlementService,
-        Action goToPremiumAction)
+        Func<Task> goToPremiumAsyncAction)
     {
         _voiceCatalogService = voiceCatalogService ?? throw new ArgumentNullException(nameof(voiceCatalogService));
         _voiceDownloadService = voiceDownloadService ?? throw new ArgumentNullException(nameof(voiceDownloadService));
         _readingService = readingService ?? throw new ArgumentNullException(nameof(readingService));
         _refreshMainVoiceOptions = refreshMainVoiceOptions ?? throw new ArgumentNullException(nameof(refreshMainVoiceOptions));
-        _goToPremiumAction = goToPremiumAction ?? throw new ArgumentNullException(nameof(goToPremiumAction));
+        _goToPremiumAsyncAction = goToPremiumAsyncAction ?? throw new ArgumentNullException(nameof(goToPremiumAsyncAction));
         _premiumEntitlementService = premiumEntitlementService ?? throw new ArgumentNullException(nameof(premiumEntitlementService));
         _entitlementSnapshot = _premiumEntitlementService.CurrentSnapshot;
         _hasPremiumAccess = _entitlementSnapshot.HasPremium;
@@ -418,10 +418,9 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
         _premiumEntitlementService.SnapshotChanged -= OnPremiumEntitlementSnapshotChanged;
     }
 
-    private Task GoToPremiumAsync()
+    private async Task GoToPremiumAsync()
     {
-        _goToPremiumAction();
-        return Task.CompletedTask;
+        await _goToPremiumAsyncAction().ConfigureAwait(true);
     }
 
     private bool CanGoToPremium()

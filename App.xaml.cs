@@ -145,7 +145,7 @@ public partial class App : WpfApplication
             () => _mainWindow is null ? nint.Zero : new WindowInteropHelper(_mainWindow).Handle);
         var appStatusVersionService = new AppVersionService(_appVersionProvider);
         var storePurchaseService = new StorePurchaseService(storeContextProvider, PremiumAddOnStoreId);
-        _storeNavigationService = new StoreNavigationService(PremiumAddOnStoreId);
+        _storeNavigationService = new StoreNavigationService();
         _appStatusViewModel = new AppStatusViewModel(
             storePurchaseService,
             _premiumEntitlementService,
@@ -185,7 +185,7 @@ public partial class App : WpfApplication
                 () => _trayService?.LastExternalForegroundWindow ?? nint.Zero,
                 _activateWindowMessageId,
                 _appStatusViewModel,
-                _storeNavigationService,
+                () => _appStatusViewModel.RequestPremiumPurchaseAsync(),
                 _appSettingsService,
                 ExecuteTrayFocusSensitiveReadAsync,
                 CreateVoiceManagerViewModel,
@@ -794,7 +794,13 @@ public partial class App : WpfApplication
             _readingService,
             _mainViewModel.RefreshVoiceOptions,
             _premiumEntitlementService,
-            () => _storeNavigationService?.OpenPremiumPage());
+            async () =>
+            {
+                if (_appStatusViewModel is not null)
+                {
+                    await _appStatusViewModel.RequestPremiumPurchaseAsync().ConfigureAwait(true);
+                }
+            });
     }
 
     private Dictionary<string, string?> BuildFocusRestoreDiagnostics(string trigger)

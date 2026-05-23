@@ -301,11 +301,6 @@
                         <TextBlock VerticalAlignment="Center"
                                    Foreground="{DynamicResource TitleBarForegroundBrush}"
                                    Text="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=Title}" />
-                        <TextBlock Margin="12,0,0,0"
-                                   VerticalAlignment="Center"
-                                   Foreground="{DynamicResource FooterTextBrush}"
-                                   FontWeight="Bold"
-                                   Text="{Binding ApplicationAccessTierText}" />
                         <CheckBox Margin="12,0,0,0"
                                   Style="{StaticResource TitleBarCompactCheckBoxStyle}"
                                   Content="Always on top"

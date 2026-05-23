@@ -8,6 +8,8 @@ public enum StorePurchaseOutcome
     Succeeded,
     AlreadyOwned,
     Canceled,
+    NetworkError,
+    ServerError,
     NotSupported,
     Blocked,
     Failed

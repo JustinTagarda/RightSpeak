@@ -6,16 +6,8 @@ namespace RightSpeak.Services.Store;
 
 public sealed class StoreNavigationService : IStoreNavigationService
 {
-    private readonly string _premiumStoreId;
-
-    public StoreNavigationService(string premiumStoreId)
+    public StoreNavigationService()
     {
-        _premiumStoreId = premiumStoreId ?? throw new ArgumentNullException(nameof(premiumStoreId));
-    }
-
-    public bool OpenPremiumPage()
-    {
-        return OpenUri($"ms-windows-store://pdp/?productid={_premiumStoreId}");
     }
 
     public bool OpenAppPage()
@@ -58,4 +50,3 @@ public sealed class StoreNavigationService : IStoreNavigationService
         }
     }
 }
-
