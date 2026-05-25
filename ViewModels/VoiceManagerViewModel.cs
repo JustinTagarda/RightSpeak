@@ -20,9 +20,6 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
     private readonly IVoiceDownloadService _voiceDownloadService;
     private readonly IReadingService _readingService;
     private readonly Action _refreshMainVoiceOptions;
-    private readonly Func<Task> _goToPremiumAsyncAction;
-    private readonly IPremiumEntitlementService _premiumEntitlementService;
-    private PremiumEntitlementSnapshot _entitlementSnapshot;
     private readonly List<DownloadableVoice> _allVoices = [];
     private CancellationTokenSource? _downloadCancellationTokenSource;
     private CancellationTokenSource? _catalogLoadCancellationTokenSource;
@@ -31,29 +28,20 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
     private bool _isLoading;
     private LanguageFilterOption? _selectedLanguageFilter;
     private string _selectedQualityFilter = "All qualities";
-    private bool _hasPremiumAccess;
 
     public VoiceManagerViewModel(
         IVoiceCatalogService voiceCatalogService,
         IVoiceDownloadService voiceDownloadService,
         IReadingService readingService,
-        Action refreshMainVoiceOptions,
-        IPremiumEntitlementService premiumEntitlementService,
-        Func<Task> goToPremiumAsyncAction)
+        Action refreshMainVoiceOptions)
     {
         _voiceCatalogService = voiceCatalogService ?? throw new ArgumentNullException(nameof(voiceCatalogService));
         _voiceDownloadService = voiceDownloadService ?? throw new ArgumentNullException(nameof(voiceDownloadService));
         _readingService = readingService ?? throw new ArgumentNullException(nameof(readingService));
         _refreshMainVoiceOptions = refreshMainVoiceOptions ?? throw new ArgumentNullException(nameof(refreshMainVoiceOptions));
-        _goToPremiumAsyncAction = goToPremiumAsyncAction ?? throw new ArgumentNullException(nameof(goToPremiumAsyncAction));
-        _premiumEntitlementService = premiumEntitlementService ?? throw new ArgumentNullException(nameof(premiumEntitlementService));
-        _entitlementSnapshot = _premiumEntitlementService.CurrentSnapshot;
-        _hasPremiumAccess = _entitlementSnapshot.HasPremium;
-        _premiumEntitlementService.SnapshotChanged += OnPremiumEntitlementSnapshotChanged;
 
         RefreshCommand = new AsyncCommand(RefreshFromScratchAsync, CanRefresh);
         CancelCommand = new AsyncCommand(CancelAsync, CanCancel);
-        GoToPremiumCommand = new AsyncCommand(GoToPremiumAsync, CanGoToPremium);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -145,35 +133,8 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
     }
 
     public bool IsOperationIdle => !IsBusy && !IsLoading;
-    public bool HasPremiumAccess
-    {
-        get => _hasPremiumAccess;
-        private set
-        {
-            if (_hasPremiumAccess == value)
-            {
-                return;
-            }
-
-            _hasPremiumAccess = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(IsPremiumUpsellVisible));
-        }
-    }
-
-    public bool IsPremiumUpsellVisible =>
-        !HasPremiumAccess && _entitlementSnapshot.State == PremiumEntitlementState.VerifiedNotOwned;
-    public string PremiumUpsellMessage =>
-        _entitlementSnapshot.State switch
-        {
-            PremiumEntitlementState.Checking => "Checking license. Install and remove actions will be available after verification.",
-            PremiumEntitlementState.VerificationFailed => "Unable to verify premium status right now. Please try again.",
-            _ => "Get Premium to unlock install, update, and remove voice options."
-        };
-
     public ICommand RefreshCommand { get; }
     public ICommand CancelCommand { get; }
-    public ICommand GoToPremiumCommand { get; }
 
     public async Task LoadAsync()
     {
@@ -217,14 +178,7 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
                 ? "No downloadable voices are available right now."
                 : !PiperRuntimeEnvironment.IsRuntimeSupportedOnCurrentArchitecture(out var installBlockedReason)
                     ? installBlockedReason ?? "Piper installs are unavailable on this build."
-                : HasPremiumAccess
-                    ? "Choose a voice to install."
-                    : _entitlementSnapshot.State switch
-                    {
-                        PremiumEntitlementState.Checking => "Checking license. Install and remove actions will be available after verification.",
-                        PremiumEntitlementState.VerificationFailed => "Unable to verify premium status right now. Please try again.",
-                        _ => "Browse available Premium voice models."
-                    };
+                    : "Choose a voice to install.";
         }
         catch (OperationCanceledException)
         {
@@ -415,45 +369,7 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
 
     public void Dispose()
     {
-        _premiumEntitlementService.SnapshotChanged -= OnPremiumEntitlementSnapshotChanged;
-    }
-
-    private async Task GoToPremiumAsync()
-    {
-        await _goToPremiumAsyncAction().ConfigureAwait(true);
-    }
-
-    private bool CanGoToPremium()
-    {
-        return !HasPremiumAccess && _entitlementSnapshot.State == PremiumEntitlementState.VerifiedNotOwned;
-    }
-
-    private void OnPremiumEntitlementSnapshotChanged(object? sender, PremiumEntitlementSnapshot snapshot)
-    {
-        _ = sender;
-        var app = System.Windows.Application.Current;
-        if (app is not null && !app.Dispatcher.CheckAccess())
-        {
-            _ = app.Dispatcher.InvokeAsync(() => ApplyPremiumEntitlementSnapshot(snapshot));
-            return;
-        }
-
-        ApplyPremiumEntitlementSnapshot(snapshot);
-    }
-
-    public void ApplyPremiumEntitlementSnapshot(PremiumEntitlementSnapshot snapshot)
-    {
-        _entitlementSnapshot = snapshot;
-        HasPremiumAccess = snapshot.HasPremium;
-        OnPropertyChanged(nameof(PremiumUpsellMessage));
-        OnPropertyChanged(nameof(IsPremiumUpsellVisible));
-        RefreshCommandStates();
-        if (GoToPremiumCommand is AsyncCommand goToPremiumCommand)
-        {
-            goToPremiumCommand.RaiseCanExecuteChanged();
-        }
-
-        ApplyFilters();
+        // No resources to release.
     }
 
     private void RefreshCommandStates()
@@ -564,7 +480,7 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
         Voices.Clear();
         foreach (var voice in filtered)
         {
-            Voices.Add(new VoiceManagerVoiceViewModel(voice, InstallOrUpdateAsync, RemoveAsync, HasPremiumAccess));
+            Voices.Add(new VoiceManagerVoiceViewModel(voice, InstallOrUpdateAsync, RemoveAsync, canManageVoices: true));
         }
 
         RefreshVoiceCommands();

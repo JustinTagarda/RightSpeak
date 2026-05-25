@@ -7,16 +7,10 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
-using System.Windows.Shell;
 using RightSpeak.Models;
 using RightSpeak.Services;
 
 namespace RightSpeak.ViewModels;
-
-public sealed record PremiumUpsellRequest(
-    string FeatureName,
-    string Message,
-    bool CanShowPurchase);
 
 public sealed class MainViewModel : INotifyPropertyChanged
 {
@@ -35,7 +29,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private Dictionary<string, string> _voiceOptionLabelByName;
     private readonly Func<(bool Success, string StatusMessage)>? _applyHotkeysRegistration;
     private readonly Func<string, bool>? _applyTheme;
-    private PremiumEntitlementSnapshot _premiumEntitlementSnapshot;
     private CancellationTokenSource? _hotkeyModifierWarningCts;
     private CancellationTokenSource? _activeExternalReadCancellationTokenSource;
     private Stopwatch? _activeExternalReadStopwatch;
@@ -51,13 +44,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _suppressHotkeyAutoApply;
     private string _focusedWindowText = "Current app";
     private string _hotkeyModifierWarningMessage = string.Empty;
-    private string _updateStageText = string.Empty;
-    private string _updateStatusMessage = string.Empty;
-    private AppUpdateState _updateState = AppUpdateState.Idle;
-    private bool _isUpdateVisible;
-    private bool _isUpdateProgressVisible;
-    private bool _isMandatoryUpdateAvailable;
-    private double _updateProgressValue;
     private int _speechRate;
     private string _selectedVoiceOption = SystemDefaultVoiceOption;
     private string _selectedTheme = AppThemes.Light;
@@ -79,8 +65,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         Func<(bool Success, string StatusMessage)>? applyHotkeysRegistration = null,
         bool isAnalyzeAvailable = false,
         IAppSettingsService? appSettingsService = null,
-        Func<string, bool>? applyTheme = null,
-        PremiumEntitlementSnapshot? premiumEntitlementSnapshot = null)
+        Func<string, bool>? applyTheme = null)
     {
         _readingService = readingService ?? throw new ArgumentNullException(nameof(readingService));
         _hotkeySettingsService = hotkeySettingsService ?? throw new ArgumentNullException(nameof(hotkeySettingsService));
@@ -88,13 +73,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _applyHotkeysRegistration = applyHotkeysRegistration;
         _isAnalyzeAvailable = isAnalyzeAvailable;
         _applyTheme = applyTheme;
-        _premiumEntitlementSnapshot = premiumEntitlementSnapshot ?? new PremiumEntitlementSnapshot(
-            IsPackaged: false,
-            HasPremium: false,
-            State: PremiumEntitlementState.VerificationFailed,
-            IsPremiumProductAvailable: false,
-            PremiumProductDisplayName: "RightSpeak Premium",
-            StatusMessage: "Premium features are enabled in this build.");
 
         _speechRate = _readingService.SpeechRate;
         _inputText = _readingService.TypedTextDraft ?? string.Empty;
@@ -111,7 +89,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _appliedReadParagraphHotkeyKey = _readParagraphHotkeyKey;
         _appliedReadDocumentHotkeyKey = _readDocumentHotkeyKey;
         _appliedStopHotkeyKey = _stopHotkeyKey;
-        EnsureBasicHotkeysIfRequired();
         UpdateHotkeyModifierWarningMessage();
 
         ReadCommand = new AsyncCommand(ReadAsync, CanRead);
@@ -126,8 +103,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
-    public event EventHandler<PremiumUpsellRequest>? PremiumUpsellRequested;
-    public PremiumEntitlementState PremiumEntitlementState => _premiumEntitlementSnapshot.State;
 
     public string InputText
     {
@@ -176,169 +151,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
             _readingService.SpeechRate = clamped;
             OnPropertyChanged();
             SetStatusMessage($"Speech rate set to {_speechRate}.");
-        }
-    }
-
-    public bool IsUpdateVisible
-    {
-        get => _isUpdateVisible;
-        private set
-        {
-            if (_isUpdateVisible == value)
-            {
-                return;
-            }
-
-            _isUpdateVisible = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(TaskbarProgressState));
-            OnPropertyChanged(nameof(IsFooterUpdateCardVisible));
-        }
-    }
-
-    public string UpdateStageText
-    {
-        get => _updateStageText;
-        private set
-        {
-            if (string.Equals(_updateStageText, value, StringComparison.Ordinal))
-            {
-                return;
-            }
-
-            _updateStageText = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(TaskbarProgressState));
-        }
-    }
-
-    public string UpdateStatusMessage
-    {
-        get => _updateStatusMessage;
-        private set
-        {
-            if (string.Equals(_updateStatusMessage, value, StringComparison.Ordinal))
-            {
-                return;
-            }
-
-            _updateStatusMessage = value;
-            OnPropertyChanged();
-        }
-    }
-
-    public bool IsUpdateProgressVisible
-    {
-        get => _isUpdateProgressVisible;
-        private set
-        {
-            if (_isUpdateProgressVisible == value)
-            {
-                return;
-            }
-
-            _isUpdateProgressVisible = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(TaskbarProgressState));
-        }
-    }
-
-    public bool IsMandatoryUpdateAvailable
-    {
-        get => _isMandatoryUpdateAvailable;
-        private set
-        {
-            if (_isMandatoryUpdateAvailable == value)
-            {
-                return;
-            }
-
-            _isMandatoryUpdateAvailable = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(TaskbarProgressState));
-        }
-    }
-
-    public double UpdateProgressPercent
-    {
-        get => _updateProgressValue * 100d;
-        private set
-        {
-            var normalized = value < 0d ? 0d : value > 100d ? 100d : value;
-            var progressValue = normalized / 100d;
-            if (Math.Abs(_updateProgressValue - progressValue) < 0.0001d)
-            {
-                return;
-            }
-
-            _updateProgressValue = progressValue;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(TaskbarProgressValue));
-        }
-    }
-
-    public double TaskbarProgressValue => _updateProgressValue;
-
-    public bool IsFooterUpdateBannerVisible =>
-        _updateState is AppUpdateState.Downloading or AppUpdateState.Installing or AppUpdateState.Completed;
-
-    public bool IsFooterDefaultVisible => !IsFooterUpdateBannerVisible;
-
-    public bool IsUpdateInProgress => _updateState is AppUpdateState.Downloading or AppUpdateState.Installing;
-
-    public bool IsFooterStaticInfoVisible => !IsUpdateVisible;
-
-    public bool IsFooterUpdateCardVisible => IsUpdateVisible;
-
-    public bool IsFooterUpdateProgressVisible =>
-        _updateState is AppUpdateState.Downloading or AppUpdateState.Installing && _isUpdateProgressVisible;
-
-    public string ApplicationAccessTierText => !_premiumEntitlementSnapshot.IsPackaged
-        ? "Development"
-        : _premiumEntitlementSnapshot.State == PremiumEntitlementState.Checking
-            ? string.Empty
-            : _premiumEntitlementSnapshot.HasPremium
-                ? "Premium"
-                : "Basic";
-
-    public string FooterUpdateBannerText
-    {
-        get
-        {
-            if (_updateState == AppUpdateState.Completed)
-            {
-                return "Update will take effect the next time you open RightSpeak.";
-            }
-
-            if (string.IsNullOrWhiteSpace(_updateStatusMessage))
-            {
-                return _updateStageText;
-            }
-
-            if (string.IsNullOrWhiteSpace(_updateStageText))
-            {
-                return _updateStatusMessage;
-            }
-
-            return $"{_updateStageText}: {_updateStatusMessage}";
-        }
-    }
-
-    public TaskbarItemProgressState TaskbarProgressState
-    {
-        get
-        {
-            if (_isUpdateProgressVisible)
-            {
-                return TaskbarItemProgressState.Normal;
-            }
-
-            if (_isUpdateVisible || _isMandatoryUpdateAvailable)
-            {
-                return TaskbarItemProgressState.Paused;
-            }
-
-            return TaskbarItemProgressState.None;
         }
     }
 
@@ -555,35 +367,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         SetStatusMessage("Voice list refreshed.");
     }
 
-    public void ApplyUpdateSnapshot(AppUpdateSnapshot snapshot)
-    {
-        if (snapshot is null)
-        {
-            return;
-        }
-
-        _updateState = snapshot.State;
-        UpdateStageText = snapshot.StageText;
-        UpdateStatusMessage = snapshot.StatusMessage;
-        IsMandatoryUpdateAvailable = snapshot.IsMandatoryUpdateAvailable;
-        IsUpdateProgressVisible = snapshot.IsProgressVisible &&
-                                  snapshot.State is AppUpdateState.Downloading or AppUpdateState.Installing;
-        UpdateProgressPercent = snapshot.ProgressValue * 100d;
-        IsUpdateVisible = IsFooterUpdateUiVisible(snapshot.State);
-        OnPropertyChanged(nameof(IsFooterUpdateBannerVisible));
-        OnPropertyChanged(nameof(IsFooterDefaultVisible));
-        OnPropertyChanged(nameof(IsFooterUpdateProgressVisible));
-        OnPropertyChanged(nameof(FooterUpdateBannerText));
-        OnPropertyChanged(nameof(IsUpdateInProgress));
-        OnPropertyChanged(nameof(IsFooterStaticInfoVisible));
-        OnPropertyChanged(nameof(IsFooterUpdateCardVisible));
-    }
-
-    private static bool IsFooterUpdateUiVisible(AppUpdateState state)
-    {
-        return state is not AppUpdateState.Idle and not AppUpdateState.Checking;
-    }
-
     private static string FormatFocusedWindowTitle(string title)
     {
         var parts = title.Split(" - ", StringSplitOptions.TrimEntries);
@@ -609,11 +392,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private bool CanResetHotkeys()
     {
-        if (!HasPremiumHotkeyCustomization)
-        {
-            return false;
-        }
-
         return _hotkeyModifierPreset != HotkeyModifierPreset.AltShift ||
                !string.Equals(_readSelectedHotkeyKey, DefaultReadSelectedHotkeyKey, StringComparison.OrdinalIgnoreCase) ||
                !string.Equals(_readParagraphHotkeyKey, DefaultReadParagraphHotkeyKey, StringComparison.OrdinalIgnoreCase) ||
@@ -1057,11 +835,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private Task ResetHotkeysAsync()
     {
-        if (!EnsurePremiumHotkeyCustomization())
-        {
-            return Task.CompletedTask;
-        }
-
         _suppressHotkeyAutoApply = true;
         try
         {
@@ -1142,13 +915,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
-        if (!EnsurePremiumHotkeyCustomization())
-        {
-            OnPropertyChanged(propertyName);
-            OnPropertyChanged(displayPropertyName);
-            return;
-        }
-
         var previous = field;
         field = value;
         OnPropertyChanged(propertyName);
@@ -1184,12 +950,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         if (!selected || _hotkeyModifierPreset == preset)
         {
-            return;
-        }
-
-        if (!EnsurePremiumHotkeyCustomization())
-        {
-            NotifyHotkeyPropertiesChanged();
             return;
         }
 
@@ -1396,95 +1156,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
             _ => "Alt+Shift"
         };
     }
-
-    private bool EnsurePremiumHotkeyCustomization()
-    {
-        if (HasPremiumHotkeyCustomization)
-        {
-            return true;
-        }
-
-        RaisePremiumHotkeysUpsell();
-        SetStatusMessage(_premiumEntitlementSnapshot.State switch
-        {
-            PremiumEntitlementState.Checking => "Checking license...",
-            PremiumEntitlementState.VerificationFailed => "Unable to verify license right now.",
-            _ => "Custom hotkeys are available with Premium."
-        });
-        return false;
-    }
-
-    private void EnsureBasicHotkeysIfRequired()
-    {
-        if (HasPremiumHotkeyCustomization)
-        {
-            return;
-        }
-
-        _suppressHotkeyAutoApply = true;
-        try
-        {
-            _hotkeyModifierPreset = HotkeyModifierPreset.AltShift;
-            _readSelectedHotkeyKey = DefaultReadSelectedHotkeyKey;
-            _readParagraphHotkeyKey = DefaultReadParagraphHotkeyKey;
-            _readDocumentHotkeyKey = DefaultReadDocumentHotkeyKey;
-            _stopHotkeyKey = DefaultStopHotkeyKey;
-            NotifyHotkeyPropertiesChanged();
-        }
-        finally
-        {
-            _suppressHotkeyAutoApply = false;
-        }
-
-        _hotkeySettingsService.ModifierPreset = _hotkeyModifierPreset;
-        _hotkeySettingsService.ReadSelectedKey = _readSelectedHotkeyKey;
-        _hotkeySettingsService.ReadParagraphKey = _readParagraphHotkeyKey;
-        _hotkeySettingsService.ReadDocumentKey = _readDocumentHotkeyKey;
-        _hotkeySettingsService.StopKey = _stopHotkeyKey;
-        _hotkeySettingsService.Save();
-    }
-
-    private void RaisePremiumHotkeysUpsell()
-    {
-        bool canShowPurchase = _premiumEntitlementSnapshot.State == PremiumEntitlementState.VerifiedNotOwned;
-        string message = _premiumEntitlementSnapshot.State switch
-        {
-            PremiumEntitlementState.Checking =>
-                "RightSpeak is still checking local premium status. Try again in a moment.",
-            PremiumEntitlementState.VerificationFailed =>
-                "RightSpeak could not verify premium status right now. Please try again.",
-            _ =>
-                "Custom hotkeys are a Premium feature. Upgrade to RightSpeak Premium to unlock full hotkey customization."
-        };
-        PremiumUpsellRequested?.Invoke(
-            this,
-            new PremiumUpsellRequest(
-                "Custom hotkeys",
-                message,
-                canShowPurchase));
-    }
-
-    public void ApplyPremiumEntitlementSnapshot(PremiumEntitlementSnapshot snapshot)
-    {
-        if (snapshot is null)
-        {
-            return;
-        }
-
-        bool previousHasPremium = HasPremiumHotkeyCustomization;
-        _premiumEntitlementSnapshot = snapshot;
-
-        if (previousHasPremium && !HasPremiumHotkeyCustomization)
-        {
-            EnsureBasicHotkeysIfRequired();
-            SetStatusMessage("Custom hotkeys are now locked to Basic defaults.");
-        }
-
-        OnPropertyChanged(nameof(ApplicationAccessTierText));
-        UpdateCommandStates();
-    }
-
-    private bool HasPremiumHotkeyCustomization => _premiumEntitlementSnapshot.HasPremium;
 
     private bool IsExternalReadCancellationStage =>
         _isExternalReadActive &&

@@ -22,7 +22,7 @@ The current focus is getting the MVP path working reliably:
 1. local text-to-speech and playback controls
 2. selected-text and document retrieval
 3. global hotkey trigger
-4. basic settings, tray behavior, packaged updates, and window state
+4. basic settings, tray behavior, and window state
 
 ## Product Goal
 RightSpeak is intended to:
@@ -43,7 +43,7 @@ Reliability matters more than UI polish.
 - Use tray quick actions for `Read Selected Text`, `Read Document`, `Stop Reading`, `Show RightSpeak`, and `Exit`.
 - Configure global hotkeys in-app for `Read Selected Text`, `Read Document`, and `Stop` using `Alt+Shift`, `Ctrl+Shift`, or `Ctrl+Alt`.
 - Persist theme, always-on-top, selected voice, speech rate, typed text draft, and hotkey settings.
-- Show focused-window context for external reads, a single Premium entitlement source, and version text in the footer.
+- Show focused-window context for external reads.
 
 ## Planned Capabilities
 Target capabilities still under consideration include:

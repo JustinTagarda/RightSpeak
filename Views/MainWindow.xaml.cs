@@ -10,8 +10,6 @@ using Rect = System.Windows.Rect;
 using RightSpeak.Services;
 
 using RightSpeak.ViewModels;
-using RightSpeak.Views.Controls;
-
 namespace RightSpeak.Views;
 
 public partial class MainWindow : Window
@@ -25,7 +23,6 @@ public partial class MainWindow : Window
     private readonly IAppSettingsService? _appSettingsService;
     private readonly uint _activateWindowMessageId;
     private readonly bool _placeOnStartup;
-    private readonly AppStatusViewModel _appStatusViewModel;
     private bool _hasPlacedOnStartup;
     private bool _suspendTopmostPersistence;
     private HwndSource? _windowSource;
@@ -36,7 +33,6 @@ public partial class MainWindow : Window
         IWebpageMainContextAnalyzer webpageMainContextAnalyzer,
         Func<nint>? getExternalWindowHandle,
         uint activateWindowMessageId,
-        AppStatusViewModel appStatusViewModel,
         IAppSettingsService? appSettingsService = null,
         Func<string, string, Func<Task>, Task>? executeFocusSensitiveReadAsync = null,
         Func<VoiceManagerViewModel>? createVoiceManagerViewModel = null,
@@ -52,9 +48,7 @@ public partial class MainWindow : Window
         _placeOnStartup = placeOnStartup;
         _createVoiceManagerViewModel = createVoiceManagerViewModel;
         _appSettingsService = appSettingsService;
-        _appStatusViewModel = appStatusViewModel ?? throw new ArgumentNullException(nameof(appStatusViewModel));
         DataContext = _viewModel;
-        AppStatusDisplay.DataContext = _appStatusViewModel;
         ApplyPersistedAlwaysOnTop();
 
         SourceInitialized += OnSourceInitialized;

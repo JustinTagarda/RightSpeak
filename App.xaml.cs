@@ -30,17 +30,12 @@ public partial class App : WpfApplication
     private IHotkeySettingsService? _hotkeySettingsService;
     private IVoiceCatalogService? _voiceCatalogService;
     private IVoiceDownloadService? _voiceDownloadService;
-    private IAppVersionProvider? _appVersionProvider;
-    private IAppUpdateService? _appUpdateService;
-    private IPremiumEntitlementService? _premiumEntitlementService;
     private MainViewModel? _mainViewModel;
-    private AppStatusViewModel? _appStatusViewModel;
     private IReadingService? _readingService;
     private MainWindow? _mainWindow;
     private Mutex? _singleInstanceMutex;
     private uint _activateWindowMessageId;
     private bool _isExiting;
-    private readonly CancellationTokenSource _updateCancellationTokenSource = new();
 
     public App()
     {
@@ -72,7 +67,6 @@ public partial class App : WpfApplication
         base.OnStartup(e);
 
         _speechService = new WindowsSpeechService();
-        _appVersionProvider = new PackageVersionProvider();
         _appSettingsService = new JsonAppSettingsService();
         if (!ApplyTheme(_appSettingsService.Current.Theme))
         {
@@ -115,25 +109,13 @@ public partial class App : WpfApplication
             documentTextRetrievalService,
             _appSettingsService);
 
-        _appUpdateService = new NoOpAppUpdateService(_appVersionProvider);
-        _premiumEntitlementService = new LocalPremiumEntitlementService(_appVersionProvider);
-
-        var appStatusVersionService = new AppVersionService(_appVersionProvider);
-        _appStatusViewModel = new AppStatusViewModel(appStatusVersionService);
         _mainViewModel = new MainViewModel(
             _readingService,
             _hotkeySettingsService,
             ApplyHotkeysAndRefreshTray,
             BuildConfiguration.IsDebugDiagnosticsEnabled,
             _appSettingsService,
-            ApplyTheme,
-            premiumEntitlementSnapshot: _premiumEntitlementService.CurrentSnapshot);
-        _appUpdateService.SnapshotChanged += OnAppUpdateSnapshotChanged;
-        _premiumEntitlementService.SnapshotChanged += OnPremiumEntitlementSnapshotChanged;
-        _mainViewModel.ApplyUpdateSnapshot(_appUpdateService.CurrentSnapshot);
-        _mainViewModel.ApplyPremiumEntitlementSnapshot(_premiumEntitlementService.CurrentSnapshot);
-        _appStatusViewModel.ApplyPremiumSnapshot(_premiumEntitlementService.CurrentSnapshot);
-        _appStatusViewModel.StatusMessageChanged += OnAppStatusMessageChanged;
+            ApplyTheme);
 
         _trayService = new WindowsTrayService();
         _trayService.ReadSelectedRequested += OnTrayReadSelectedRequested;
@@ -152,7 +134,6 @@ public partial class App : WpfApplication
             webpageMainContextAnalyzer,
             () => _trayService?.LastExternalForegroundWindow ?? nint.Zero,
             _activateWindowMessageId,
-            _appStatusViewModel,
             _appSettingsService,
             ExecuteTrayFocusSensitiveReadAsync,
             CreateVoiceManagerViewModel,
@@ -200,20 +181,6 @@ public partial class App : WpfApplication
         }, DispatcherPriority.ApplicationIdle);
         ObserveBackgroundTask(revealOperation.Task, "main_window_reveal_post_startup");
 
-        var entitlementOperation = Dispatcher.BeginInvoke(async () =>
-        {
-            try
-            {
-                if (_premiumEntitlementService is not null)
-                {
-                    await _premiumEntitlementService.RefreshAsync(_updateCancellationTokenSource.Token).ConfigureAwait(true);
-                }
-            }
-            catch (OperationCanceledException)
-            {
-            }
-        }, DispatcherPriority.Background);
-        ObserveBackgroundTask(entitlementOperation.Task, "premium_entitlement_startup");
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -226,7 +193,6 @@ public partial class App : WpfApplication
                 ["exitCode"] = e.ApplicationExitCode.ToString()
             });
         _isExiting = true;
-        TryRunCleanup("app_exit_cancel_updates", () => _updateCancellationTokenSource.Cancel());
         TryRunCleanup("app_exit_unsubscribe_dispatcher_unhandled", () => DispatcherUnhandledException -= OnDispatcherUnhandledException);
         TryRunCleanup("app_exit_unsubscribe_domain_unhandled", () => AppDomain.CurrentDomain.UnhandledException -= OnAppDomainUnhandledException);
         TryRunCleanup("app_exit_unsubscribe_process_exit", () => AppDomain.CurrentDomain.ProcessExit -= OnProcessExit);
@@ -247,20 +213,8 @@ public partial class App : WpfApplication
             _trayService.ForegroundWindowChanged -= OnTrayForegroundWindowChanged;
             _trayService.Dispose();
         });
-        TryRunCleanup("app_exit_unsubscribe_update_snapshot", () =>
+        TryRunCleanup("app_exit_unsubscribe_main_window_content_rendered", () =>
         {
-            if (_appUpdateService is not null)
-            {
-                _appUpdateService.SnapshotChanged -= OnAppUpdateSnapshotChanged;
-            }
-            if (_premiumEntitlementService is not null)
-            {
-                _premiumEntitlementService.SnapshotChanged -= OnPremiumEntitlementSnapshotChanged;
-            }
-            if (_appStatusViewModel is not null)
-            {
-                _appStatusViewModel.StatusMessageChanged -= OnAppStatusMessageChanged;
-            }
             if (_mainWindow is not null)
             {
                 _mainWindow.ContentRendered -= OnMainWindowContentRendered;
@@ -402,38 +356,10 @@ public partial class App : WpfApplication
         return (refreshed, _hotkeyService.LastRegistrationStatus);
     }
 
-    private void OnAppUpdateSnapshotChanged(object? sender, AppUpdateSnapshot snapshot)
-    {
-        ObserveBackgroundTask(
-            Dispatcher.InvokeAsync(() => _mainViewModel?.ApplyUpdateSnapshot(snapshot)).Task,
-            "app_update_snapshot_changed");
-    }
-
     private void OnMainWindowContentRendered(object? sender, EventArgs e)
     {
         _ = sender;
         _ = e;
-    }
-
-    private void OnPremiumEntitlementSnapshotChanged(object? sender, PremiumEntitlementSnapshot snapshot)
-    {
-        ObserveBackgroundTask(
-            Dispatcher.InvokeAsync(() =>
-            {
-                _mainViewModel?.ApplyPremiumEntitlementSnapshot(snapshot);
-                _appStatusViewModel?.ApplyPremiumSnapshot(snapshot);
-            }).Task,
-            "premium_entitlement_snapshot_changed");
-    }
-
-    private void OnAppStatusMessageChanged(object? sender, string message)
-    {
-        if (string.IsNullOrWhiteSpace(message))
-        {
-            return;
-        }
-
-        _mainViewModel?.SetStatusMessage(message);
     }
 
     private static string GetModifierLabel(RightSpeak.Models.HotkeyModifierPreset preset)
@@ -566,8 +492,7 @@ public partial class App : WpfApplication
         if (_voiceCatalogService is null ||
             _voiceDownloadService is null ||
             _readingService is null ||
-            _mainViewModel is null ||
-            _premiumEntitlementService is null)
+            _mainViewModel is null)
         {
             throw new InvalidOperationException("Voice manager services are not available.");
         }
@@ -576,9 +501,7 @@ public partial class App : WpfApplication
             _voiceCatalogService,
             _voiceDownloadService,
             _readingService,
-            _mainViewModel.RefreshVoiceOptions,
-            _premiumEntitlementService,
-            () => Task.CompletedTask);
+            _mainViewModel.RefreshVoiceOptions);
     }
 
     private Dictionary<string, string?> BuildFocusRestoreDiagnostics(string trigger)
