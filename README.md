@@ -11,7 +11,7 @@ Current state:
 - WPF desktop app is implemented
 - project targets `.NET 10` on Windows
 - core reading workflows are implemented and being hardened for reliability
-- manual text reading, external selected-text reading, external document reading, pause/resume, stop, always-on-top behavior, voice management, tray actions, configurable hotkeys, themes, and background Store updates are implemented
+- manual text reading, external selected-text reading, external document reading, pause/resume, stop, always-on-top behavior, voice management, tray actions, configurable hotkeys, themes, are implemented
 - external `Read Document` is enabled with browser-PDF-specific hardening and diagnostics
 - paragraph retrieval code still exists internally, but it is not part of the current production-facing app/tray/global-hotkey surface
 - production-facing external commands are:
@@ -43,7 +43,7 @@ Reliability matters more than UI polish.
 - Use tray quick actions for `Read Selected Text`, `Read Document`, `Stop Reading`, `Show RightSpeak`, and `Exit`.
 - Configure global hotkeys in-app for `Read Selected Text`, `Read Document`, and `Stop` using `Alt+Shift`, `Ctrl+Shift`, or `Ctrl+Alt`.
 - Persist theme, always-on-top, selected voice, speech rate, typed text draft, and hotkey settings.
-- Show focused-window context for external reads, a single Premium entitlement source, packaged app version text in the footer, and background Store update handling with deferred install-on-exit and Store fallback UI when packaged.
+- Show focused-window context for external reads, a single Premium entitlement source, and version text in the footer.
 
 ## Planned Capabilities
 Target capabilities still under consideration include:
@@ -103,49 +103,6 @@ dotnet build .\RightSpeak.csproj
 dotnet run --project .\RightSpeak.csproj
 ```
 
-## Microsoft Store Packaging
-`RightSpeak.Package\RightSpeak.Package.wapproj` is the Windows Application Packaging Project for MSIX and Store submission.
-
-Before creating a real Store upload package:
-- verify the `Identity` values in `RightSpeak.Package\Package.appxmanifest` match the identity and publisher from Partner Center association
-- keep the WPF app project as the only application payload; the packaging project is deployment-only
-- promo codes for the Premium durable add-on are redeemed through the Microsoft Store redeem flow, and RightSpeak picks up the resulting entitlement on startup and after successful in-app Premium purchase checks
-- if a Partner Center association export is available for the app, compare it with the manifest and publish profile before submission; this repository does not include the Partner Center export itself
-
-Create a Store upload package from the command line:
-```powershell
-.\tools\msstore-generate-package.ps1
-```
-
-Optional overrides:
-```powershell
-.\tools\msstore-generate-package.ps1 -SdkVersion 10.0.202
-.\tools\msstore-generate-package.ps1 -ManifestVersion 1.0.13.0
-```
-
-Expected output:
-- `.msixupload` or `.appxupload` under `RightSpeak.Package\AppPackages\`
-- install/test artifacts for local validation in the same output folder
-- build `Platform=x64` for the only supported upload package
-- only x64 Store packaging is configured
-- upload the x64 file, not any older bundle artifacts
-
-Runtime update behavior for packaged installs:
-- RightSpeak checks Store updates asynchronously after the main window has rendered
-- the check stays hidden and does not block startup
-- silent background download is attempted first when Store support allows it
-- if silent download is unavailable, blocked, canceled, or fails during the automatic startup flow, the app falls back to the Microsoft Store / OS update UI
-- clicking the footer version text checks for updates, shows a small "No update available" toast when appropriate, and opens the Microsoft Store app page when an update exists
-- the footer status control presents Basic/Premium mode and the clickable version text in one reusable control
-- deferred install-on-exit is used when a silent download succeeds
-- successful Store fallback UI updates are treated as completed/queued and do not create an app-owned deferred install state
-- if `StoreContext` creation is unavailable in a packaged environment, the app degrades update checking safely instead of failing startup
-- the footer version text uses the same Store update service for user-initiated checks, while the startup check stays hidden and non-blocking
-- exit-time install shows an app-owned modal progress window
-- deferred update pending state is cleared after completion, while last-check and retry history are persisted separately
-- the app does not auto-restart or force-close the current session to apply a Store update
-- the footer-right version text shows the installed packaged version when the app has package identity
-
 ## Current Implementation
 - local speech engine abstraction with `System.Speech` and Piper support
 - manual text input with `Read`, `Pause/Resume`, and `Stop`
@@ -181,9 +138,6 @@ Runtime update behavior for packaged installs:
   - stop reading
   - show app / exit
   - menu items display current hotkey hints
-- background Microsoft Store update checks with deferred install-on-exit and Store fallback UI
-- deferred update pending state and update history are persisted separately
-- packaged version display in the footer for Store installs
 - voice manager filtering by language and quality, with refresh/cancel/install/update/remove actions
 
 ## Current Project Shape
@@ -211,3 +165,5 @@ Compatibility claims should stay conservative until those paths are working and 
 
 ## Contribution Notes
 Contributors and coding agents should read [`AGENTS.md`](./AGENTS.md) before making changes. That file contains the implementation constraints for architecture, scope control, clipboard handling, and Windows integration.
+
+

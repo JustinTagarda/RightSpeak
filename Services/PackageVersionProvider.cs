@@ -1,6 +1,5 @@
 using System;
 using System.Reflection;
-using Windows.ApplicationModel;
 
 namespace RightSpeak.Services;
 
@@ -10,8 +9,8 @@ public sealed class PackageVersionProvider : IAppVersionProvider
 
     public PackageVersionProvider()
     {
-        IsPackaged = TryGetPackageVersion(out var packageVersion);
-        _installedVersion = packageVersion ?? GetAssemblyVersion();
+        IsPackaged = false;
+        _installedVersion = GetAssemblyVersion();
     }
 
     internal PackageVersionProvider(bool isPackaged, string installedVersion)
@@ -29,21 +28,6 @@ public sealed class PackageVersionProvider : IAppVersionProvider
     public string GetDisplayVersionText()
     {
         return $"v{_installedVersion}";
-    }
-
-    private static bool TryGetPackageVersion(out string? version)
-    {
-        try
-        {
-            var packageVersion = Package.Current.Id.Version;
-            version = $"{packageVersion.Major}.{packageVersion.Minor}.{packageVersion.Build}.{packageVersion.Revision}";
-            return true;
-        }
-        catch
-        {
-            version = null;
-            return false;
-        }
     }
 
     private static string GetAssemblyVersion()

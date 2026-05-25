@@ -1,6 +1,11 @@
 using System;
 
-namespace RightSpeak.Services.Store;
+namespace RightSpeak.Services;
+
+public interface IAppVersionService
+{
+    string GetVersionText();
+}
 
 public sealed class AppVersionService : IAppVersionService
 {
@@ -22,4 +27,3 @@ public sealed class AppVersionService : IAppVersionService
         return raw.StartsWith("v", StringComparison.OrdinalIgnoreCase) ? raw : $"v{raw}";
     }
 }
-

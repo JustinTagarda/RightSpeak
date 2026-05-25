@@ -140,7 +140,7 @@ internal static class AppDiagnostics
             return false;
         }
 
-        // Store-packaged installs should never emit debug diagnostics logs.
+        // Packaged installs should never emit debug diagnostics logs.
         return !IsPackagedProcess();
     }
 

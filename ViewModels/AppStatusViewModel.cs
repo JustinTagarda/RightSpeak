@@ -1,49 +1,26 @@
 using System;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
-using System.Threading.Tasks;
-using System.Windows.Input;
 using RightSpeak.Services;
-using RightSpeak.Services.Store;
 
 namespace RightSpeak.ViewModels;
 
 public sealed class AppStatusViewModel : INotifyPropertyChanged
 {
-    private readonly IStorePurchaseService _storePurchaseService;
-    private readonly IPremiumEntitlementService _premiumEntitlementService;
-    private readonly IAppUpdateService _appUpdateService;
-    private readonly IStoreNavigationService _storeNavigationService;
-    private bool _isBusy;
-    private bool _isNoUpdateToastVisible;
-    private string _modeText = "Basic";
-    private string _modeTooltip = "Click to upgrade to Premium.";
+    private readonly IAppVersionService _appVersionService;
+    private string _modeText = "Premium";
+    private string _modeTooltip = "Premium features are enabled in this build.";
     private string _versionText = "v0.0.0.0";
     private string _statusMessage = string.Empty;
-    private bool _hasPremium;
 
-    public AppStatusViewModel(
-        IStorePurchaseService storePurchaseService,
-        IPremiumEntitlementService premiumEntitlementService,
-        IAppUpdateService appUpdateService,
-        IStoreNavigationService storeNavigationService,
-        IAppVersionService appVersionService)
+    public AppStatusViewModel(IAppVersionService appVersionService)
     {
-        _storePurchaseService = storePurchaseService ?? throw new ArgumentNullException(nameof(storePurchaseService));
-        _premiumEntitlementService = premiumEntitlementService ?? throw new ArgumentNullException(nameof(premiumEntitlementService));
-        _appUpdateService = appUpdateService ?? throw new ArgumentNullException(nameof(appUpdateService));
-        _storeNavigationService = storeNavigationService ?? throw new ArgumentNullException(nameof(storeNavigationService));
-        _versionText = appVersionService?.GetVersionText() ?? "v0.0.0.0";
-
-        UpgradeCommand = new AsyncCommand(UpgradeAsync, () => !_isBusy && !_hasPremium);
-        CheckForUpdateCommand = new AsyncCommand(CheckForUpdateAsync, () => !_isBusy);
+        _appVersionService = appVersionService ?? throw new ArgumentNullException(nameof(appVersionService));
+        _versionText = _appVersionService.GetVersionText();
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
     public event EventHandler<string>? StatusMessageChanged;
-
-    public ICommand UpgradeCommand { get; }
-    public ICommand CheckForUpdateCommand { get; }
 
     public string ModeText
     {
@@ -60,7 +37,7 @@ public sealed class AppStatusViewModel : INotifyPropertyChanged
         }
     }
 
-    public bool IsModeClickable => !_hasPremium;
+    public bool IsModeClickable => false;
 
     public string ModeTooltip
     {
@@ -79,20 +56,7 @@ public sealed class AppStatusViewModel : INotifyPropertyChanged
 
     public string VersionText => _versionText;
 
-    public bool IsNoUpdateToastVisible
-    {
-        get => _isNoUpdateToastVisible;
-        private set
-        {
-            if (_isNoUpdateToastVisible == value)
-            {
-                return;
-            }
-
-            _isNoUpdateToastVisible = value;
-            OnPropertyChanged();
-        }
-    }
+    public bool IsNoUpdateToastVisible => false;
 
     public string StatusMessage
     {
@@ -112,129 +76,15 @@ public sealed class AppStatusViewModel : INotifyPropertyChanged
 
     public void ApplyPremiumSnapshot(PremiumEntitlementSnapshot snapshot)
     {
-        _hasPremium = snapshot.HasPremium;
+        if (snapshot is null)
+        {
+            return;
+        }
+
         ModeText = snapshot.HasPremium ? "Premium" : "Basic";
-        ModeTooltip = snapshot.HasPremium ? "Premium mode active." : "Click to upgrade to Premium.";
+        ModeTooltip = snapshot.StatusMessage;
+        StatusMessage = snapshot.StatusMessage;
         OnPropertyChanged(nameof(IsModeClickable));
-        RaiseCommandStateChanged();
-    }
-
-    private async Task UpgradeAsync()
-    {
-        if (_hasPremium)
-        {
-            return;
-        }
-
-        await RunBusyAsync(async () =>
-        {
-            var purchaseResult = await _storePurchaseService.PurchasePremiumAsync();
-            StatusMessage = purchaseResult.Message;
-
-            if (purchaseResult.Outcome is StorePurchaseOutcome.Succeeded or StorePurchaseOutcome.AlreadyOwned)
-            {
-                AppDiagnostics.Info(
-                    "premium_entitlement_refresh_started",
-                    new System.Collections.Generic.Dictionary<string, string?>
-                    {
-                        ["purchaseOutcome"] = purchaseResult.Outcome.ToString()
-                    });
-                await _premiumEntitlementService.RefreshAsync();
-                var snapshot = _premiumEntitlementService.CurrentSnapshot;
-                ApplyPremiumSnapshot(snapshot);
-                AppDiagnostics.Info(
-                    "premium_entitlement_refresh_completed",
-                    new System.Collections.Generic.Dictionary<string, string?>
-                    {
-                        ["purchaseOutcome"] = purchaseResult.Outcome.ToString(),
-                        ["hasPremium"] = snapshot.HasPremium.ToString(),
-                        ["state"] = snapshot.State.ToString()
-                    });
-                if (snapshot.HasPremium)
-                {
-                    StatusMessage = "Premium unlocked.";
-                }
-            }
-        });
-    }
-
-    public Task RequestPremiumPurchaseAsync()
-    {
-        if (UpgradeCommand is AsyncCommand asyncCommand && asyncCommand.CanExecute(null))
-        {
-            return asyncCommand.ExecuteAsync();
-        }
-
-        return Task.CompletedTask;
-    }
-
-    private async Task CheckForUpdateAsync()
-    {
-        await RunBusyAsync(async () =>
-        {
-            IsNoUpdateToastVisible = false;
-            var result = await _appUpdateService.CheckForUpdatesOnDemandAsync();
-            if (result.Availability == UserInitiatedUpdateAvailability.NotAvailable)
-            {
-                StatusMessage = result.Message;
-                IsNoUpdateToastVisible = true;
-                _ = HideNoUpdateToastAsync();
-                return;
-            }
-
-            if (result.Availability == UserInitiatedUpdateAvailability.Available)
-            {
-                StatusMessage = "Update available. Opening Microsoft Store.";
-                if (!_storeNavigationService.OpenAppPage())
-                {
-                    StatusMessage = "Update available, but Microsoft Store couldn't be opened.";
-                }
-
-                return;
-            }
-
-            StatusMessage = result.Message;
-        });
-    }
-
-    private async Task HideNoUpdateToastAsync()
-    {
-        await Task.Delay(TimeSpan.FromSeconds(2.5)).ConfigureAwait(true);
-        IsNoUpdateToastVisible = false;
-    }
-
-    private async Task RunBusyAsync(Func<Task> action)
-    {
-        if (_isBusy)
-        {
-            return;
-        }
-
-        _isBusy = true;
-        RaiseCommandStateChanged();
-        try
-        {
-            await action().ConfigureAwait(true);
-        }
-        finally
-        {
-            _isBusy = false;
-            RaiseCommandStateChanged();
-        }
-    }
-
-    private void RaiseCommandStateChanged()
-    {
-        if (UpgradeCommand is AsyncCommand upgradeCommand)
-        {
-            upgradeCommand.RaiseCanExecuteChanged();
-        }
-
-        if (CheckForUpdateCommand is AsyncCommand checkForUpdateCommand)
-        {
-            checkForUpdateCommand.RaiseCanExecuteChanged();
-        }
-
     }
 
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null)

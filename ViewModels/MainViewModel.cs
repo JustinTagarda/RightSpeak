@@ -94,7 +94,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             State: PremiumEntitlementState.VerificationFailed,
             IsPremiumProductAvailable: false,
             PremiumProductDisplayName: "RightSpeak Premium",
-            StatusMessage: "Premium entitlement is unavailable outside the Microsoft Store package.");
+            StatusMessage: "Premium features are enabled in this build.");
 
         _speechRate = _readingService.SpeechRate;
         _inputText = _readingService.TypedTextDraft ?? string.Empty;
@@ -1450,9 +1450,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         string message = _premiumEntitlementSnapshot.State switch
         {
             PremiumEntitlementState.Checking =>
-                "RightSpeak is still checking your Microsoft Store entitlement. Try again in a moment.",
+                "RightSpeak is still checking local premium status. Try again in a moment.",
             PremiumEntitlementState.VerificationFailed =>
-                "RightSpeak could not verify your Microsoft Store entitlement right now. Please ensure Microsoft Store is signed in and try again.",
+                "RightSpeak could not verify premium status right now. Please try again.",
             _ =>
                 "Custom hotkeys are a Premium feature. Upgrade to RightSpeak Premium to unlock full hotkey customization."
         };
@@ -1680,3 +1680,4 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return (options, nameByOptionLabel, optionLabelByName);
     }
 }
+

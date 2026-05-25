@@ -167,7 +167,7 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
         _entitlementSnapshot.State switch
         {
             PremiumEntitlementState.Checking => "Checking license. Install and remove actions will be available after verification.",
-            PremiumEntitlementState.VerificationFailed => "Unable to verify license right now. Please ensure Microsoft Store is signed in and try again.",
+            PremiumEntitlementState.VerificationFailed => "Unable to verify premium status right now. Please try again.",
             _ => "Get Premium to unlock install, update, and remove voice options."
         };
 
@@ -222,7 +222,7 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
                     : _entitlementSnapshot.State switch
                     {
                         PremiumEntitlementState.Checking => "Checking license. Install and remove actions will be available after verification.",
-                        PremiumEntitlementState.VerificationFailed => "Unable to verify license right now. Please ensure Microsoft Store is signed in and try again.",
+                        PremiumEntitlementState.VerificationFailed => "Unable to verify premium status right now. Please try again.",
                         _ => "Browse available Premium voice models."
                     };
         }
@@ -610,3 +610,4 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
 }
+

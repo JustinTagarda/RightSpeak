@@ -8,7 +8,7 @@ using System.Windows.Input;
 using RightSpeak.Interop;
 using Rect = System.Windows.Rect;
 using RightSpeak.Services;
-using RightSpeak.Services.Store;
+
 using RightSpeak.ViewModels;
 using RightSpeak.Views.Controls;
 
@@ -22,7 +22,6 @@ public partial class MainWindow : Window
     private readonly Func<nint>? _getExternalWindowHandle;
     private readonly Func<string, string, Func<Task>, Task>? _executeFocusSensitiveReadAsync;
     private readonly Func<VoiceManagerViewModel>? _createVoiceManagerViewModel;
-    private readonly Func<Task> _requestPremiumPurchaseAsync;
     private readonly IAppSettingsService? _appSettingsService;
     private readonly uint _activateWindowMessageId;
     private readonly bool _placeOnStartup;
@@ -38,7 +37,6 @@ public partial class MainWindow : Window
         Func<nint>? getExternalWindowHandle,
         uint activateWindowMessageId,
         AppStatusViewModel appStatusViewModel,
-        Func<Task> requestPremiumPurchaseAsync,
         IAppSettingsService? appSettingsService = null,
         Func<string, string, Func<Task>, Task>? executeFocusSensitiveReadAsync = null,
         Func<VoiceManagerViewModel>? createVoiceManagerViewModel = null,
@@ -53,12 +51,10 @@ public partial class MainWindow : Window
         _activateWindowMessageId = activateWindowMessageId;
         _placeOnStartup = placeOnStartup;
         _createVoiceManagerViewModel = createVoiceManagerViewModel;
-        _requestPremiumPurchaseAsync = requestPremiumPurchaseAsync ?? throw new ArgumentNullException(nameof(requestPremiumPurchaseAsync));
         _appSettingsService = appSettingsService;
         _appStatusViewModel = appStatusViewModel ?? throw new ArgumentNullException(nameof(appStatusViewModel));
         DataContext = _viewModel;
         AppStatusDisplay.DataContext = _appStatusViewModel;
-        _viewModel.PremiumUpsellRequested += OnPremiumUpsellRequested;
         ApplyPersistedAlwaysOnTop();
 
         SourceInitialized += OnSourceInitialized;
@@ -105,7 +101,6 @@ public partial class MainWindow : Window
             _hotkeyService.ReadSelectedHotkeyPressed -= OnReadSelectedHotkeyPressed;
             _hotkeyService.ReadDocumentHotkeyPressed -= OnReadDocumentHotkeyPressed;
             _hotkeyService.StopHotkeyPressed -= OnStopHotkeyPressed;
-            _viewModel.PremiumUpsellRequested -= OnPremiumUpsellRequested;
             _hotkeyService.Dispose();
             if (_windowSource is not null)
             {
@@ -763,44 +758,9 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void OnPremiumUpsellRequested(object? sender, PremiumUpsellRequest request)
-    {
-        _ = sender;
-        if (!request.CanShowPurchase)
-        {
-            var unavailableDialog = new ConfirmActionWindow(
-                $"{request.FeatureName} unavailable",
-                request.Message,
-                confirmText: "OK",
-                cancelText: "Close")
-            {
-                Owner = this,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Topmost = Topmost
-            };
-            unavailableDialog.ShowDialog();
-            return;
-        }
 
-        var dialog = new ConfirmActionWindow(
-            $"{request.FeatureName} requires Premium",
-            request.Message,
-            confirmText: "Go to Premium",
-            cancelText: "Not now")
-        {
-            Owner = this,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Topmost = Topmost
-        };
-
-        if (dialog.ShowDialog() != true)
-        {
-            return;
-        }
-
-        await RunSafeUiAsync("premium_upsell_purchase", async () =>
-        {
-            await _requestPremiumPurchaseAsync().ConfigureAwait(true);
-        }).ConfigureAwait(true);
-    }
 }
+
+
+
+
