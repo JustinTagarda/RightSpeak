@@ -14,6 +14,7 @@ using RightSpeak.Services;
 using RightSpeak.ViewModels;
 using RightSpeak.Views;
 using RightSpeak.WindowsIntegration;
+using Windows.ApplicationModel;
 using WpfApplication = System.Windows.Application;
 
 namespace RightSpeak;
@@ -115,7 +116,8 @@ public partial class App : WpfApplication
             ApplyHotkeysAndRefreshTray,
             BuildConfiguration.IsDebugDiagnosticsEnabled,
             _appSettingsService,
-            ApplyTheme);
+            ApplyTheme,
+            GetStoreUiVersionText());
 
         _trayService = new WindowsTrayService();
         _trayService.ReadSelectedRequested += OnTrayReadSelectedRequested;
@@ -756,5 +758,18 @@ public partial class App : WpfApplication
         }
 
         return true;
+    }
+
+    private static string GetStoreUiVersionText()
+    {
+        try
+        {
+            var version = Package.Current.Id.Version;
+            return $"{version.Major}.{version.Minor}.{version.Build}.0";
+        }
+        catch
+        {
+            return "0.0.0.0";
+        }
     }
 }

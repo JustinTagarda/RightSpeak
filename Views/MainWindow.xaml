@@ -667,24 +667,38 @@
                            Foreground="{DynamicResource FooterTextBrush}"
                            FontSize="12"
                            VerticalAlignment="Center" />
-                <StackPanel Grid.Column="1"
-                            Orientation="Horizontal"
-                            VerticalAlignment="Center"
-                            Margin="0,0,10,0">
-                <TextBlock Text="Theme"
-                           Foreground="{DynamicResource FooterTextBrush}"
-                           FontSize="12"
-                           VerticalAlignment="Center"
-                           Margin="0,0,6,0" />
-                <ComboBox Height="24"
-                          Padding="4,0"
-                          HorizontalAlignment="Left"
-                          VerticalAlignment="Center"
-                          VerticalContentAlignment="Center"
-                          Style="{StaticResource FooterThemeComboBoxStyle}"
-                          ItemsSource="{Binding ThemeOptions}"
-                          SelectedItem="{Binding SelectedTheme, UpdateSourceTrigger=PropertyChanged}" />
-                </StackPanel>
+                <Grid Grid.Column="1"
+                      VerticalAlignment="Center"
+                      Margin="0,0,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0"
+                                Orientation="Horizontal"
+                                VerticalAlignment="Center"
+                                Margin="0,0,12,0">
+                        <TextBlock Text="Theme"
+                                   Foreground="{DynamicResource FooterTextBrush}"
+                                   FontSize="12"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,6,0" />
+                        <ComboBox Height="24"
+                                  Padding="4,0"
+                                  HorizontalAlignment="Left"
+                                  VerticalAlignment="Center"
+                                  VerticalContentAlignment="Center"
+                                  Style="{StaticResource FooterThemeComboBoxStyle}"
+                                  ItemsSource="{Binding ThemeOptions}"
+                                  SelectedItem="{Binding SelectedTheme, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding DisplayVersionText}"
+                               Foreground="{DynamicResource FooterTextBrush}"
+                               FontSize="12"
+                               VerticalAlignment="Center"
+                               HorizontalAlignment="Right" />
+                </Grid>
             </Grid>
             </Grid>
         </Grid>

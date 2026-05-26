@@ -24,6 +24,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly IReadingService _readingService;
     private readonly IHotkeySettingsService _hotkeySettingsService;
     private readonly IAppSettingsService _appSettingsService;
+    private readonly string _displayVersionText;
     private IReadOnlyList<string> _voiceOptions;
     private Dictionary<string, string?> _voiceNameByOptionLabel;
     private Dictionary<string, string> _voiceOptionLabelByName;
@@ -65,7 +66,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         Func<(bool Success, string StatusMessage)>? applyHotkeysRegistration = null,
         bool isAnalyzeAvailable = false,
         IAppSettingsService? appSettingsService = null,
-        Func<string, bool>? applyTheme = null)
+        Func<string, bool>? applyTheme = null,
+        string? displayVersionText = null)
     {
         _readingService = readingService ?? throw new ArgumentNullException(nameof(readingService));
         _hotkeySettingsService = hotkeySettingsService ?? throw new ArgumentNullException(nameof(hotkeySettingsService));
@@ -73,6 +75,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _applyHotkeysRegistration = applyHotkeysRegistration;
         _isAnalyzeAvailable = isAnalyzeAvailable;
         _applyTheme = applyTheme;
+        _displayVersionText = string.IsNullOrWhiteSpace(displayVersionText) ? "0.0.0.0" : displayVersionText;
 
         _speechRate = _readingService.SpeechRate;
         _inputText = _readingService.TypedTextDraft ?? string.Empty;
@@ -295,6 +298,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string PauseButtonText => _isPaused ? "Resume" : "Pause";
     public string ExternalReadActionText => IsExternalReadCancellationStage ? "Cancel" : "Stop";
     public bool IsAnalyzeAvailable => _isAnalyzeAvailable;
+    public string DisplayVersionText => _displayVersionText;
 
     public ICommand ReadCommand { get; }
     public ICommand ClearCommand { get; }
