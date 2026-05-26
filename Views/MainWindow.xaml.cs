@@ -21,6 +21,7 @@ public partial class MainWindow : Window
     private readonly Func<string, string, Func<Task>, Task>? _executeFocusSensitiveReadAsync;
     private readonly Func<VoiceManagerViewModel>? _createVoiceManagerViewModel;
     private readonly IAppSettingsService? _appSettingsService;
+    private readonly IStoreContextProvider? _storeContextProvider;
     private readonly uint _activateWindowMessageId;
     private readonly bool _placeOnStartup;
     private bool _hasPlacedOnStartup;
@@ -34,6 +35,7 @@ public partial class MainWindow : Window
         Func<nint>? getExternalWindowHandle,
         uint activateWindowMessageId,
         IAppSettingsService? appSettingsService = null,
+        IStoreContextProvider? storeContextProvider = null,
         Func<string, string, Func<Task>, Task>? executeFocusSensitiveReadAsync = null,
         Func<VoiceManagerViewModel>? createVoiceManagerViewModel = null,
         bool placeOnStartup = false)
@@ -48,6 +50,7 @@ public partial class MainWindow : Window
         _placeOnStartup = placeOnStartup;
         _createVoiceManagerViewModel = createVoiceManagerViewModel;
         _appSettingsService = appSettingsService;
+        _storeContextProvider = storeContextProvider;
         DataContext = _viewModel;
         ApplyPersistedAlwaysOnTop();
 
@@ -61,6 +64,7 @@ public partial class MainWindow : Window
         try
         {
             var handle = new WindowInteropHelper(this).Handle;
+            _storeContextProvider?.SetOwnerWindowHandle(handle);
             _windowSource = HwndSource.FromHwnd(handle);
             _windowSource?.AddHook(WndProc);
 
@@ -130,6 +134,11 @@ public partial class MainWindow : Window
     {
         _ = sender;
 
+        if (IsInteractiveTitleBarSource(e.OriginalSource as DependencyObject))
+        {
+            return;
+        }
+
         if (e.ClickCount == 2)
         {
             ToggleMaximizeRestore();
@@ -165,6 +174,22 @@ public partial class MainWindow : Window
         WindowState = WindowState == WindowState.Maximized
             ? WindowState.Normal
             : WindowState.Maximized;
+    }
+
+    private static bool IsInteractiveTitleBarSource(DependencyObject? source)
+    {
+        while (source is not null)
+        {
+            if (source is System.Windows.Controls.Primitives.ButtonBase
+                || source is System.Windows.Controls.Primitives.Selector)
+            {
+                return true;
+            }
+
+            source = System.Windows.Media.VisualTreeHelper.GetParent(source);
+        }
+
+        return false;
     }
 
     public void EnsureVisibleOnScreen()
