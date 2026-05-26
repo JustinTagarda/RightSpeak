@@ -24,6 +24,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly IReadingService _readingService;
     private readonly IHotkeySettingsService _hotkeySettingsService;
     private readonly IAppSettingsService _appSettingsService;
+    private readonly IPremiumEntitlementService? _premiumEntitlementService;
+    private readonly IPremiumPurchaseService? _premiumPurchaseService;
+    private readonly IStoreNavigationService? _storeNavigationService;
     private readonly string _displayVersionText;
     private IReadOnlyList<string> _voiceOptions;
     private Dictionary<string, string?> _voiceNameByOptionLabel;
@@ -48,6 +51,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private int _speechRate;
     private string _selectedVoiceOption = SystemDefaultVoiceOption;
     private string _selectedTheme = AppThemes.Light;
+    private bool _isPremiumOwned;
+    private bool _isPremiumBusy;
     private HotkeyModifierPreset _hotkeyModifierPreset = HotkeyModifierPreset.AltShift;
     private HotkeyModifierPreset _appliedHotkeyModifierPreset = HotkeyModifierPreset.AltShift;
     private string _readSelectedHotkeyKey = DefaultReadSelectedHotkeyKey;
@@ -67,7 +72,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         bool isAnalyzeAvailable = false,
         IAppSettingsService? appSettingsService = null,
         Func<string, bool>? applyTheme = null,
-        string? displayVersionText = null)
+        string? displayVersionText = null,
+        IPremiumEntitlementService? premiumEntitlementService = null,
+        IPremiumPurchaseService? premiumPurchaseService = null,
+        IStoreNavigationService? storeNavigationService = null)
     {
         _readingService = readingService ?? throw new ArgumentNullException(nameof(readingService));
         _hotkeySettingsService = hotkeySettingsService ?? throw new ArgumentNullException(nameof(hotkeySettingsService));
@@ -76,6 +84,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _isAnalyzeAvailable = isAnalyzeAvailable;
         _applyTheme = applyTheme;
         _displayVersionText = string.IsNullOrWhiteSpace(displayVersionText) ? "0.0.0.0" : displayVersionText;
+        _premiumEntitlementService = premiumEntitlementService;
+        _premiumPurchaseService = premiumPurchaseService;
+        _storeNavigationService = storeNavigationService;
 
         _speechRate = _readingService.SpeechRate;
         _inputText = _readingService.TypedTextDraft ?? string.Empty;
@@ -103,6 +114,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         StopCommand = new AsyncCommand(StopAsync, CanStop);
         TogglePauseCommand = new AsyncCommand(TogglePauseAsync, CanPauseOrResume);
         ResetHotkeysCommand = new AsyncCommand(ResetHotkeysAsync, CanResetHotkeys);
+        UpgradeToPremiumCommand = new AsyncCommand(UpgradeToPremiumAsync, CanUpgradeToPremium);
+        RefreshPremiumStatusCommand = new AsyncCommand(() => RefreshPremiumStatusAsync());
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -299,6 +312,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string ExternalReadActionText => IsExternalReadCancellationStage ? "Cancel" : "Stop";
     public bool IsAnalyzeAvailable => _isAnalyzeAvailable;
     public string DisplayVersionText => _displayVersionText;
+    public bool IsPremiumOwned => _isPremiumOwned;
+    public bool IsPremiumBusy => _isPremiumBusy;
+    public bool IsUpgradeAvailable => !_isPremiumOwned && !_isPremiumBusy && _premiumPurchaseService is not null;
+    public string AppModeText => _isPremiumOwned ? "Premium" : "Basic";
+    public string UpgradeTooltipText => _isPremiumOwned
+        ? "Premium is active."
+        : "Upgrade to Premium to unlock full access.";
 
     public ICommand ReadCommand { get; }
     public ICommand ClearCommand { get; }
@@ -309,6 +329,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ICommand StopCommand { get; }
     public ICommand TogglePauseCommand { get; }
     public ICommand ResetHotkeysCommand { get; }
+    public ICommand UpgradeToPremiumCommand { get; }
+    public ICommand RefreshPremiumStatusCommand { get; }
 
     public void SetStatusMessage(string message)
     {
@@ -318,6 +340,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
 
         StatusMessage = message;
+    }
+
+    public async Task InitializePremiumStatusAsync(CancellationToken cancellationToken = default)
+    {
+        await RefreshPremiumStatusAsync(cancellationToken).ConfigureAwait(true);
     }
 
     public void SetFocusedWindowText(string? text)
@@ -431,6 +458,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool CanPauseOrResume()
     {
         return IsPauseEnabled;
+    }
+
+    private bool CanUpgradeToPremium()
+    {
+        return IsUpgradeAvailable;
     }
 
     private async Task ReadAsync()
@@ -864,6 +896,49 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return Task.CompletedTask;
     }
 
+    private async Task UpgradeToPremiumAsync()
+    {
+        if (_premiumPurchaseService is null || _isPremiumBusy || _isPremiumOwned)
+        {
+            return;
+        }
+
+        SetPremiumBusy(true);
+        try
+        {
+            var result = await _premiumPurchaseService.PurchasePremiumAsync().ConfigureAwait(true);
+            SetStatusMessage(result.Message);
+            if (result.Outcome is PremiumPurchaseOutcome.Succeeded or PremiumPurchaseOutcome.AlreadyOwned)
+            {
+                await RefreshPremiumStatusAsync().ConfigureAwait(true);
+                if (_isPremiumOwned)
+                {
+                    SetStatusMessage("Premium unlocked successfully.");
+                }
+            }
+            else if (result.Outcome is PremiumPurchaseOutcome.NotSupported && _storeNavigationService is not null)
+            {
+                _storeNavigationService.OpenMainStorePage();
+            }
+        }
+        finally
+        {
+            SetPremiumBusy(false);
+        }
+    }
+
+    private async Task RefreshPremiumStatusAsync(CancellationToken cancellationToken = default)
+    {
+        if (_premiumEntitlementService is null)
+        {
+            return;
+        }
+
+        var state = await _premiumEntitlementService.RefreshEntitlementAsync(cancellationToken).ConfigureAwait(true);
+        SetPremiumOwned(state.IsPremiumOwned);
+        SetStatusMessage(state.Message);
+    }
+
     private void UpdateCommandStates()
     {
         if (ReadCommand is AsyncCommand readCommand)
@@ -910,6 +985,39 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             resetHotkeysCommand.RaiseCanExecuteChanged();
         }
+
+        if (UpgradeToPremiumCommand is AsyncCommand upgradeToPremiumCommand)
+        {
+            upgradeToPremiumCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    private void SetPremiumOwned(bool isPremiumOwned)
+    {
+        if (_isPremiumOwned == isPremiumOwned)
+        {
+            return;
+        }
+
+        _isPremiumOwned = isPremiumOwned;
+        OnPropertyChanged(nameof(IsPremiumOwned));
+        OnPropertyChanged(nameof(IsUpgradeAvailable));
+        OnPropertyChanged(nameof(AppModeText));
+        OnPropertyChanged(nameof(UpgradeTooltipText));
+        UpdateCommandStates();
+    }
+
+    private void SetPremiumBusy(bool isPremiumBusy)
+    {
+        if (_isPremiumBusy == isPremiumBusy)
+        {
+            return;
+        }
+
+        _isPremiumBusy = isPremiumBusy;
+        OnPropertyChanged(nameof(IsPremiumBusy));
+        OnPropertyChanged(nameof(IsUpgradeAvailable));
+        UpdateCommandStates();
     }
 
     private void TrySetHotkeyKey(string? value, ref string field, string propertyName, string displayPropertyName)

@@ -21,6 +21,8 @@ namespace RightSpeak;
 
 public partial class App : WpfApplication
 {
+    private const string MainAppStoreId = "9MWX1Z4TKFL9";
+    private const string PremiumAddOnStoreId = "9PG6LR8K5M0Z";
     private const string SingleInstanceMutexName = @"Global\RightSpeak.SingleInstance";
     private const string ActivateWindowMessageName = "RightSpeak.Activate.MainWindow";
 
@@ -33,6 +35,10 @@ public partial class App : WpfApplication
     private IVoiceDownloadService? _voiceDownloadService;
     private MainViewModel? _mainViewModel;
     private IReadingService? _readingService;
+    private IStoreContextProvider? _storeContextProvider;
+    private IPremiumEntitlementService? _premiumEntitlementService;
+    private IPremiumPurchaseService? _premiumPurchaseService;
+    private IStoreNavigationService? _storeNavigationService;
     private MainWindow? _mainWindow;
     private Mutex? _singleInstanceMutex;
     private uint _activateWindowMessageId;
@@ -109,6 +115,17 @@ public partial class App : WpfApplication
             paragraphTextRetrievalService,
             documentTextRetrievalService,
             _appSettingsService);
+        _storeContextProvider = new StoreContextProvider();
+        var premiumEntitlementCache = new PremiumEntitlementCache(_appSettingsService);
+        _premiumEntitlementService = new PremiumEntitlementService(
+            _storeContextProvider,
+            premiumEntitlementCache,
+            PremiumAddOnStoreId);
+        _premiumPurchaseService = new PremiumPurchaseService(
+            _storeContextProvider,
+            _premiumEntitlementService,
+            PremiumAddOnStoreId);
+        _storeNavigationService = new StoreNavigationService(MainAppStoreId);
 
         _mainViewModel = new MainViewModel(
             _readingService,
@@ -117,7 +134,10 @@ public partial class App : WpfApplication
             BuildConfiguration.IsDebugDiagnosticsEnabled,
             _appSettingsService,
             ApplyTheme,
-            GetStoreUiVersionText());
+            GetStoreUiVersionText(),
+            _premiumEntitlementService,
+            _premiumPurchaseService,
+            _storeNavigationService);
 
         _trayService = new WindowsTrayService();
         _trayService.ReadSelectedRequested += OnTrayReadSelectedRequested;
@@ -137,6 +157,7 @@ public partial class App : WpfApplication
             () => _trayService?.LastExternalForegroundWindow ?? nint.Zero,
             _activateWindowMessageId,
             _appSettingsService,
+            _storeContextProvider,
             ExecuteTrayFocusSensitiveReadAsync,
             CreateVoiceManagerViewModel,
             placeOnStartup: true);
@@ -182,6 +203,12 @@ public partial class App : WpfApplication
             }
         }, DispatcherPriority.ApplicationIdle);
         ObserveBackgroundTask(revealOperation.Task, "main_window_reveal_post_startup");
+
+        if (_mainViewModel is not null)
+        {
+            var premiumInit = _mainViewModel.InitializePremiumStatusAsync();
+            ObserveBackgroundTask(premiumInit, "premium_status_initialize");
+        }
 
     }
 

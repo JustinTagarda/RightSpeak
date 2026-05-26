@@ -1,5 +1,6 @@
 <Solution>
   <Project Path="RightSpeak.csproj" />
+  <Project Path="RightSpeak.Package\RightSpeak.Package.wapproj" />
   <Project Path="RightSpeak.Tests\RightSpeak.Tests.csproj" />
 </Solution>
 

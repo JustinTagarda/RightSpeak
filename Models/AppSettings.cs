@@ -12,4 +12,6 @@ public sealed class AppSettings
     public string ReadParagraphHotkeyKey { get; set; } = "P";
     public string ReadDocumentHotkeyKey { get; set; } = "D";
     public string StopHotkeyKey { get; set; } = "X";
+    public bool PremiumEntitlementVerified { get; set; }
+    public string? PremiumEntitlementVerifiedUtc { get; set; }
 }
