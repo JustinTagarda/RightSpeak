@@ -98,6 +98,13 @@ It should avoid:
 dotnet build .\RightSpeak.csproj
 ```
 
+### Microsoft Store Packaging
+- Use `FULL-BUILD` only for Store package/submission workflows.
+- Use Visual Studio 2026 MSBuild only: `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`.
+- Before Store packaging, enforce the pinned SDK from `D:\Projects\global.json` and align resolver root to that SDK.
+- Store packaging output is x64-only and must use a new manifest identity version in `Major.Minor.Build.0` format.
+- Follow `D:\Projects\10-MSSTORE-PACKAGE-GENERATION.md` end-to-end for submission-ready package generation.
+
 ### Run
 ```powershell
 dotnet run --project .\RightSpeak.csproj

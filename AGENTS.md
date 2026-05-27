@@ -50,6 +50,14 @@ This is a utility app first, not a showcase UI.
 - `FAST_BUILD_PROJECT`: `RightSpeak.csproj`
 - `DEBUG_EXE_PATH`: `bin\Debug\net10.0-windows10.0.19041.0\RightSpeak.exe`
 
+## Microsoft Store Packaging Baseline
+
+- For Store package/submission requests, apply `D:\Projects\10-MSSTORE-PACKAGE-GENERATION.md` end-to-end.
+- Use `FULL-BUILD` only for Store packaging workflows.
+- Use Visual Studio 2026 MSBuild only: `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`.
+- Enforce x64-only Store packaging output.
+- Before packaging, increment `RightSpeak.Package\Package.appxmanifest` identity version using `Major.Minor.Build.0` with revision `0`.
+
 Preferred in-project folders:
 - `Views/`
 - `ViewModels/`
