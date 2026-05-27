@@ -298,3 +298,13 @@ Optimize for:
 - clear fallback behavior
 
 Everything else is secondary.
+
+---
+
+## Store Packaging Evidence Checklist
+For any Microsoft Store package/submission run, record and report:
+- pinned SDK check result against `D:\Projects\global.json`
+- dependency validation summary (declared and packaged runtime requirements)
+- packaged artifact validation summary (version, display name, x64 architecture)
+- clean-environment startup risk summary and any blocking issues
+- exact final `.msixupload` path that should be submitted

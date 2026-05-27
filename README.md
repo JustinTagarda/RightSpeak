@@ -173,4 +173,12 @@ Compatibility claims should stay conservative until those paths are working and 
 ## Contribution Notes
 Contributors and coding agents should read [`AGENTS.md`](./AGENTS.md) before making changes. That file contains the implementation constraints for architecture, scope control, clipboard handling, and Windows integration.
 
+## Store Packaging Verification Baseline
+- Store packaging runs must follow `D:\Projects\10-MSSTORE-PACKAGE-GENERATION.md` end-to-end.
+- Use Visual Studio 2026 MSBuild only: `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`.
+- Before packaging, verify pinned SDK `10.0.204` from `D:\Projects\global.json` is installed and resolver root points to that SDK band.
+- Packaging output must be x64-only and the upload artifact must contain exactly one x64 package.
+- Increment `RightSpeak.Package\Package.appxmanifest` identity version for each submission using `Major.Minor.Build.0` with revision `0`.
+- Clean stale artifacts before packaging so only the newest `.msixupload` remains as the submission candidate.
+
 
