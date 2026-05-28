@@ -11,7 +11,7 @@
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="FontSize" Value="12" />
-            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="FontWeight" Value="Normal" />
             <Setter Property="Foreground" Value="White" />
             <Setter Property="HorizontalContentAlignment" Value="Center" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
@@ -28,7 +28,7 @@
                                               VerticalAlignment="Center"
                                               Margin="{TemplateBinding Padding}"
                                               TextElement.Foreground="{TemplateBinding Foreground}"
-                                              TextElement.FontWeight="Bold"
+                                              TextElement.FontWeight="{TemplateBinding FontWeight}"
                                               RecognizesAccessKey="True" />
                         </Border>
                         <ControlTemplate.Triggers>
@@ -98,7 +98,7 @@
                                Text="&#xE896;" />
                     <TextBlock VerticalAlignment="Center"
                                Text="Update"
-                               FontWeight="Bold" />
+                               FontWeight="Normal" />
                 </StackPanel>
             </Button.Content>
             <Button.Style>
