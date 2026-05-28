@@ -11,6 +11,12 @@ public partial class AppStatusDisplay : System.Windows.Controls.UserControl
     public static readonly DependencyProperty CanUpgradeProperty =
         DependencyProperty.Register(nameof(CanUpgrade), typeof(bool), typeof(AppStatusDisplay), new PropertyMetadata(false));
 
+    public static readonly DependencyProperty IsStatusVisibleProperty =
+        DependencyProperty.Register(nameof(IsStatusVisible), typeof(bool), typeof(AppStatusDisplay), new PropertyMetadata(false));
+
+    public static readonly DependencyProperty ShowUpgradeProperty =
+        DependencyProperty.Register(nameof(ShowUpgrade), typeof(bool), typeof(AppStatusDisplay), new PropertyMetadata(false));
+
     public static readonly DependencyProperty UpgradeTooltipProperty =
         DependencyProperty.Register(nameof(UpgradeTooltip), typeof(string), typeof(AppStatusDisplay), new PropertyMetadata(string.Empty));
 
@@ -32,6 +38,18 @@ public partial class AppStatusDisplay : System.Windows.Controls.UserControl
     {
         get => (bool)GetValue(CanUpgradeProperty);
         set => SetValue(CanUpgradeProperty, value);
+    }
+
+    public bool IsStatusVisible
+    {
+        get => (bool)GetValue(IsStatusVisibleProperty);
+        set => SetValue(IsStatusVisibleProperty, value);
+    }
+
+    public bool ShowUpgrade
+    {
+        get => (bool)GetValue(ShowUpgradeProperty);
+        set => SetValue(ShowUpgradeProperty, value);
     }
 
     public string UpgradeTooltip

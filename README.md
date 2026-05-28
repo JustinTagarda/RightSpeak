@@ -105,6 +105,15 @@ dotnet build .\RightSpeak.csproj
 - Store packaging output is x64-only and must use a new manifest identity version in `Major.Minor.Build.0` format.
 - Follow `D:\Projects\10-MSSTORE-PACKAGE-GENERATION.md` end-to-end for submission-ready package generation.
 
+### Premium Add-on Behavior
+- Store model: main app remains free in `Basic`; `Premium` is unlocked by owning a durable Microsoft Store add-on.
+- Premium purchase path uses in-app Store purchase (`Windows.Services.Store` + `RequestPurchaseAsync`) through a shared purchase service.
+- Entitlement is Store-verified first; verified cache is fallback-only when Store services are unavailable.
+- Footer status uses bottom-right `AppStatusDisplay`:
+- startup: `Basic/Premium` text and `Upgrade` button stay hidden until the first entitlement refresh completes
+- owned entitlement: show `Premium` text only
+- not owned entitlement: show `Basic` text plus compact `Upgrade` button
+
 ### Run
 ```powershell
 dotnet run --project .\RightSpeak.csproj

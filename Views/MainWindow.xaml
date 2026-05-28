@@ -784,6 +784,8 @@
                                             VerticalAlignment="Center"
                                             Margin="0,0,14,0"
                                             Foreground="{DynamicResource FooterTextBrush}"
+                                            IsStatusVisible="{Binding IsPremiumUiReady}"
+                                            ShowUpgrade="{Binding IsUpgradeButtonVisible}"
                                             ModeText="{Binding AppModeText}"
                                             CanUpgrade="{Binding IsUpgradeAvailable}"
                                             UpgradeTooltip="{Binding UpgradeTooltipText}"

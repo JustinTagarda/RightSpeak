@@ -53,13 +53,33 @@
                    FontSize="12"
                    Margin="0,0,4,0"
                    Foreground="{Binding RelativeSource={RelativeSource AncestorType=UserControl}, Path=Foreground}">
+            <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=UserControl}, Path=IsStatusVisible}" Value="True">
+                            <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </TextBlock.Style>
             <Run Text="{Binding RelativeSource={RelativeSource AncestorType=UserControl}, Path=ModeText}"
                  FontWeight="Bold" />
         </TextBlock>
-        <Button Style="{StaticResource UpgradeButtonStyle}"
-                Content="Upgrade"
+        <Button Content="Upgrade"
                 ToolTip="{Binding RelativeSource={RelativeSource AncestorType=UserControl}, Path=UpgradeTooltip}"
                 Command="{Binding RelativeSource={RelativeSource AncestorType=UserControl}, Path=UpgradeCommand}"
-                IsEnabled="{Binding RelativeSource={RelativeSource AncestorType=UserControl}, Path=CanUpgrade}" />
+                IsEnabled="{Binding RelativeSource={RelativeSource AncestorType=UserControl}, Path=CanUpgrade}">
+            <Button.Style>
+                <Style TargetType="Button" BasedOn="{StaticResource UpgradeButtonStyle}">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=UserControl}, Path=ShowUpgrade}" Value="True">
+                            <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Button.Style>
+        </Button>
     </StackPanel>
 </UserControl>

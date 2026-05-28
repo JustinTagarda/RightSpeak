@@ -53,6 +53,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _selectedTheme = AppThemes.Light;
     private bool _isPremiumOwned;
     private bool _isPremiumBusy;
+    private bool _isPremiumUiReady;
     private HotkeyModifierPreset _hotkeyModifierPreset = HotkeyModifierPreset.AltShift;
     private HotkeyModifierPreset _appliedHotkeyModifierPreset = HotkeyModifierPreset.AltShift;
     private string _readSelectedHotkeyKey = DefaultReadSelectedHotkeyKey;
@@ -314,6 +315,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string DisplayVersionText => _displayVersionText;
     public bool IsPremiumOwned => _isPremiumOwned;
     public bool IsPremiumBusy => _isPremiumBusy;
+    public bool IsPremiumUiReady => _isPremiumUiReady;
+    public bool IsUpgradeButtonVisible => _isPremiumUiReady && !_isPremiumOwned && _premiumPurchaseService is not null;
     public bool IsUpgradeAvailable => !_isPremiumOwned && !_isPremiumBusy && _premiumPurchaseService is not null;
     public string AppModeText => _isPremiumOwned ? "Premium" : "Basic";
     public string UpgradeTooltipText => _isPremiumOwned
@@ -931,12 +934,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         if (_premiumEntitlementService is null)
         {
+            SetPremiumUiReady(true);
             return;
         }
 
-        var state = await _premiumEntitlementService.RefreshEntitlementAsync(cancellationToken).ConfigureAwait(true);
-        SetPremiumOwned(state.IsPremiumOwned);
-        SetStatusMessage(state.Message);
+        try
+        {
+            var state = await _premiumEntitlementService.RefreshEntitlementAsync(cancellationToken).ConfigureAwait(true);
+            SetPremiumOwned(state.IsPremiumOwned);
+            SetStatusMessage(state.Message);
+        }
+        finally
+        {
+            SetPremiumUiReady(true);
+        }
     }
 
     private void UpdateCommandStates()
@@ -1001,6 +1012,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         _isPremiumOwned = isPremiumOwned;
         OnPropertyChanged(nameof(IsPremiumOwned));
+        OnPropertyChanged(nameof(IsUpgradeButtonVisible));
         OnPropertyChanged(nameof(IsUpgradeAvailable));
         OnPropertyChanged(nameof(AppModeText));
         OnPropertyChanged(nameof(UpgradeTooltipText));
@@ -1018,6 +1030,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(IsPremiumBusy));
         OnPropertyChanged(nameof(IsUpgradeAvailable));
         UpdateCommandStates();
+    }
+
+    private void SetPremiumUiReady(bool isPremiumUiReady)
+    {
+        if (_isPremiumUiReady == isPremiumUiReady)
+        {
+            return;
+        }
+
+        _isPremiumUiReady = isPremiumUiReady;
+        OnPropertyChanged(nameof(IsPremiumUiReady));
+        OnPropertyChanged(nameof(IsUpgradeButtonVisible));
     }
 
     private void TrySetHotkeyKey(string? value, ref string field, string propertyName, string displayPropertyName)

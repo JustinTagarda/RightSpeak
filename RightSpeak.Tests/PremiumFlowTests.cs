@@ -77,6 +77,27 @@ public sealed class PremiumFlowTests
         Assert.True(viewModel.IsPremiumOwned);
         Assert.Equal("Premium", viewModel.AppModeText);
         Assert.False(viewModel.IsUpgradeAvailable);
+        Assert.True(viewModel.IsPremiumUiReady);
+        Assert.False(viewModel.IsUpgradeButtonVisible);
+    }
+
+    [Fact]
+    public async Task PremiumUi_IsHiddenUntilInitializationCompletes_ThenShowsBasicWithUpgrade()
+    {
+        var entitlement = new FakePremiumEntitlementService(
+            new PremiumEntitlementState(false, true, false, "Basic mode is active."));
+        var purchase = new FakePremiumPurchaseService(new PremiumPurchaseResult(PremiumPurchaseOutcome.Canceled, "canceled"));
+        var navigation = new FakeStoreNavigationService();
+        var viewModel = CreateViewModel(entitlement, purchase, navigation);
+
+        Assert.False(viewModel.IsPremiumUiReady);
+        Assert.False(viewModel.IsUpgradeButtonVisible);
+
+        await viewModel.InitializePremiumStatusAsync();
+
+        Assert.True(viewModel.IsPremiumUiReady);
+        Assert.Equal("Basic", viewModel.AppModeText);
+        Assert.True(viewModel.IsUpgradeButtonVisible);
     }
 
     private static MainViewModel CreateViewModel(
