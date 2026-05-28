@@ -190,4 +190,19 @@ Contributors and coding agents should read [`AGENTS.md`](./AGENTS.md) before mak
 - Increment `RightSpeak.Package\Package.appxmanifest` identity version for each submission using `Major.Minor.Build.0` with revision `0`.
 - Clean stale artifacts before packaging so only the newest `.msixupload` remains as the submission candidate.
 
+## Store Pre-Submission Readiness Record (2026-05-28)
+- Instruction baseline re-applied from `D:\Projects\1-MSSTORE-PACKAGE-PREPARATION.md`.
+- Packaging build toolchain used: `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`.
+- Fixed manifest identity validation:
+  - `Name=JustinTagardaSoftware.RightSpeak`
+  - `Publisher=CN=68EC506E-4B5E-416B-93E8-BA707CA3BE0F`
+  - `Version=1.0.19.0` (`Major.Minor.Build.0`)
+  - `TargetDeviceFamily Name=Windows.Desktop`
+- Packaging architecture validation: x64-only output verified.
+- Final Store upload artifact (`.msixupload`):
+  - `D:\Projects\RightSpeak\RightSpeak.Package\bin\x64\Release\AppPackages\RightSpeak.Package_1.0.19.0_x64.msixupload`
+- Generated architecture package (`.msix`):
+  - `D:\Projects\RightSpeak\RightSpeak.Package\bin\x64\Release\AppPackages\RightSpeak.Package_1.0.19.0_x64_Test\RightSpeak.Package_1.0.19.0_x64.msix`
+  - `D:\Projects\RightSpeak\RightSpeak.Package\bin\x64\Release\Upload\RightSpeak.Package_1.0.19.0_x64\RightSpeak.Package_1.0.19.0_x64.msix`
+
 
