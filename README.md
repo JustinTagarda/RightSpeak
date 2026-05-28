@@ -205,4 +205,13 @@ Contributors and coding agents should read [`AGENTS.md`](./AGENTS.md) before mak
   - `D:\Projects\RightSpeak\RightSpeak.Package\bin\x64\Release\AppPackages\RightSpeak.Package_1.0.19.0_x64_Test\RightSpeak.Package_1.0.19.0_x64.msix`
   - `D:\Projects\RightSpeak\RightSpeak.Package\bin\x64\Release\Upload\RightSpeak.Package_1.0.19.0_x64\RightSpeak.Package_1.0.19.0_x64.msix`
 
+## Microsoft Store Updater Baseline (2026-05-28)
+- Instruction baseline applied from `D:\Projects\3-MSSTORE-UPDATER.md`.
+- App now runs Store update checks only for Store-signed packaged runtime (`PackageSignatureKind.Store` + package identity gate).
+- Startup update check begins after first main-window render and runs asynchronously with no blocking UI.
+- Update availability is surfaced through a compact footer `Update` button beside the existing status/version controls.
+- Update action uses `StoreContext.RequestDownloadAndInstallStorePackageUpdatesAsync(...)`.
+- No-update path schedules one retry after one hour while app remains open.
+- App shutdown cancels pending checks and stops scheduled retry through coordinator disposal.
+
 

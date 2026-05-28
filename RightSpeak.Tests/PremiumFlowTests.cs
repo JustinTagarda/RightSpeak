@@ -59,7 +59,8 @@ public sealed class PremiumFlowTests
 
         Assert.Equal(1, purchase.CallCount);
         Assert.Equal(0, entitlement.CallCount);
-        Assert.Equal(1, navigation.CallCount);
+        Assert.Equal(1, navigation.PremiumCallCount);
+        Assert.Equal(0, navigation.MainCallCount);
         Assert.False(viewModel.IsPremiumOwned);
     }
 
@@ -155,11 +156,18 @@ public sealed class PremiumFlowTests
 
     private sealed class FakeStoreNavigationService : IStoreNavigationService
     {
-        public int CallCount { get; private set; }
+        public int MainCallCount { get; private set; }
+        public int PremiumCallCount { get; private set; }
 
         public bool OpenMainStorePage()
         {
-            CallCount++;
+            MainCallCount++;
+            return true;
+        }
+
+        public bool OpenPremiumAddOnPage()
+        {
+            PremiumCallCount++;
             return true;
         }
     }

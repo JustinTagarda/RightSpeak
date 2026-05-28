@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using System.Windows.Input;
 using RightSpeak.Models;
 using RightSpeak.Services;
+using RightSpeak.Views;
 
 namespace RightSpeak.ViewModels;
 
@@ -27,6 +28,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly IPremiumEntitlementService? _premiumEntitlementService;
     private readonly IPremiumPurchaseService? _premiumPurchaseService;
     private readonly IStoreNavigationService? _storeNavigationService;
+    private readonly Func<CancellationToken, Task>? _requestStoreUpdateInstallAsync;
     private readonly string _displayVersionText;
     private IReadOnlyList<string> _voiceOptions;
     private Dictionary<string, string?> _voiceNameByOptionLabel;
@@ -54,6 +56,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _isPremiumOwned;
     private bool _isPremiumBusy;
     private bool _isPremiumUiReady;
+    private bool _isStoreUpdateAvailable;
+    private bool _isStoreUpdateBusy;
     private HotkeyModifierPreset _hotkeyModifierPreset = HotkeyModifierPreset.AltShift;
     private HotkeyModifierPreset _appliedHotkeyModifierPreset = HotkeyModifierPreset.AltShift;
     private string _readSelectedHotkeyKey = DefaultReadSelectedHotkeyKey;
@@ -76,7 +80,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         string? displayVersionText = null,
         IPremiumEntitlementService? premiumEntitlementService = null,
         IPremiumPurchaseService? premiumPurchaseService = null,
-        IStoreNavigationService? storeNavigationService = null)
+        IStoreNavigationService? storeNavigationService = null,
+        Func<CancellationToken, Task>? requestStoreUpdateInstallAsync = null)
     {
         _readingService = readingService ?? throw new ArgumentNullException(nameof(readingService));
         _hotkeySettingsService = hotkeySettingsService ?? throw new ArgumentNullException(nameof(hotkeySettingsService));
@@ -88,6 +93,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _premiumEntitlementService = premiumEntitlementService;
         _premiumPurchaseService = premiumPurchaseService;
         _storeNavigationService = storeNavigationService;
+        _requestStoreUpdateInstallAsync = requestStoreUpdateInstallAsync;
 
         _speechRate = _readingService.SpeechRate;
         _inputText = _readingService.TypedTextDraft ?? string.Empty;
@@ -116,6 +122,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         TogglePauseCommand = new AsyncCommand(TogglePauseAsync, CanPauseOrResume);
         ResetHotkeysCommand = new AsyncCommand(ResetHotkeysAsync, CanResetHotkeys);
         UpgradeToPremiumCommand = new AsyncCommand(UpgradeToPremiumAsync, CanUpgradeToPremium);
+        UpdateAppCommand = new AsyncCommand(UpdateAppAsync, CanUpdateApp);
         RefreshPremiumStatusCommand = new AsyncCommand(() => RefreshPremiumStatusAsync());
     }
 
@@ -182,6 +189,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (string.Equals(value, _selectedVoiceOption, StringComparison.Ordinal))
             {
                 return;
+            }
+
+            if (!_isPremiumOwned && !IsBasicAllowedVoiceOption(value))
+            {
+                var upgraded = EnsurePremiumAccessForBlockedFeature(
+                    "This voice model is available in Premium.");
+                if (!upgraded)
+                {
+                    SetStatusMessage("That voice is available in Premium.");
+                    return;
+                }
             }
 
             _selectedVoiceOption = value;
@@ -318,6 +336,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool IsPremiumUiReady => _isPremiumUiReady;
     public bool IsUpgradeButtonVisible => _isPremiumUiReady && !_isPremiumOwned && _premiumPurchaseService is not null;
     public bool IsUpgradeAvailable => !_isPremiumOwned && !_isPremiumBusy && _premiumPurchaseService is not null;
+    public bool IsUpdateButtonVisible => _isStoreUpdateAvailable;
+    public bool IsUpdateAvailable => _isStoreUpdateAvailable && !_isStoreUpdateBusy;
     public string AppModeText => _isPremiumOwned ? "Premium" : "Basic";
     public string UpgradeTooltipText => _isPremiumOwned
         ? "Premium is active."
@@ -333,6 +353,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ICommand TogglePauseCommand { get; }
     public ICommand ResetHotkeysCommand { get; }
     public ICommand UpgradeToPremiumCommand { get; }
+    public ICommand UpdateAppCommand { get; }
     public ICommand RefreshPremiumStatusCommand { get; }
 
     public void SetStatusMessage(string message)
@@ -466,6 +487,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool CanUpgradeToPremium()
     {
         return IsUpgradeAvailable;
+    }
+
+    private bool CanUpdateApp()
+    {
+        return IsUpdateAvailable && _requestStoreUpdateInstallAsync is not null;
     }
 
     private async Task ReadAsync()
@@ -874,6 +900,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private Task ResetHotkeysAsync()
     {
+        if (!_isPremiumOwned)
+        {
+            EnsurePremiumAccessForBlockedFeature("Hotkey customization is available in Premium.");
+            return Task.CompletedTask;
+        }
+
         _suppressHotkeyAutoApply = true;
         try
         {
@@ -921,12 +953,40 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
             else if (result.Outcome is PremiumPurchaseOutcome.NotSupported && _storeNavigationService is not null)
             {
-                _storeNavigationService.OpenMainStorePage();
+                _storeNavigationService.OpenPremiumAddOnPage();
             }
         }
         finally
         {
             SetPremiumBusy(false);
+        }
+    }
+
+    private async Task UpdateAppAsync()
+    {
+        if (_requestStoreUpdateInstallAsync is null)
+        {
+            return;
+        }
+
+        SetStoreUpdateBusy(true);
+        try
+        {
+            await _requestStoreUpdateInstallAsync(CancellationToken.None).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Warn(
+                "store_update_command_failed",
+                new Dictionary<string, string?>
+                {
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+        }
+        finally
+        {
+            SetStoreUpdateBusy(false);
         }
     }
 
@@ -1001,6 +1061,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             upgradeToPremiumCommand.RaiseCanExecuteChanged();
         }
+
+        if (UpdateAppCommand is AsyncCommand updateAppCommand)
+        {
+            updateAppCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    public void SetStoreUpdateState(StoreUpdateState state)
+    {
+        SetStoreUpdateAvailable(state.IsSupported && state.IsUpdateAvailable);
+        SetStoreUpdateBusy(state.IsBusy);
     }
 
     private void SetPremiumOwned(bool isPremiumOwned)
@@ -1044,10 +1115,41 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(IsUpgradeButtonVisible));
     }
 
+    private void SetStoreUpdateAvailable(bool isStoreUpdateAvailable)
+    {
+        if (_isStoreUpdateAvailable == isStoreUpdateAvailable)
+        {
+            return;
+        }
+
+        _isStoreUpdateAvailable = isStoreUpdateAvailable;
+        OnPropertyChanged(nameof(IsUpdateButtonVisible));
+        OnPropertyChanged(nameof(IsUpdateAvailable));
+        UpdateCommandStates();
+    }
+
+    private void SetStoreUpdateBusy(bool isStoreUpdateBusy)
+    {
+        if (_isStoreUpdateBusy == isStoreUpdateBusy)
+        {
+            return;
+        }
+
+        _isStoreUpdateBusy = isStoreUpdateBusy;
+        OnPropertyChanged(nameof(IsUpdateAvailable));
+        UpdateCommandStates();
+    }
+
     private void TrySetHotkeyKey(string? value, ref string field, string propertyName, string displayPropertyName)
     {
         if (string.IsNullOrWhiteSpace(value) || string.Equals(field, value, StringComparison.Ordinal))
         {
+            return;
+        }
+
+        if (!_isPremiumOwned)
+        {
+            EnsurePremiumAccessForBlockedFeature("Hotkey customization is available in Premium.");
             return;
         }
 
@@ -1086,6 +1188,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         if (!selected || _hotkeyModifierPreset == preset)
         {
+            return;
+        }
+
+        if (!_isPremiumOwned)
+        {
+            EnsurePremiumAccessForBlockedFeature("Hotkey customization is available in Premium.");
             return;
         }
 
@@ -1466,6 +1574,99 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return _voiceNameByOptionLabel.TryGetValue(optionLabel, out var voiceName)
             ? voiceName
             : null;
+    }
+
+    private bool IsBasicAllowedVoiceOption(string optionLabel)
+    {
+        if (string.Equals(optionLabel, SystemDefaultVoiceOption, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var voiceName = GetVoiceNameForOption(optionLabel);
+        if (string.IsNullOrWhiteSpace(voiceName))
+        {
+            return false;
+        }
+
+        return voiceName.Contains("ljspeech", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool EnsurePremiumAccessForBlockedFeature(string message)
+    {
+        if (_isPremiumOwned)
+        {
+            return true;
+        }
+
+        try
+        {
+            var result = PromptPremiumUpgradeAsync(message).GetAwaiter().GetResult();
+            return result;
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Warn(
+                "premium_gate_prompt_failed",
+                new Dictionary<string, string?>
+                {
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+            return false;
+        }
+    }
+
+    private async Task<bool> PromptPremiumUpgradeAsync(string message)
+    {
+        var dialog = new ConfirmActionWindow(
+            "Premium feature",
+            $"{message} Upgrade to unlock this feature.",
+            confirmText: "Upgrade to Premium",
+            cancelText: "Not now");
+
+        if (!ShowOwnedDialog(dialog))
+        {
+            return false;
+        }
+
+        if (_premiumPurchaseService is null)
+        {
+            _storeNavigationService?.OpenPremiumAddOnPage();
+            return false;
+        }
+
+        var result = await _premiumPurchaseService.PurchasePremiumAsync().ConfigureAwait(true);
+        SetStatusMessage(result.Message);
+        if (result.Outcome is PremiumPurchaseOutcome.Succeeded or PremiumPurchaseOutcome.AlreadyOwned)
+        {
+            await RefreshPremiumStatusAsync().ConfigureAwait(true);
+            return _isPremiumOwned;
+        }
+
+        if (result.Outcome is PremiumPurchaseOutcome.NotSupported)
+        {
+            _storeNavigationService?.OpenPremiumAddOnPage();
+        }
+
+        return false;
+    }
+
+    private static bool ShowOwnedDialog(System.Windows.Window dialog)
+    {
+        var owner = System.Windows.Application.Current?.Windows
+            .OfType<System.Windows.Window>()
+            .FirstOrDefault(window => window.IsActive) ??
+            System.Windows.Application.Current?.MainWindow;
+
+        if (owner is not null && !ReferenceEquals(owner, dialog))
+        {
+            dialog.Owner = owner;
+            dialog.WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner;
+            dialog.Topmost = owner.Topmost;
+        }
+
+        return dialog.ShowDialog() == true;
     }
 
     private static (IReadOnlyList<string> Options, Dictionary<string, string?> NameByOptionLabel, Dictionary<string, string> OptionLabelByName) BuildVoiceOptions(IReadOnlyList<SpeechVoice> installedVoices)

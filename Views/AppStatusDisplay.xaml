@@ -46,6 +46,12 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style x:Key="UpdateButtonStyle" TargetType="Button" BasedOn="{StaticResource UpgradeButtonStyle}">
+            <Setter Property="Background" Value="#1F6FEB" />
+            <Setter Property="BorderBrush" Value="#1F6FEB" />
+            <Setter Property="Margin" Value="6,1,0,1" />
+            <Setter Property="Padding" Value="4,1,4,1" />
+        </Style>
     </UserControl.Resources>
     <StackPanel Orientation="Horizontal"
                 VerticalAlignment="Center">
@@ -75,6 +81,31 @@
                     <Setter Property="Visibility" Value="Collapsed" />
                     <Style.Triggers>
                         <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=UserControl}, Path=ShowUpgrade}" Value="True">
+                            <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Button.Style>
+        </Button>
+        <Button ToolTip="Install available Microsoft Store update"
+                Command="{Binding RelativeSource={RelativeSource AncestorType=UserControl}, Path=UpdateCommand}"
+                IsEnabled="{Binding RelativeSource={RelativeSource AncestorType=UserControl}, Path=CanUpdate}">
+            <Button.Content>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock FontFamily="Segoe MDL2 Assets"
+                               Margin="0,0,4,0"
+                               VerticalAlignment="Center"
+                               Text="&#xE896;" />
+                    <TextBlock VerticalAlignment="Center"
+                               Text="Update"
+                               FontWeight="Bold" />
+                </StackPanel>
+            </Button.Content>
+            <Button.Style>
+                <Style TargetType="Button" BasedOn="{StaticResource UpdateButtonStyle}">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=UserControl}, Path=ShowUpdate}" Value="True">
                             <Setter Property="Visibility" Value="Visible" />
                         </DataTrigger>
                     </Style.Triggers>

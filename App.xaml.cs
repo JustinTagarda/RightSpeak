@@ -36,6 +36,7 @@ public partial class App : WpfApplication
     private MainViewModel? _mainViewModel;
     private IReadingService? _readingService;
     private IStoreContextProvider? _storeContextProvider;
+    private IStoreUpdateCoordinator? _storeUpdateCoordinator;
     private IPremiumEntitlementService? _premiumEntitlementService;
     private IPremiumPurchaseService? _premiumPurchaseService;
     private IStoreNavigationService? _storeNavigationService;
@@ -125,7 +126,7 @@ public partial class App : WpfApplication
             _storeContextProvider,
             _premiumEntitlementService,
             PremiumAddOnStoreId);
-        _storeNavigationService = new StoreNavigationService(MainAppStoreId);
+        _storeNavigationService = new StoreNavigationService(MainAppStoreId, PremiumAddOnStoreId);
 
         _mainViewModel = new MainViewModel(
             _readingService,
@@ -137,7 +138,8 @@ public partial class App : WpfApplication
             GetStoreUiVersionText(),
             _premiumEntitlementService,
             _premiumPurchaseService,
-            _storeNavigationService);
+            _storeNavigationService,
+            RequestStoreUpdateInstallAsync);
 
         _trayService = new WindowsTrayService();
         _trayService.ReadSelectedRequested += OnTrayReadSelectedRequested;
@@ -162,6 +164,9 @@ public partial class App : WpfApplication
             CreateVoiceManagerViewModel,
             placeOnStartup: true);
         _mainWindow.ContentRendered += OnMainWindowContentRendered;
+        _storeUpdateCoordinator = new StoreUpdateCoordinator(_storeContextProvider!, Dispatcher);
+        _storeUpdateCoordinator.StateChanged += OnStoreUpdateStateChanged;
+        _mainViewModel.SetStoreUpdateState(_storeUpdateCoordinator.CurrentState);
         AppDiagnostics.Info("main_window_created");
         _mainWindow.RevealWindow();
         AppDiagnostics.Info(
@@ -248,6 +253,16 @@ public partial class App : WpfApplication
             {
                 _mainWindow.ContentRendered -= OnMainWindowContentRendered;
             }
+        });
+        TryRunCleanup("app_exit_dispose_store_update_coordinator", () =>
+        {
+            if (_storeUpdateCoordinator is null)
+            {
+                return;
+            }
+
+            _storeUpdateCoordinator.StateChanged -= OnStoreUpdateStateChanged;
+            _storeUpdateCoordinator.Dispose();
         });
         TryRunCleanup("app_exit_dispose_speech", () => _speechService?.Dispose());
         TryRunCleanup("app_exit_save_settings", () => _appSettingsService?.Save());
@@ -389,6 +404,28 @@ public partial class App : WpfApplication
     {
         _ = sender;
         _ = e;
+        _storeUpdateCoordinator?.Start();
+    }
+
+    private void OnStoreUpdateStateChanged(object? sender, StoreUpdateState state)
+    {
+        _ = sender;
+        if (_mainViewModel is null)
+        {
+            return;
+        }
+
+        _ = Dispatcher.InvokeAsync(() => _mainViewModel.SetStoreUpdateState(state));
+    }
+
+    private async Task RequestStoreUpdateInstallAsync(CancellationToken cancellationToken)
+    {
+        if (_storeUpdateCoordinator is null)
+        {
+            return;
+        }
+
+        await _storeUpdateCoordinator.RequestInstallAsync(cancellationToken).ConfigureAwait(true);
     }
 
     private static string GetModifierLabel(RightSpeak.Models.HotkeyModifierPreset preset)
@@ -530,7 +567,11 @@ public partial class App : WpfApplication
             _voiceCatalogService,
             _voiceDownloadService,
             _readingService,
-            _mainViewModel.RefreshVoiceOptions);
+            _mainViewModel.RefreshVoiceOptions,
+            _mainViewModel.IsPremiumOwned,
+            _premiumEntitlementService,
+            _premiumPurchaseService,
+            _storeNavigationService);
     }
 
     private Dictionary<string, string?> BuildFocusRestoreDiagnostics(string trigger)

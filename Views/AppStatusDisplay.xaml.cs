@@ -23,6 +23,15 @@ public partial class AppStatusDisplay : System.Windows.Controls.UserControl
     public static readonly DependencyProperty UpgradeCommandProperty =
         DependencyProperty.Register(nameof(UpgradeCommand), typeof(ICommand), typeof(AppStatusDisplay), new PropertyMetadata(null));
 
+    public static readonly DependencyProperty CanUpdateProperty =
+        DependencyProperty.Register(nameof(CanUpdate), typeof(bool), typeof(AppStatusDisplay), new PropertyMetadata(false));
+
+    public static readonly DependencyProperty ShowUpdateProperty =
+        DependencyProperty.Register(nameof(ShowUpdate), typeof(bool), typeof(AppStatusDisplay), new PropertyMetadata(false));
+
+    public static readonly DependencyProperty UpdateCommandProperty =
+        DependencyProperty.Register(nameof(UpdateCommand), typeof(ICommand), typeof(AppStatusDisplay), new PropertyMetadata(null));
+
     public AppStatusDisplay()
     {
         InitializeComponent();
@@ -62,5 +71,23 @@ public partial class AppStatusDisplay : System.Windows.Controls.UserControl
     {
         get => (ICommand?)GetValue(UpgradeCommandProperty);
         set => SetValue(UpgradeCommandProperty, value);
+    }
+
+    public bool CanUpdate
+    {
+        get => (bool)GetValue(CanUpdateProperty);
+        set => SetValue(CanUpdateProperty, value);
+    }
+
+    public bool ShowUpdate
+    {
+        get => (bool)GetValue(ShowUpdateProperty);
+        set => SetValue(ShowUpdateProperty, value);
+    }
+
+    public ICommand? UpdateCommand
+    {
+        get => (ICommand?)GetValue(UpdateCommandProperty);
+        set => SetValue(UpdateCommandProperty, value);
     }
 }

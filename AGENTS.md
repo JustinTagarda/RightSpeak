@@ -12,6 +12,12 @@
 - Any logging-related code change in this repository must comply with `D:\Projects\DEBUG-LOGGING.md`.
 - Do not merge or ship logging changes that violate those requirements.
 
+## Mandatory Policy Pointer
+
+- `D:\Projects\RightSpeak\Resources\Policies\BASIC-PREMIUM-GATING-POLICY.md` is the mandatory source of truth for Basic vs Premium runtime gating behavior.
+- Any feature-access change (UI, command, service, tray, hotkey, or voice-management path) must comply with that policy.
+- If a change intentionally updates gating behavior, update the policy file in the same change and call it out explicitly in validation/reporting.
+
 ## Project Purpose
 RightSpeak is a Windows desktop utility built with WPF and .NET 10.
 Its core job is simple:

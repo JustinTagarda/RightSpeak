@@ -789,7 +789,10 @@
                                             ModeText="{Binding AppModeText}"
                                             CanUpgrade="{Binding IsUpgradeAvailable}"
                                             UpgradeTooltip="{Binding UpgradeTooltipText}"
-                                            UpgradeCommand="{Binding UpgradeToPremiumCommand}" />
+                                            UpgradeCommand="{Binding UpgradeToPremiumCommand}"
+                                            ShowUpdate="{Binding IsUpdateButtonVisible}"
+                                            CanUpdate="{Binding IsUpdateAvailable}"
+                                            UpdateCommand="{Binding UpdateAppCommand}" />
                     <TextBlock Grid.Column="1"
                                Text="{Binding DisplayVersionText}"
                                Foreground="{DynamicResource FooterTextBrush}"

@@ -20,6 +20,9 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
     private readonly IVoiceDownloadService _voiceDownloadService;
     private readonly IReadingService _readingService;
     private readonly Action _refreshMainVoiceOptions;
+    private readonly IPremiumEntitlementService? _premiumEntitlementService;
+    private readonly IPremiumPurchaseService? _premiumPurchaseService;
+    private readonly IStoreNavigationService? _storeNavigationService;
     private readonly List<DownloadableVoice> _allVoices = [];
     private CancellationTokenSource? _downloadCancellationTokenSource;
     private CancellationTokenSource? _catalogLoadCancellationTokenSource;
@@ -28,17 +31,26 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
     private bool _isLoading;
     private LanguageFilterOption? _selectedLanguageFilter;
     private string _selectedQualityFilter = "All qualities";
+    private bool _isPremiumOwned;
 
     public VoiceManagerViewModel(
         IVoiceCatalogService voiceCatalogService,
         IVoiceDownloadService voiceDownloadService,
         IReadingService readingService,
-        Action refreshMainVoiceOptions)
+        Action refreshMainVoiceOptions,
+        bool isPremiumOwned = false,
+        IPremiumEntitlementService? premiumEntitlementService = null,
+        IPremiumPurchaseService? premiumPurchaseService = null,
+        IStoreNavigationService? storeNavigationService = null)
     {
         _voiceCatalogService = voiceCatalogService ?? throw new ArgumentNullException(nameof(voiceCatalogService));
         _voiceDownloadService = voiceDownloadService ?? throw new ArgumentNullException(nameof(voiceDownloadService));
         _readingService = readingService ?? throw new ArgumentNullException(nameof(readingService));
         _refreshMainVoiceOptions = refreshMainVoiceOptions ?? throw new ArgumentNullException(nameof(refreshMainVoiceOptions));
+        _isPremiumOwned = isPremiumOwned;
+        _premiumEntitlementService = premiumEntitlementService;
+        _premiumPurchaseService = premiumPurchaseService;
+        _storeNavigationService = storeNavigationService;
 
         RefreshCommand = new AsyncCommand(RefreshFromScratchAsync, CanRefresh);
         CancelCommand = new AsyncCommand(CancelAsync, CanCancel);
@@ -216,6 +228,11 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
 
     private async Task InstallOrUpdateAsync(VoiceManagerVoiceViewModel item)
     {
+        if (!await EnsurePremiumAccessForVoiceManagementAsync("Voice install and update are available in Premium.").ConfigureAwait(true))
+        {
+            return;
+        }
+
         if (!item.Voice.IsInstallSupported)
         {
             StatusMessage = item.Voice.InstallBlockedReason ?? "Piper installs are unavailable on this build.";
@@ -291,6 +308,11 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
 
     private async Task RemoveAsync(VoiceManagerVoiceViewModel item)
     {
+        if (!await EnsurePremiumAccessForVoiceManagementAsync("Voice removal is available in Premium.").ConfigureAwait(true))
+        {
+            return;
+        }
+
         if (!ConfirmRemoveVoice(item.DisplayName))
         {
             StatusMessage = "Voice removal cancelled.";
@@ -424,6 +446,56 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
         }
 
         return dialog.ShowDialog() == true;
+    }
+
+    private async Task<bool> EnsurePremiumAccessForVoiceManagementAsync(string message)
+    {
+        if (_isPremiumOwned)
+        {
+            return true;
+        }
+
+        var dialog = new ConfirmActionWindow(
+            "Premium feature",
+            $"{message} Upgrade to unlock this feature.",
+            confirmText: "Upgrade to Premium",
+            cancelText: "Not now");
+        if (!ShowOwnedDialog(dialog))
+        {
+            StatusMessage = "That action is available in Premium.";
+            return false;
+        }
+
+        if (_premiumPurchaseService is null)
+        {
+            _storeNavigationService?.OpenPremiumAddOnPage();
+            StatusMessage = "Open the Store listing to upgrade to Premium.";
+            return false;
+        }
+
+        var result = await _premiumPurchaseService.PurchasePremiumAsync().ConfigureAwait(true);
+        StatusMessage = result.Message;
+        if (result.Outcome is PremiumPurchaseOutcome.Succeeded or PremiumPurchaseOutcome.AlreadyOwned)
+        {
+            if (_premiumEntitlementService is not null)
+            {
+                var state = await _premiumEntitlementService.RefreshEntitlementAsync().ConfigureAwait(true);
+                _isPremiumOwned = state.IsPremiumOwned;
+            }
+            else
+            {
+                _isPremiumOwned = true;
+            }
+
+            return _isPremiumOwned;
+        }
+
+        if (result.Outcome is PremiumPurchaseOutcome.NotSupported)
+        {
+            _storeNavigationService?.OpenPremiumAddOnPage();
+        }
+
+        return false;
     }
 
     private void BuildFilterOptions(IEnumerable<DownloadableVoice> voices)
