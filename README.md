@@ -103,7 +103,7 @@ dotnet build .\RightSpeak.csproj
 - Use Visual Studio 2026 MSBuild only: `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`.
 - Before Store packaging, enforce the pinned SDK from `D:\Projects\global.json` and align resolver root to that SDK.
 - Store packaging output is x64-only and must use a new manifest identity version in `Major.Minor.Build.0` format.
-- Follow `D:\Projects\10-MSSTORE-PACKAGE-GENERATION.md` end-to-end for submission-ready package generation.
+- Follow `D:\Projects\4-MSSTORE-PACKAGE-GENERATION.md` end-to-end for submission-ready package generation.
 
 ### Premium Add-on Behavior
 - Store model: main app remains free in `Basic`; `Premium` is unlocked by owning a durable Microsoft Store add-on.
@@ -183,7 +183,7 @@ Compatibility claims should stay conservative until those paths are working and 
 Contributors and coding agents should read [`AGENTS.md`](./AGENTS.md) before making changes. That file contains the implementation constraints for architecture, scope control, clipboard handling, and Windows integration.
 
 ## Store Packaging Verification Baseline
-- Store packaging runs must follow `D:\Projects\10-MSSTORE-PACKAGE-GENERATION.md` end-to-end.
+- Store packaging runs must follow `D:\Projects\4-MSSTORE-PACKAGE-GENERATION.md` end-to-end.
 - Use Visual Studio 2026 MSBuild only: `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`.
 - Before packaging, verify pinned SDK `10.0.204` from `D:\Projects\global.json` is installed and resolver root points to that SDK band.
 - Packaging output must be x64-only and the upload artifact must contain exactly one x64 package.
@@ -213,5 +213,6 @@ Contributors and coding agents should read [`AGENTS.md`](./AGENTS.md) before mak
 - Update action uses `StoreContext.RequestDownloadAndInstallStorePackageUpdatesAsync(...)`.
 - No-update path schedules one retry after one hour while app remains open.
 - App shutdown cancels pending checks and stops scheduled retry through coordinator disposal.
+
 
 
