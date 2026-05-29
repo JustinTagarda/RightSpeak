@@ -58,6 +58,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _isPremiumUiReady;
     private bool _isStoreUpdateAvailable;
     private bool _isStoreUpdateBusy;
+    private bool _isStoreUpdateProgressVisible;
+    private int _storeUpdateProgressPercent;
+    private string _storeUpdateProgressPhase = string.Empty;
+    private string _storeUpdateProgressDetail = string.Empty;
+    private string _storeUpdateProgressResult = string.Empty;
     private HotkeyModifierPreset _hotkeyModifierPreset = HotkeyModifierPreset.AltShift;
     private HotkeyModifierPreset _appliedHotkeyModifierPreset = HotkeyModifierPreset.AltShift;
     private string _readSelectedHotkeyKey = DefaultReadSelectedHotkeyKey;
@@ -338,6 +343,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool IsUpgradeAvailable => !_isPremiumOwned && !_isPremiumBusy && _premiumPurchaseService is not null;
     public bool IsUpdateButtonVisible => _isStoreUpdateAvailable;
     public bool IsUpdateAvailable => _isStoreUpdateAvailable && !_isStoreUpdateBusy;
+    public bool IsUpdateProgressVisible => _isStoreUpdateProgressVisible;
+    public int StoreUpdateProgressPercent => _storeUpdateProgressPercent;
+    public string StoreUpdateProgressPhase => _storeUpdateProgressPhase;
+    public string StoreUpdateProgressDetail => _storeUpdateProgressDetail;
+    public string StoreUpdateProgressResult => _storeUpdateProgressResult;
     public string AppModeText => _isPremiumOwned ? "Premium" : "Basic";
     public string UpgradeTooltipText => _isPremiumOwned
         ? "Premium is active."
@@ -1074,6 +1084,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         SetStoreUpdateAvailable(state.IsSupported && state.IsUpdateAvailable);
         SetStoreUpdateBusy(state.IsBusy);
+        SetStoreUpdateProgressVisible(state.IsProgressVisible);
+        SetStoreUpdateProgressPercent(state.ProgressPercent);
+        SetStoreUpdateProgressPhase(state.ProgressPhase);
+        SetStoreUpdateProgressDetail(state.ProgressDetail ?? string.Empty);
+        SetStoreUpdateProgressResult(state.ProgressResult ?? string.Empty);
     }
 
     private void SetPremiumOwned(bool isPremiumOwned)
@@ -1140,6 +1155,62 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _isStoreUpdateBusy = isStoreUpdateBusy;
         OnPropertyChanged(nameof(IsUpdateAvailable));
         UpdateCommandStates();
+    }
+
+    private void SetStoreUpdateProgressVisible(bool isVisible)
+    {
+        if (_isStoreUpdateProgressVisible == isVisible)
+        {
+            return;
+        }
+
+        _isStoreUpdateProgressVisible = isVisible;
+        OnPropertyChanged(nameof(IsUpdateProgressVisible));
+    }
+
+    private void SetStoreUpdateProgressPercent(int progressPercent)
+    {
+        var clamped = progressPercent < 0 ? 0 : progressPercent > 100 ? 100 : progressPercent;
+        if (_storeUpdateProgressPercent == clamped)
+        {
+            return;
+        }
+
+        _storeUpdateProgressPercent = clamped;
+        OnPropertyChanged(nameof(StoreUpdateProgressPercent));
+    }
+
+    private void SetStoreUpdateProgressPhase(string phase)
+    {
+        if (string.Equals(_storeUpdateProgressPhase, phase, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _storeUpdateProgressPhase = phase;
+        OnPropertyChanged(nameof(StoreUpdateProgressPhase));
+    }
+
+    private void SetStoreUpdateProgressDetail(string detail)
+    {
+        if (string.Equals(_storeUpdateProgressDetail, detail, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _storeUpdateProgressDetail = detail;
+        OnPropertyChanged(nameof(StoreUpdateProgressDetail));
+    }
+
+    private void SetStoreUpdateProgressResult(string result)
+    {
+        if (string.Equals(_storeUpdateProgressResult, result, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _storeUpdateProgressResult = result;
+        OnPropertyChanged(nameof(StoreUpdateProgressResult));
     }
 
     private void TrySetHotkeyKey(string? value, ref string field, string propertyName, string displayPropertyName)

@@ -210,15 +210,24 @@ Contributors and coding agents should read [`AGENTS.md`](./AGENTS.md) before mak
 - Instruction baseline re-applied end-to-end from `D:\Projects\3-MSSTORE-UPDATER.md`.
 - Updater runs only for packaged runtime with package identity gate first; `Package.Current.SignatureKind` is treated as a diagnostic/supporting signal and not the sole eligibility gate.
 - Startup decision flow runs after first main-window render and remains async/non-blocking.
+- Startup now attempts Store queue recovery before fresh availability checks so in-progress update operations can be surfaced after restart.
 - Store check throttling is enforced across sessions:
   - no more than one `GetAppAndOptionalStorePackageUpdatesAsync()` attempt every 30 minutes
   - no more than ten check attempts in a rolling 24-hour window
   - when throttled, updater uses last-known status and defers fresh Store API calls
 - Update availability is surfaced through the compact footer `Update` button beside the version/status controls.
 - Update click path reconfirms eligible runtime and requests install through `StoreContext.RequestDownloadAndInstallStorePackageUpdatesAsync(...)`.
+- In-app visible progress surface is shown during update operations with phase/state text, determinate progress percent, package detail, and terminal result guidance.
 - No-update path schedules one retry after one hour while the app remains open.
 - App shutdown cancels in-flight checks and retry timers through coordinator disposal.
 - Updater diagnostics now include package identity/full name/version, signature kind, attempt UTC, throttle skip reason, rolling 24-hour check count, Store result count, and Store API exception/error details.
+
+## Store Package Generation Record (2026-05-29)
+- Instruction baseline applied end-to-end from `D:\Projects\4-MSSTORE-PACKAGE-GENERATION.md`.
+- Submission packaging mode: FULL-BUILD via Visual Studio 2026 MSBuild only.
+- Pinned SDK verification source: `D:\Projects\global.json` -> `10.0.204` (`rollForward=disable`).
+- Expected upload artifact shape: single x64 `.msixupload` (non-bundle).
+- Manifest submission version advanced to `1.0.21.0` (`Major.Minor.Build.0`, revision `0`).
 
 
 

@@ -32,6 +32,21 @@ public partial class AppStatusDisplay : System.Windows.Controls.UserControl
     public static readonly DependencyProperty UpdateCommandProperty =
         DependencyProperty.Register(nameof(UpdateCommand), typeof(ICommand), typeof(AppStatusDisplay), new PropertyMetadata(null));
 
+    public static readonly DependencyProperty ShowUpdateProgressProperty =
+        DependencyProperty.Register(nameof(ShowUpdateProgress), typeof(bool), typeof(AppStatusDisplay), new PropertyMetadata(false));
+
+    public static readonly DependencyProperty UpdateProgressPercentProperty =
+        DependencyProperty.Register(nameof(UpdateProgressPercent), typeof(int), typeof(AppStatusDisplay), new PropertyMetadata(0));
+
+    public static readonly DependencyProperty UpdateProgressPhaseProperty =
+        DependencyProperty.Register(nameof(UpdateProgressPhase), typeof(string), typeof(AppStatusDisplay), new PropertyMetadata(string.Empty));
+
+    public static readonly DependencyProperty UpdateProgressDetailProperty =
+        DependencyProperty.Register(nameof(UpdateProgressDetail), typeof(string), typeof(AppStatusDisplay), new PropertyMetadata(string.Empty));
+
+    public static readonly DependencyProperty UpdateProgressResultProperty =
+        DependencyProperty.Register(nameof(UpdateProgressResult), typeof(string), typeof(AppStatusDisplay), new PropertyMetadata(string.Empty));
+
     public AppStatusDisplay()
     {
         InitializeComponent();
@@ -89,5 +104,35 @@ public partial class AppStatusDisplay : System.Windows.Controls.UserControl
     {
         get => (ICommand?)GetValue(UpdateCommandProperty);
         set => SetValue(UpdateCommandProperty, value);
+    }
+
+    public bool ShowUpdateProgress
+    {
+        get => (bool)GetValue(ShowUpdateProgressProperty);
+        set => SetValue(ShowUpdateProgressProperty, value);
+    }
+
+    public int UpdateProgressPercent
+    {
+        get => (int)GetValue(UpdateProgressPercentProperty);
+        set => SetValue(UpdateProgressPercentProperty, value);
+    }
+
+    public string UpdateProgressPhase
+    {
+        get => (string)GetValue(UpdateProgressPhaseProperty);
+        set => SetValue(UpdateProgressPhaseProperty, value);
+    }
+
+    public string UpdateProgressDetail
+    {
+        get => (string)GetValue(UpdateProgressDetailProperty);
+        set => SetValue(UpdateProgressDetailProperty, value);
+    }
+
+    public string UpdateProgressResult
+    {
+        get => (string)GetValue(UpdateProgressResultProperty);
+        set => SetValue(UpdateProgressResultProperty, value);
     }
 }
