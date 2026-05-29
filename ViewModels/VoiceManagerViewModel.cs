@@ -473,7 +473,9 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
             return false;
         }
 
-        var result = await _premiumPurchaseService.PurchasePremiumAsync().ConfigureAwait(true);
+        var result = await ExecutePremiumPurchaseWithMainWindowRecoveryAsync(
+            cancellationToken => _premiumPurchaseService.PurchasePremiumAsync(cancellationToken),
+            CancellationToken.None).ConfigureAwait(true);
         StatusMessage = result.Message;
         if (result.Outcome is PremiumPurchaseOutcome.Succeeded or PremiumPurchaseOutcome.AlreadyOwned)
         {
@@ -496,6 +498,57 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
         }
 
         return false;
+    }
+
+    private static async Task<PremiumPurchaseResult> ExecutePremiumPurchaseWithMainWindowRecoveryAsync(
+        Func<CancellationToken, Task<PremiumPurchaseResult>> purchaseOperation,
+        CancellationToken cancellationToken)
+    {
+        if (purchaseOperation is null)
+        {
+            throw new ArgumentNullException(nameof(purchaseOperation));
+        }
+
+        try
+        {
+            return await purchaseOperation(cancellationToken).ConfigureAwait(true);
+        }
+        finally
+        {
+            RecoverMainWindowAccessibility();
+        }
+    }
+
+    private static void RecoverMainWindowAccessibility()
+    {
+        try
+        {
+            var window = System.Windows.Application.Current?.MainWindow;
+            if (window is null || window.Dispatcher.HasShutdownStarted || window.Dispatcher.HasShutdownFinished)
+            {
+                return;
+            }
+
+            window.IsEnabled = true;
+            if (window.WindowState == WindowState.Minimized)
+            {
+                window.WindowState = WindowState.Normal;
+            }
+
+            window.Activate();
+            _ = window.Focus();
+            Keyboard.Focus(window);
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Warn(
+                "premium_purchase_main_window_recovery_failed",
+                new System.Collections.Generic.Dictionary<string, string?>
+                {
+                    ["exceptionType"] = ex.GetType().FullName,
+                    ["message"] = ex.Message
+                });
+        }
     }
 
     private void BuildFilterOptions(IEnumerable<DownloadableVoice> voices)
