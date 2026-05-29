@@ -198,13 +198,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             if (!_isPremiumOwned && !IsBasicAllowedVoiceOption(value))
             {
-                var upgraded = EnsurePremiumAccessForBlockedFeature(
-                    "This voice model is available in Premium.");
-                if (!upgraded)
-                {
-                    SetStatusMessage("That voice is available in Premium.");
-                    return;
-                }
+                SetStatusMessage("That voice is available in Premium. Use Upgrade to Premium.");
+                return;
             }
 
             _selectedVoiceOption = value;
@@ -912,7 +907,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         if (!_isPremiumOwned)
         {
-            EnsurePremiumAccessForBlockedFeature("Hotkey customization is available in Premium.");
+            SetStatusMessage("Hotkey customization is available in Premium. Use Upgrade to Premium.");
             return Task.CompletedTask;
         }
 
@@ -1222,7 +1217,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         if (!_isPremiumOwned)
         {
-            EnsurePremiumAccessForBlockedFeature("Hotkey customization is available in Premium.");
+            SetStatusMessage("Hotkey customization is available in Premium. Use Upgrade to Premium.");
             return;
         }
 
@@ -1266,7 +1261,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         if (!_isPremiumOwned)
         {
-            EnsurePremiumAccessForBlockedFeature("Hotkey customization is available in Premium.");
+            SetStatusMessage("Hotkey customization is available in Premium. Use Upgrade to Premium.");
             return;
         }
 
@@ -1665,31 +1660,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return voiceName.Contains("ljspeech", StringComparison.OrdinalIgnoreCase);
     }
 
-    private bool EnsurePremiumAccessForBlockedFeature(string message)
-    {
-        if (_isPremiumOwned)
-        {
-            return true;
-        }
-
-        try
-        {
-            var result = PromptPremiumUpgradeAsync(message).GetAwaiter().GetResult();
-            return result;
-        }
-        catch (Exception ex)
-        {
-            AppDiagnostics.Warn(
-                "premium_gate_prompt_failed",
-                new Dictionary<string, string?>
-                {
-                    ["exceptionType"] = ex.GetType().FullName,
-                    ["message"] = ex.Message
-                });
-            return false;
-        }
-    }
-
     private async Task<bool> PromptPremiumUpgradeAsync(string message)
     {
         var dialog = new ConfirmActionWindow(
@@ -1767,21 +1737,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         try
         {
-            var window = System.Windows.Application.Current?.MainWindow;
-            if (window is null || window.Dispatcher.HasShutdownStarted || window.Dispatcher.HasShutdownFinished)
+            var app = System.Windows.Application.Current;
+            if (app is null)
             {
                 return;
             }
 
-            window.IsEnabled = true;
-            if (window.WindowState == System.Windows.WindowState.Minimized)
-            {
-                window.WindowState = System.Windows.WindowState.Normal;
-            }
-
-            window.Activate();
-            _ = window.Focus();
-            System.Windows.Input.Keyboard.Focus(window);
+            var initiatingWindow = app.Windows
+                .OfType<System.Windows.Window>()
+                .FirstOrDefault(window => window.IsActive);
+            RecoverWindowAccessibility(initiatingWindow);
+            RecoverWindowAccessibility(app.MainWindow);
         }
         catch (Exception ex)
         {
@@ -1793,6 +1759,24 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     ["message"] = ex.Message
                 });
         }
+    }
+
+    private static void RecoverWindowAccessibility(System.Windows.Window? window)
+    {
+        if (window is null || window.Dispatcher.HasShutdownStarted || window.Dispatcher.HasShutdownFinished)
+        {
+            return;
+        }
+
+        window.IsEnabled = true;
+        if (window.WindowState == System.Windows.WindowState.Minimized)
+        {
+            window.WindowState = System.Windows.WindowState.Normal;
+        }
+
+        window.Activate();
+        _ = window.Focus();
+        System.Windows.Input.Keyboard.Focus(window);
     }
 
     private static (IReadOnlyList<string> Options, Dictionary<string, string?> NameByOptionLabel, Dictionary<string, string> OptionLabelByName) BuildVoiceOptions(IReadOnlyList<SpeechVoice> installedVoices)

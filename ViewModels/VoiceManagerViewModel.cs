@@ -523,21 +523,17 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
     {
         try
         {
-            var window = System.Windows.Application.Current?.MainWindow;
-            if (window is null || window.Dispatcher.HasShutdownStarted || window.Dispatcher.HasShutdownFinished)
+            var app = System.Windows.Application.Current;
+            if (app is null)
             {
                 return;
             }
 
-            window.IsEnabled = true;
-            if (window.WindowState == WindowState.Minimized)
-            {
-                window.WindowState = WindowState.Normal;
-            }
-
-            window.Activate();
-            _ = window.Focus();
-            Keyboard.Focus(window);
+            var initiatingWindow = app.Windows
+                .OfType<Window>()
+                .FirstOrDefault(window => window.IsActive);
+            RecoverWindowAccessibility(initiatingWindow);
+            RecoverWindowAccessibility(app.MainWindow);
         }
         catch (Exception ex)
         {
@@ -549,6 +545,24 @@ public sealed class VoiceManagerViewModel : INotifyPropertyChanged, IDisposable
                     ["message"] = ex.Message
                 });
         }
+    }
+
+    private static void RecoverWindowAccessibility(Window? window)
+    {
+        if (window is null || window.Dispatcher.HasShutdownStarted || window.Dispatcher.HasShutdownFinished)
+        {
+            return;
+        }
+
+        window.IsEnabled = true;
+        if (window.WindowState == WindowState.Minimized)
+        {
+            window.WindowState = WindowState.Normal;
+        }
+
+        window.Activate();
+        _ = window.Focus();
+        Keyboard.Focus(window);
     }
 
     private void BuildFilterOptions(IEnumerable<DownloadableVoice> voices)

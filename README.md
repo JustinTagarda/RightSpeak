@@ -110,6 +110,8 @@ dotnet build .\RightSpeak.csproj
 - Premium purchase path uses in-app Store purchase (`Windows.Services.Store` + `RequestPurchaseAsync`) through a shared purchase service.
 - Entitlement is Store-verified first; verified cache is fallback-only when Store services are unavailable.
 - Premium purchase and upgrade dialog flows always run main-window accessibility recovery on exit paths (success/cancel/failure/exception): main window is re-enabled and re-focused.
+- Premium purchase calls bind Store owner window handle per invocation (active top-level app window fallback chain) and execute on the app UI dispatcher for Store UI safety.
+- Premium-gated synchronous UI setters (voice/hotkey fields) now block with clear status guidance and do not run sync-over-async upgrade prompts.
 - Footer status uses bottom-right `AppStatusDisplay`:
 - startup: `Basic/Premium` text and `Upgrade` button stay hidden until the first entitlement refresh completes
 - owned entitlement: show `Premium` text only
