@@ -1,9 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Threading;
+using RightSpeak.Models;
 using Windows.ApplicationModel;
 using Windows.Services.Store;
 
@@ -12,9 +16,15 @@ namespace RightSpeak.Services;
 public sealed class StoreUpdateCoordinator : IStoreUpdateCoordinator
 {
     private const int AppModelErrorNoPackage = 15700;
+    private const int ErrorInsufficientBuffer = 122;
+    private const string StoreThrottleReasonMinInterval = "min_interval_30m";
+    private const string StoreThrottleReasonRolling24h = "rolling_24h_limit";
+    private static readonly TimeSpan MinimumCheckInterval = TimeSpan.FromMinutes(30);
+    private const int MaxChecksPerRollingDay = 10;
     private static readonly TimeSpan RetryDelay = TimeSpan.FromHours(1);
 
     private readonly IStoreContextProvider _storeContextProvider;
+    private readonly IAppSettingsService _appSettingsService;
     private readonly Dispatcher _dispatcher;
     private readonly object _sync = new();
     private readonly DispatcherTimer _retryTimer;
@@ -24,9 +34,13 @@ public sealed class StoreUpdateCoordinator : IStoreUpdateCoordinator
     private bool _isDisposed;
     private StoreUpdateState _state = new(false, false, false);
 
-    public StoreUpdateCoordinator(IStoreContextProvider storeContextProvider, Dispatcher dispatcher)
+    public StoreUpdateCoordinator(
+        IStoreContextProvider storeContextProvider,
+        IAppSettingsService appSettingsService,
+        Dispatcher dispatcher)
     {
         _storeContextProvider = storeContextProvider ?? throw new ArgumentNullException(nameof(storeContextProvider));
+        _appSettingsService = appSettingsService ?? throw new ArgumentNullException(nameof(appSettingsService));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _retryTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
         {
@@ -57,7 +71,7 @@ public sealed class StoreUpdateCoordinator : IStoreUpdateCoordinator
             return;
         }
 
-        if (!IsStorePackagedRuntime())
+        if (!HasPackageIdentity())
         {
             UpdateState(new StoreUpdateState(false, false, false));
             return;
@@ -74,9 +88,26 @@ public sealed class StoreUpdateCoordinator : IStoreUpdateCoordinator
         {
             UpdateState(_state with { IsBusy = true });
             var updates = _cachedUpdates;
-            if (updates is null || updates.Count == 0)
+            if (updates is null || updates.Count == 0 || IsCachedUpdatesExpired())
             {
-                updates = await context.GetAppAndOptionalStorePackageUpdatesAsync().AsTask(cancellationToken).ConfigureAwait(false);
+                if (TryGetThrottleSkipReason(DateTimeOffset.UtcNow, out var skipReason))
+                {
+                    AppDiagnostics.Info(
+                        "store_update_check_skipped_throttled",
+                        BuildCheckDiagnostics(skipReason, 0, null, context: "request_install"));
+                    updates = null;
+                }
+                else
+                {
+                    RegisterStoreCheckAttempt(DateTimeOffset.UtcNow);
+                    updates = await context.GetAppAndOptionalStorePackageUpdatesAsync().AsTask(cancellationToken).ConfigureAwait(false);
+                    _cachedUpdates = updates;
+                    _appSettingsService.Current.StoreUpdateLastKnownAvailable = updates.Count > 0;
+                    _appSettingsService.Save();
+                    AppDiagnostics.Info(
+                        "store_update_check_completed",
+                        BuildCheckDiagnostics(null, updates.Count, null, context: "request_install"));
+                }
             }
 
             if (updates is null || updates.Count == 0)
@@ -93,7 +124,8 @@ public sealed class StoreUpdateCoordinator : IStoreUpdateCoordinator
                 new Dictionary<string, string?>
                 {
                     ["overallState"] = result.OverallState.ToString(),
-                    ["itemCount"] = updates.Count.ToString()
+                    ["itemCount"] = updates.Count.ToString(),
+                    ["context"] = "request_install"
                 });
 
             _cachedUpdates = null;
@@ -110,7 +142,8 @@ public sealed class StoreUpdateCoordinator : IStoreUpdateCoordinator
                 new Dictionary<string, string?>
                 {
                     ["exceptionType"] = ex.GetType().FullName,
-                    ["message"] = ex.Message
+                    ["message"] = ex.Message,
+                    ["context"] = "request_install"
                 });
             UpdateState(new StoreUpdateState(true, false, false));
         }
@@ -156,7 +189,7 @@ public sealed class StoreUpdateCoordinator : IStoreUpdateCoordinator
             return;
         }
 
-        if (!IsStorePackagedRuntime())
+        if (!HasPackageIdentity())
         {
             _cachedUpdates = null;
             _retryTimer.Stop();
@@ -173,6 +206,21 @@ public sealed class StoreUpdateCoordinator : IStoreUpdateCoordinator
             return;
         }
 
+        if (TryGetThrottleSkipReason(DateTimeOffset.UtcNow, out var skipReason))
+        {
+            var lastKnownAvailable = _appSettingsService.Current.StoreUpdateLastKnownAvailable;
+            AppDiagnostics.Info(
+                "store_update_check_skipped_throttled",
+                BuildCheckDiagnostics(skipReason, null, null, context: "startup"));
+            UpdateState(new StoreUpdateState(true, lastKnownAvailable, false));
+            if (!lastKnownAvailable)
+            {
+                ScheduleRetry();
+            }
+
+            return;
+        }
+
         CancellationTokenSource cts;
         lock (_sync)
         {
@@ -184,8 +232,14 @@ public sealed class StoreUpdateCoordinator : IStoreUpdateCoordinator
 
         try
         {
+            RegisterStoreCheckAttempt(DateTimeOffset.UtcNow);
             var updates = await context.GetAppAndOptionalStorePackageUpdatesAsync().AsTask(cts.Token).ConfigureAwait(false);
             _cachedUpdates = updates;
+            _appSettingsService.Current.StoreUpdateLastKnownAvailable = updates.Count > 0;
+            _appSettingsService.Save();
+            AppDiagnostics.Info(
+                "store_update_check_completed",
+                BuildCheckDiagnostics(null, updates.Count, null, context: "startup"));
             if (updates.Count > 0)
             {
                 _retryTimer.Stop();
@@ -209,7 +263,8 @@ public sealed class StoreUpdateCoordinator : IStoreUpdateCoordinator
                 new Dictionary<string, string?>
                 {
                     ["exceptionType"] = ex.GetType().FullName,
-                    ["message"] = ex.Message
+                    ["message"] = ex.Message,
+                    ["context"] = "startup"
                 });
             UpdateState(new StoreUpdateState(true, false, false));
         }
@@ -243,21 +298,113 @@ public sealed class StoreUpdateCoordinator : IStoreUpdateCoordinator
         StateChanged?.Invoke(this, state);
     }
 
-    private static bool IsStorePackagedRuntime()
+    private bool IsCachedUpdatesExpired()
     {
-        if (!HasPackageIdentity())
+        var utcText = _appSettingsService.Current.StoreUpdateLastAttemptUtc;
+        if (string.IsNullOrWhiteSpace(utcText))
         {
-            return false;
+            return true;
         }
 
-        try
+        if (!DateTimeOffset.TryParse(utcText, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var lastAttempt))
         {
-            return Package.Current.SignatureKind == PackageSignatureKind.Store;
+            return true;
         }
-        catch
+
+        return DateTimeOffset.UtcNow - lastAttempt > MinimumCheckInterval;
+    }
+
+    private bool TryGetThrottleSkipReason(DateTimeOffset nowUtc, out string reason)
+    {
+        reason = string.Empty;
+        var settings = _appSettingsService.Current;
+        if (!string.IsNullOrWhiteSpace(settings.StoreUpdateLastAttemptUtc) &&
+            DateTimeOffset.TryParse(settings.StoreUpdateLastAttemptUtc, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var lastAttemptUtc) &&
+            nowUtc - lastAttemptUtc < MinimumCheckInterval)
         {
-            return false;
+            reason = StoreThrottleReasonMinInterval;
+            return true;
         }
+
+        var recentChecks = ParseAndPruneHistory(nowUtc, persistIfChanged: true);
+        if (recentChecks.Count >= MaxChecksPerRollingDay)
+        {
+            reason = StoreThrottleReasonRolling24h;
+            return true;
+        }
+
+        return false;
+    }
+
+    private void RegisterStoreCheckAttempt(DateTimeOffset nowUtc)
+    {
+        var settings = _appSettingsService.Current;
+        var recentChecks = ParseAndPruneHistory(nowUtc, persistIfChanged: false);
+        recentChecks.Add(nowUtc);
+        settings.StoreUpdateCheckHistoryUtc = recentChecks
+            .Select(x => x.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))
+            .ToList();
+        settings.StoreUpdateLastAttemptUtc = nowUtc.UtcDateTime.ToString("O", CultureInfo.InvariantCulture);
+        _appSettingsService.Save();
+    }
+
+    private List<DateTimeOffset> ParseAndPruneHistory(DateTimeOffset nowUtc, bool persistIfChanged)
+    {
+        var settings = _appSettingsService.Current;
+        var parsed = new List<DateTimeOffset>();
+        var hasChanges = false;
+
+        foreach (var entry in settings.StoreUpdateCheckHistoryUtc)
+        {
+            if (!DateTimeOffset.TryParse(entry, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsedEntry))
+            {
+                hasChanges = true;
+                continue;
+            }
+
+            if (nowUtc - parsedEntry > TimeSpan.FromHours(24))
+            {
+                hasChanges = true;
+                continue;
+            }
+
+            parsed.Add(parsedEntry.ToUniversalTime());
+        }
+
+        if (hasChanges && persistIfChanged)
+        {
+            settings.StoreUpdateCheckHistoryUtc = parsed
+                .Select(x => x.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))
+                .ToList();
+            _appSettingsService.Save();
+        }
+
+        return parsed;
+    }
+
+    private Dictionary<string, string?> BuildCheckDiagnostics(string? skipReason, int? resultCount, Exception? exception, string context)
+    {
+        var packageIdentityPresent = HasPackageIdentity();
+        var packageFullName = GetPackageFullName();
+        var packageVersion = GetPackageVersion();
+        var signatureKind = GetPackageSignatureKindText();
+        var recentCheckCount = ParseAndPruneHistory(DateTimeOffset.UtcNow, persistIfChanged: false).Count;
+
+        return new Dictionary<string, string?>
+        {
+            ["context"] = context,
+            ["packageIdentityPresent"] = packageIdentityPresent.ToString(),
+            ["packageFullName"] = packageFullName,
+            ["installedVersion"] = packageVersion,
+            ["packageSignatureKind"] = signatureKind,
+            ["checkAttemptUtc"] = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+            ["checkSkippedByThrottle"] = (!string.IsNullOrWhiteSpace(skipReason)).ToString(),
+            ["throttleReason"] = skipReason,
+            ["checkCountRolling24h"] = recentCheckCount.ToString(CultureInfo.InvariantCulture),
+            ["resultCount"] = resultCount?.ToString(CultureInfo.InvariantCulture),
+            ["exceptionType"] = exception?.GetType().FullName,
+            ["errorCode"] = exception is null ? null : Marshal.GetHRForException(exception).ToString("X8", CultureInfo.InvariantCulture)
+        };
     }
 
     private static bool HasPackageIdentity()
@@ -265,6 +412,62 @@ public sealed class StoreUpdateCoordinator : IStoreUpdateCoordinator
         var length = 0u;
         var result = GetCurrentPackageFullName(ref length, null);
         return result != AppModelErrorNoPackage;
+    }
+
+    private static string? GetPackageFullName()
+    {
+        try
+        {
+            var length = 0u;
+            var firstResult = GetCurrentPackageFullName(ref length, null);
+            if (firstResult == AppModelErrorNoPackage)
+            {
+                return null;
+            }
+
+            if (firstResult != ErrorInsufficientBuffer || length == 0)
+            {
+                return null;
+            }
+
+            var builder = new StringBuilder((int)length);
+            var secondResult = GetCurrentPackageFullName(ref length, builder);
+            if (secondResult != 0)
+            {
+                return null;
+            }
+
+            return builder.ToString();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? GetPackageVersion()
+    {
+        try
+        {
+            var version = Package.Current.Id.Version;
+            return $"{version.Major}.{version.Minor}.{version.Build}.{version.Revision}";
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? GetPackageSignatureKindText()
+    {
+        try
+        {
+            return Package.Current.SignatureKind.ToString();
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]

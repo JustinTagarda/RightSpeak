@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace RightSpeak.Models;
 
 public sealed class AppSettings
@@ -14,4 +16,7 @@ public sealed class AppSettings
     public string StopHotkeyKey { get; set; } = "X";
     public bool PremiumEntitlementVerified { get; set; }
     public string? PremiumEntitlementVerifiedUtc { get; set; }
+    public string? StoreUpdateLastAttemptUtc { get; set; }
+    public List<string> StoreUpdateCheckHistoryUtc { get; set; } = new();
+    public bool StoreUpdateLastKnownAvailable { get; set; }
 }

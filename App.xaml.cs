@@ -164,7 +164,7 @@ public partial class App : WpfApplication
             CreateVoiceManagerViewModel,
             placeOnStartup: true);
         _mainWindow.ContentRendered += OnMainWindowContentRendered;
-        _storeUpdateCoordinator = new StoreUpdateCoordinator(_storeContextProvider!, Dispatcher);
+        _storeUpdateCoordinator = new StoreUpdateCoordinator(_storeContextProvider!, _appSettingsService, Dispatcher);
         _storeUpdateCoordinator.StateChanged += OnStoreUpdateStateChanged;
         _mainViewModel.SetStoreUpdateState(_storeUpdateCoordinator.CurrentState);
         AppDiagnostics.Info("main_window_created");

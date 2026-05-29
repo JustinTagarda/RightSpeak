@@ -205,14 +205,19 @@ Contributors and coding agents should read [`AGENTS.md`](./AGENTS.md) before mak
   - `D:\Projects\RightSpeak\RightSpeak.Package\bin\x64\Release\AppPackages\RightSpeak.Package_1.0.19.0_x64_Test\RightSpeak.Package_1.0.19.0_x64.msix`
   - `D:\Projects\RightSpeak\RightSpeak.Package\bin\x64\Release\Upload\RightSpeak.Package_1.0.19.0_x64\RightSpeak.Package_1.0.19.0_x64.msix`
 
-## Microsoft Store Updater Baseline (2026-05-28)
-- Instruction baseline applied from `D:\Projects\3-MSSTORE-UPDATER.md`.
-- App now runs Store update checks only for Store-signed packaged runtime (`PackageSignatureKind.Store` + package identity gate).
-- Startup update check begins after first main-window render and runs asynchronously with no blocking UI.
-- Update availability is surfaced through a compact footer `Update` button beside the existing status/version controls.
-- Update action uses `StoreContext.RequestDownloadAndInstallStorePackageUpdatesAsync(...)`.
-- No-update path schedules one retry after one hour while app remains open.
-- App shutdown cancels pending checks and stops scheduled retry through coordinator disposal.
+## Microsoft Store Updater Baseline (2026-05-29)
+- Instruction baseline re-applied end-to-end from `D:\Projects\3-MSSTORE-UPDATER.md`.
+- Updater runs only for packaged runtime with package identity gate first; `Package.Current.SignatureKind` is treated as a diagnostic/supporting signal and not the sole eligibility gate.
+- Startup decision flow runs after first main-window render and remains async/non-blocking.
+- Store check throttling is enforced across sessions:
+  - no more than one `GetAppAndOptionalStorePackageUpdatesAsync()` attempt every 30 minutes
+  - no more than ten check attempts in a rolling 24-hour window
+  - when throttled, updater uses last-known status and defers fresh Store API calls
+- Update availability is surfaced through the compact footer `Update` button beside the version/status controls.
+- Update click path reconfirms eligible runtime and requests install through `StoreContext.RequestDownloadAndInstallStorePackageUpdatesAsync(...)`.
+- No-update path schedules one retry after one hour while the app remains open.
+- App shutdown cancels in-flight checks and retry timers through coordinator disposal.
+- Updater diagnostics now include package identity/full name/version, signature kind, attempt UTC, throttle skip reason, rolling 24-hour check count, Store result count, and Store API exception/error details.
 
 
 
