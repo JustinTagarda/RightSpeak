@@ -248,6 +248,11 @@ Contributors and coding agents should read [`AGENTS.md`](./AGENTS.md) before mak
 - Footer `Upgrade` button default styling is explicit compact blue (`#0078D4` with border `#106EBE`) with white text and no icon.
 - Premium CTAs continue to use shared in-app purchase service path (`Windows.Services.Store` + `RequestPurchaseAsync`) with entitlement refresh on `Succeeded`/`AlreadyOwned`.
 
+## Premium Add-ons Re-Application Record (2026-05-30)
+- Instruction baseline re-applied end-to-end from `D:\Projects\2-MSSTORE-PREMIUM-ADDONS.md`.
+- Existing Store Premium durable add-on architecture, shared purchase route (`Windows.Services.Store` + `RequestPurchaseAsync`), CTA convergence, and bottom-right `AppStatusDisplay` behavior remain aligned and were retained.
+- Premium flow test harness was aligned for WPF dialog execution by running Premium purchase-flow UI tests on STA threads (`[StaFact]`) so checklist-oriented Premium flow tests execute reliably.
+
 
 ## Store Package Generation Record (2026-05-29, 4-MSSTORE end-to-end)
 - Instruction baseline applied end-to-end from `D:\Projects\4-MSSTORE-PACKAGE-GENERATION.md`.

@@ -12,7 +12,7 @@ namespace RightSpeak.Tests;
 
 public sealed class PremiumFlowTests
 {
-    [Fact]
+    [StaFact]
     public async Task Upgrade_Succeeded_RefreshesEntitlement_AndUnlocksPremium()
     {
         var entitlement = new FakePremiumEntitlementService(
@@ -29,7 +29,7 @@ public sealed class PremiumFlowTests
         Assert.Equal("Premium", viewModel.AppModeText);
     }
 
-    [Fact]
+    [StaFact]
     public async Task Upgrade_AlreadyOwned_RefreshesEntitlement()
     {
         var entitlement = new FakePremiumEntitlementService(
@@ -46,7 +46,7 @@ public sealed class PremiumFlowTests
         Assert.False(viewModel.IsUpgradeAvailable);
     }
 
-    [Fact]
+    [StaFact]
     public async Task Upgrade_NotSupported_UsesStoreNavigationFallback()
     {
         var entitlement = new FakePremiumEntitlementService(
