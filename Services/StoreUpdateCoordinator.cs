@@ -235,16 +235,12 @@ public sealed class StoreUpdateCoordinator : IStoreUpdateCoordinator
 
         if (TryGetThrottleSkipReason(DateTimeOffset.UtcNow, out var skipReason))
         {
-            var lastKnownAvailable = _appSettingsService.Current.StoreUpdateLastKnownAvailable;
             AppDiagnostics.Info(
                 "store_update_check_skipped_throttled",
                 BuildCheckDiagnostics(skipReason, null, null, context: "startup"));
-            UpdateState(BuildAvailabilityState(true, lastKnownAvailable, false));
-            if (!lastKnownAvailable)
-            {
-                ScheduleRetry();
-            }
-
+            // Visibility contract: throttled/skipped checks must not force stale update visibility.
+            UpdateState(BuildAvailabilityState(true, false, _state.IsBusy));
+            ScheduleRetry();
             return;
         }
 
@@ -303,11 +299,15 @@ public sealed class StoreUpdateCoordinator : IStoreUpdateCoordinator
 
             if (relevant.Count == 0)
             {
-                if (_state.IsProgressVisible && !_state.IsBusy)
+                UpdateState(_state with
                 {
-                    UpdateState(_state with { IsProgressVisible = false, ProgressPercent = 0, ProgressPhase = string.Empty, ProgressDetail = null, ProgressResult = null });
-                }
-
+                    IsBusy = false,
+                    IsProgressVisible = false,
+                    ProgressPercent = 0,
+                    ProgressPhase = string.Empty,
+                    ProgressDetail = null,
+                    ProgressResult = null
+                });
                 return;
             }
 
@@ -357,6 +357,15 @@ public sealed class StoreUpdateCoordinator : IStoreUpdateCoordinator
             var phase = MapStateToPhase(stateName);
             var detail = BuildQueueStatusDetail(item, status);
             var isTerminal = IsTerminalPhase(phase);
+            if (!isTerminal)
+            {
+                UpdateState(BuildAvailabilityState(true, true, true));
+            }
+            else
+            {
+                UpdateState(_state with { IsBusy = false });
+            }
+
             SetProgressState(percent, phase, detail, isTerminal);
         }
         catch (Exception ex)

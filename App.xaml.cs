@@ -41,6 +41,7 @@ public partial class App : WpfApplication
     private IPremiumPurchaseService? _premiumPurchaseService;
     private IStoreNavigationService? _storeNavigationService;
     private MainWindow? _mainWindow;
+    private StoreUpdateProgressWindow? _storeUpdateProgressWindow;
     private Mutex? _singleInstanceMutex;
     private uint _activateWindowMessageId;
     private bool _isExiting;
@@ -264,6 +265,7 @@ public partial class App : WpfApplication
             _storeUpdateCoordinator.StateChanged -= OnStoreUpdateStateChanged;
             _storeUpdateCoordinator.Dispose();
         });
+        TryRunCleanup("app_exit_close_store_update_window", CloseStoreUpdateProgressWindow);
         TryRunCleanup("app_exit_dispose_speech", () => _speechService?.Dispose());
         TryRunCleanup("app_exit_save_settings", () => _appSettingsService?.Save());
         TryRunCleanup("app_exit_dispose_single_instance_mutex", () => _singleInstanceMutex?.Dispose());
@@ -415,7 +417,11 @@ public partial class App : WpfApplication
             return;
         }
 
-        _ = Dispatcher.InvokeAsync(() => _mainViewModel.SetStoreUpdateState(state));
+        _ = Dispatcher.InvokeAsync(() =>
+        {
+            _mainViewModel.SetStoreUpdateState(state);
+            ApplyStoreUpdateProgressWindowState(state);
+        });
     }
 
     private async Task RequestStoreUpdateInstallAsync(CancellationToken cancellationToken)
@@ -436,6 +442,64 @@ public partial class App : WpfApplication
             Models.HotkeyModifierPreset.CtrlAlt => "Ctrl+Alt",
             _ => "Alt+Shift"
         };
+    }
+
+    private void ApplyStoreUpdateProgressWindowState(StoreUpdateState state)
+    {
+        if (_mainWindow is null)
+        {
+            return;
+        }
+
+        if (!state.IsProgressVisible)
+        {
+            CloseStoreUpdateProgressWindow();
+            return;
+        }
+
+        if (_storeUpdateProgressWindow is null || !_storeUpdateProgressWindow.IsVisible)
+        {
+            _storeUpdateProgressWindow = new StoreUpdateProgressWindow
+            {
+                Owner = _mainWindow,
+                DataContext = _mainViewModel,
+                AllowClose = false
+            };
+            _storeUpdateProgressWindow.Show();
+        }
+
+        var isTerminal = string.Equals(state.ProgressPhase, "Completed", StringComparison.Ordinal) ||
+                         string.Equals(state.ProgressPhase, "Canceled", StringComparison.Ordinal) ||
+                         string.Equals(state.ProgressPhase, "Failed", StringComparison.Ordinal);
+        _storeUpdateProgressWindow.AllowClose = isTerminal;
+        _mainWindow.IsEnabled = isTerminal;
+    }
+
+    private void CloseStoreUpdateProgressWindow()
+    {
+        if (_mainWindow is not null)
+        {
+            _mainWindow.IsEnabled = true;
+        }
+
+        if (_storeUpdateProgressWindow is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _storeUpdateProgressWindow.AllowClose = true;
+            _storeUpdateProgressWindow.Close();
+        }
+        catch
+        {
+            // Ignore close errors during shutdown paths.
+        }
+        finally
+        {
+            _storeUpdateProgressWindow = null;
+        }
     }
 
     private void UpdateFocusedWindowText()

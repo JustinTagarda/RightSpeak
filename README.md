@@ -111,7 +111,7 @@ dotnet build .\RightSpeak.csproj
 - Entitlement is Store-verified first; verified cache is fallback-only when Store services are unavailable.
 - Premium purchase and upgrade dialog flows always run main-window accessibility recovery on exit paths (success/cancel/failure/exception): main window is re-enabled and re-focused.
 - Premium purchase calls bind Store owner window handle per invocation (active top-level app window fallback chain) and execute on the app UI dispatcher for Store UI safety.
-- Premium-gated synchronous UI setters (voice/hotkey fields) now block with clear status guidance and do not run sync-over-async upgrade prompts.
+- Premium-gated hotkey customization now routes blocked Basic-mode attempts through the existing in-app upgrade confirmation dialog and shared premium purchase flow (including Store fallback for unsupported purchase environments).
 - Footer status uses bottom-right `AppStatusDisplay`:
 - startup: `Basic/Premium` text and `Upgrade` button stay hidden until the first entitlement refresh completes
 - owned entitlement: show `Premium` text only
@@ -219,7 +219,8 @@ Contributors and coding agents should read [`AGENTS.md`](./AGENTS.md) before mak
   - when throttled, updater uses last-known status and defers fresh Store API calls
 - Update availability is surfaced through the compact footer `Update` button beside the version/status controls.
 - Update click path reconfirms eligible runtime and requests install through `StoreContext.RequestDownloadAndInstallStorePackageUpdatesAsync(...)`.
-- In-app visible progress surface is shown during update operations with phase/state text, determinate progress percent, package detail, and terminal result guidance.
+- Update progress is shown in a separate modal progress window (not the footer) with phase/state text, determinate progress percent, package detail, and terminal result guidance.
+- The `Update` button is shown only after a positive Store availability result (`updates.Count > 0`) or while an active app-update queue item is in progress; throttled/skipped checks do not keep stale visibility.
 - No-update path schedules one retry after one hour while the app remains open.
 - App shutdown cancels in-flight checks and retry timers through coordinator disposal.
 - Updater diagnostics now include package identity/full name/version, signature kind, attempt UTC, throttle skip reason, rolling 24-hour check count, Store result count, and Store API exception/error details.
@@ -231,5 +232,26 @@ Contributors and coding agents should read [`AGENTS.md`](./AGENTS.md) before mak
 - Expected upload artifact shape: single x64 `.msixupload` (non-bundle).
 - Manifest submission version advanced to `1.0.21.0` (`Major.Minor.Build.0`, revision `0`).
 
+## Store Package Generation Record (2026-05-29, rerun)
+- Instruction baseline re-applied end-to-end from `D:\Projects\4-MSSTORE-PACKAGE-GENERATION.md`.
+- Submission packaging mode: FULL-BUILD via Visual Studio 2026 MSBuild only.
+- Pinned SDK verification source: `D:\Projects\global.json` -> `10.0.204` (`rollForward=disable`).
+- Expected upload artifact shape: single x64 `.msixupload` (non-bundle).
+- Manifest submission version advanced to `1.0.22.0` (`Major.Minor.Build.0`, revision `0`).
 
 
+
+
+## Premium Add-ons Re-Application Record (2026-05-29)
+- Instruction baseline re-applied end-to-end from `D:\Projects\2-MSSTORE-PREMIUM-ADDONS.md`.
+- Premium footer `Upgrade` CTA now always shows the existing in-app confirmation dialog before any purchase call.
+- Footer `Upgrade` button default styling is explicit compact blue (`#0078D4` with border `#106EBE`) with white text and no icon.
+- Premium CTAs continue to use shared in-app purchase service path (`Windows.Services.Store` + `RequestPurchaseAsync`) with entitlement refresh on `Succeeded`/`AlreadyOwned`.
+
+
+## Store Package Generation Record (2026-05-29, 4-MSSTORE end-to-end)
+- Instruction baseline applied end-to-end from `D:\Projects\4-MSSTORE-PACKAGE-GENERATION.md`.
+- Submission packaging mode: FULL-BUILD via Visual Studio 2026 MSBuild only.
+- Pinned SDK verification source: `D:\Projects\global.json` -> `10.0.204` (`rollForward=disable`).
+- Manifest `RightSpeak.Package\Package.appxmanifest` identity version advanced to `1.0.23.0` (`Major.Minor.Build.0`, revision `0`).
+- Packaging target remains x64-only with single-architecture upload artifact verification required.

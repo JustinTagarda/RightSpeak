@@ -35,6 +35,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private Dictionary<string, string> _voiceOptionLabelByName;
     private readonly Func<(bool Success, string StatusMessage)>? _applyHotkeysRegistration;
     private readonly Func<string, bool>? _applyTheme;
+    private readonly Func<string, Task<bool>>? _promptPremiumUpgradeAsyncOverride;
     private CancellationTokenSource? _hotkeyModifierWarningCts;
     private CancellationTokenSource? _activeExternalReadCancellationTokenSource;
     private Stopwatch? _activeExternalReadStopwatch;
@@ -86,7 +87,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         IPremiumEntitlementService? premiumEntitlementService = null,
         IPremiumPurchaseService? premiumPurchaseService = null,
         IStoreNavigationService? storeNavigationService = null,
-        Func<CancellationToken, Task>? requestStoreUpdateInstallAsync = null)
+        Func<CancellationToken, Task>? requestStoreUpdateInstallAsync = null,
+        Func<string, Task<bool>>? promptPremiumUpgradeAsyncOverride = null)
     {
         _readingService = readingService ?? throw new ArgumentNullException(nameof(readingService));
         _hotkeySettingsService = hotkeySettingsService ?? throw new ArgumentNullException(nameof(hotkeySettingsService));
@@ -99,6 +101,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _premiumPurchaseService = premiumPurchaseService;
         _storeNavigationService = storeNavigationService;
         _requestStoreUpdateInstallAsync = requestStoreUpdateInstallAsync;
+        _promptPremiumUpgradeAsyncOverride = promptPremiumUpgradeAsyncOverride;
 
         _speechRate = _readingService.SpeechRate;
         _inputText = _readingService.TypedTextDraft ?? string.Empty;
@@ -903,12 +906,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    private Task ResetHotkeysAsync()
+    private async Task ResetHotkeysAsync()
     {
         if (!_isPremiumOwned)
         {
-            SetStatusMessage("Hotkey customization is available in Premium. Use Upgrade to Premium.");
-            return Task.CompletedTask;
+            await PromptHotkeyPremiumUpgradeAsync().ConfigureAwait(true);
+            return;
         }
 
         _suppressHotkeyAutoApply = true;
@@ -933,13 +936,24 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
 
         UpdateCommandStates();
-        return Task.CompletedTask;
     }
 
     private async Task UpgradeToPremiumAsync()
     {
         if (_premiumPurchaseService is null || _isPremiumBusy || _isPremiumOwned)
         {
+            return;
+        }
+
+        var dialog = new ConfirmActionWindow(
+            "Premium feature",
+            "Upgrade to Premium to unlock full access.",
+            confirmText: "Upgrade to Premium",
+            cancelText: "Not now");
+
+        if (!ShowOwnedDialog(dialog))
+        {
+            SetStatusMessage("That action is available in Premium.");
             return;
         }
 
@@ -1217,7 +1231,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         if (!_isPremiumOwned)
         {
-            SetStatusMessage("Hotkey customization is available in Premium. Use Upgrade to Premium.");
+            _ = PromptHotkeyPremiumUpgradeAsync();
             return;
         }
 
@@ -1261,7 +1275,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         if (!_isPremiumOwned)
         {
-            SetStatusMessage("Hotkey customization is available in Premium. Use Upgrade to Premium.");
+            _ = PromptHotkeyPremiumUpgradeAsync();
             return;
         }
 
@@ -1695,6 +1709,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
 
         return false;
+    }
+
+    private Task<bool> PromptHotkeyPremiumUpgradeAsync()
+    {
+        if (_promptPremiumUpgradeAsyncOverride is not null)
+        {
+            return _promptPremiumUpgradeAsyncOverride("Hotkey customization is available in Premium.");
+        }
+
+        return PromptPremiumUpgradeAsync("Hotkey customization is available in Premium.");
     }
 
     private static async Task<PremiumPurchaseResult> ExecutePremiumPurchaseWithMainWindowRecoveryAsync(

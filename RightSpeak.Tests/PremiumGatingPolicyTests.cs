@@ -68,28 +68,107 @@ public sealed class PremiumGatingPolicyTests
     }
 
     [Fact]
-    public void BasicMode_HotkeyCustomization_IsBlocked()
+    public async Task BasicMode_HotkeyKeyCustomization_IsBlocked_AndUsesUpgradeDialogPath()
     {
-        var viewModel = CreateViewModel(new FakeReadingService());
+        var promptCallCount = 0;
+        var viewModel = CreateViewModel(
+            new FakeReadingService(),
+            promptPremiumUpgradeAsyncOverride: _ =>
+            {
+                promptCallCount++;
+                return Task.FromResult(false);
+            });
+
+        viewModel.ReadSelectedHotkeyKey = "A";
+        await Task.Yield();
+
+        Assert.Equal("S", viewModel.ReadSelectedHotkeyKey);
+        Assert.Equal(1, promptCallCount);
+    }
+
+    [Fact]
+    public async Task BasicMode_HotkeyModifierCustomization_IsBlocked_AndUsesUpgradeDialogPath()
+    {
+        var promptCallCount = 0;
+        var viewModel = CreateViewModel(
+            new FakeReadingService(),
+            promptPremiumUpgradeAsyncOverride: _ =>
+            {
+                promptCallCount++;
+                return Task.FromResult(false);
+            });
+
+        viewModel.IsCtrlAltModifierSelected = true;
+        await Task.Yield();
+
+        Assert.True(viewModel.IsAltShiftModifierSelected);
+        Assert.False(viewModel.IsCtrlAltModifierSelected);
+        Assert.Equal(1, promptCallCount);
+    }
+
+    [Fact]
+    public async Task BasicMode_ResetHotkeys_IsBlocked_AndUsesUpgradeDialogPath()
+    {
+        var hotkeys = new FakeHotkeySettingsService
+        {
+            ModifierPreset = HotkeyModifierPreset.CtrlShift,
+            ReadSelectedKey = "A",
+            ReadParagraphKey = "P",
+            ReadDocumentKey = "D",
+            StopKey = "X"
+        };
+        var promptCallCount = 0;
+        var viewModel = CreateViewModel(
+            new FakeReadingService(),
+            hotkeySettingsService: hotkeys,
+            promptPremiumUpgradeAsyncOverride: _ =>
+            {
+                promptCallCount++;
+                return Task.FromResult(false);
+            });
+
+        await ((AsyncCommand)viewModel.ResetHotkeysCommand).ExecuteAsync();
+
+        Assert.Equal("A", viewModel.ReadSelectedHotkeyKey);
+        Assert.True(viewModel.IsCtrlShiftModifierSelected);
+        Assert.Equal(1, promptCallCount);
+    }
+
+    [Fact]
+    public async Task PremiumMode_HotkeyCustomization_IsAllowed()
+    {
+        var hotkeys = new FakeHotkeySettingsService();
+        var viewModel = CreateViewModel(
+            new FakeReadingService(),
+            hotkeySettingsService: hotkeys,
+            premiumEntitlementService: new FakePremiumEntitlementService(
+                new PremiumEntitlementState(true, true, false, "Premium active.")));
+
+        await viewModel.InitializePremiumStatusAsync();
 
         viewModel.ReadSelectedHotkeyKey = "A";
 
-        Assert.Equal("S", viewModel.ReadSelectedHotkeyKey);
+        Assert.Equal("A", viewModel.ReadSelectedHotkeyKey);
+        Assert.Equal("A", hotkeys.ReadSelectedKey);
     }
 
     private static MainViewModel CreateViewModel(
         IReadingService readingService,
-        IAppSettingsService? appSettingsService = null)
+        IAppSettingsService? appSettingsService = null,
+        IHotkeySettingsService? hotkeySettingsService = null,
+        IPremiumEntitlementService? premiumEntitlementService = null,
+        Func<string, Task<bool>>? promptPremiumUpgradeAsyncOverride = null)
     {
         return new MainViewModel(
             readingService,
-            new FakeHotkeySettingsService(),
+            hotkeySettingsService ?? new FakeHotkeySettingsService(),
             appSettingsService: appSettingsService ?? new FakeAppSettingsService(),
-            premiumEntitlementService: new FakePremiumEntitlementService(
+            premiumEntitlementService: premiumEntitlementService ?? new FakePremiumEntitlementService(
                 new PremiumEntitlementState(false, true, false, "Basic mode is active.")),
             premiumPurchaseService: new FakePremiumPurchaseService(
                 new PremiumPurchaseResult(PremiumPurchaseOutcome.NotSupported, "not supported")),
-            storeNavigationService: new FakeStoreNavigationService());
+            storeNavigationService: new FakeStoreNavigationService(),
+            promptPremiumUpgradeAsyncOverride: promptPremiumUpgradeAsyncOverride);
     }
 
     private sealed class FakePremiumEntitlementService : IPremiumEntitlementService
