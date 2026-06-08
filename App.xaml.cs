@@ -48,6 +48,7 @@ public partial class App : WpfApplication
 
     public App()
     {
+        Activated += OnApplicationActivated;
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += OnAppDomainUnhandledException;
         AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
@@ -228,6 +229,7 @@ public partial class App : WpfApplication
                 ["exitCode"] = e.ApplicationExitCode.ToString()
             });
         _isExiting = true;
+        TryRunCleanup("app_exit_unsubscribe_activated", () => Activated -= OnApplicationActivated);
         TryRunCleanup("app_exit_unsubscribe_dispatcher_unhandled", () => DispatcherUnhandledException -= OnDispatcherUnhandledException);
         TryRunCleanup("app_exit_unsubscribe_domain_unhandled", () => AppDomain.CurrentDomain.UnhandledException -= OnAppDomainUnhandledException);
         TryRunCleanup("app_exit_unsubscribe_process_exit", () => AppDomain.CurrentDomain.ProcessExit -= OnProcessExit);
@@ -407,6 +409,20 @@ public partial class App : WpfApplication
         _ = sender;
         _ = e;
         _storeUpdateCoordinator?.Start();
+    }
+
+    private void OnApplicationActivated(object? sender, EventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        if (_mainViewModel is null)
+        {
+            return;
+        }
+
+        ObserveBackgroundTask(
+            _mainViewModel.InitializePremiumStatusAsync(),
+            "premium_status_refresh_on_activation");
     }
 
     private void OnStoreUpdateStateChanged(object? sender, StoreUpdateState state)

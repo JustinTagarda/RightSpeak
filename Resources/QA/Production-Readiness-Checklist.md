@@ -69,8 +69,25 @@ Exit Criteria:
 - Retrieval failures include strategy context.
 - Speech/hotkey/native-bridge failures include actionable status text.
 - Logging remains minimal and non-spammy in normal flow.
+- Debug logging behavior matches `D:\Projects\DEBUG-LOGGING.md`:
+  - enabled only in local `Debug` runs
+  - written under the launched executable directory
+  - disabled in `Release` and installed/Store distributions
 
-## Phase 6 - Installer and First-Run Setup
+## Phase 6 - Premium Store Entitlement Validation
+Status: `In Progress`
+
+Goal:
+- Verify Microsoft Store Premium durable add-on behavior is production-safe for purchase and promo redemption.
+
+Exit Criteria:
+- Premium purchase and promo redemption both resolve through the same Store-verified entitlement path.
+- Premium license matching handles Premium SKU Store ID suffixes correctly.
+- Wrong-product or wrong-account promo redemption does not locally unlock Premium.
+- App activation/foreground refresh detects Premium redeemed outside the app.
+- Unpackaged development runs keep footer `Basic/Premium` status UI hidden.
+
+## Phase 7 - Installer and First-Run Setup
 Status: `In Progress`
 
 Goal:
@@ -82,7 +99,7 @@ Exit Criteria:
 - Browser extension setup steps are clear for Chrome and Edge.
 - First-run troubleshooting section exists.
 
-## Phase 7 - Regression and Release Candidate Pass
+## Phase 8 - Regression and Release Candidate Pass
 Status: `In Progress`
 
 Goal:
@@ -105,12 +122,15 @@ Exit Criteria:
 - Settings load now backs up malformed settings files and resets to safe defaults.
 - Settings save now writes via temp/replace flow to reduce partial-write risk.
 - Phase 5 has started.
-- Added minimal structured diagnostics log at `%LocalAppData%\\RightSpeak\\logs\\rightspeak.log`.
+- Added minimal structured diagnostics log for local `Debug` runs only; log file is emitted beside the launched executable and is disabled for installed/Store builds.
 - Retrieval provider failures/success, clipboard fallback outcomes, hotkey registration outcomes, and settings recovery/save now emit diagnostic events.
 - Phase 6 has started.
+- Premium entitlement resolution now combines Store license and durable collection evidence and refreshes again on app activation.
+- Unpackaged development runs now keep footer Premium status/upgrade UI hidden.
+- Phase 7 has started.
 - Browser integration installer now validates extension IDs/origins, supports multi-ID setup, and can run bridge verification in one command.
 - Added dedicated browser integration troubleshooting guide.
-- Phase 7 has started.
+- Phase 8 has started.
 - Added concrete regression execution sheet: `Resources/QA/RC-Regression-Execution.md`.
 - Added release notes draft with known limitations: `Resources/QA/Release-Notes-Draft.md`.
 - Added repeatable RC smoke runner: `Resources/QA/Run-RC-Smoke.ps1`.

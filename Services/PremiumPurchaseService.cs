@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Security.Principal;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Interop;
@@ -34,13 +33,6 @@ public sealed class PremiumPurchaseService : IPremiumPurchaseService
             return new PremiumPurchaseResult(
                 PremiumPurchaseOutcome.NotSupported,
                 "Premium purchase is available in the Microsoft Store packaged app.");
-        }
-
-        if (IsProcessElevated())
-        {
-            return new PremiumPurchaseResult(
-                PremiumPurchaseOutcome.Blocked,
-                "Premium purchase is blocked while running as administrator. Relaunch normally and try again.");
         }
 
         try
@@ -193,7 +185,6 @@ public sealed class PremiumPurchaseService : IPremiumPurchaseService
             PremiumPurchaseOutcome.Canceled => "Purchase was canceled.",
             PremiumPurchaseOutcome.NetworkError => "Network error while contacting Microsoft Store.",
             PremiumPurchaseOutcome.ServerError => "Microsoft Store server error. Please try again.",
-            PremiumPurchaseOutcome.Blocked => "Premium purchase is blocked in this execution mode.",
             PremiumPurchaseOutcome.NotSupported => "Premium purchase is not supported in this build.",
             _ => "Premium purchase failed."
         };
@@ -212,22 +203,4 @@ public sealed class PremiumPurchaseService : IPremiumPurchaseService
         }
     }
 
-    private static bool IsProcessElevated()
-    {
-        try
-        {
-            using var identity = WindowsIdentity.GetCurrent();
-            if (identity is null)
-            {
-                return false;
-            }
-
-            var principal = new WindowsPrincipal(identity);
-            return principal.IsInRole(WindowsBuiltInRole.Administrator);
-        }
-        catch
-        {
-            return false;
-        }
-    }
 }

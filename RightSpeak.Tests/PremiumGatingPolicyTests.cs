@@ -13,6 +13,15 @@ namespace RightSpeak.Tests;
 
 public sealed class PremiumGatingPolicyTests
 {
+    [Fact(Skip = "Policy guard: enable when unpackaged development-mode premium UI visibility contract is exposed to this test surface.")]
+    public void DevelopmentMode_Unpackaged_HidesBasicPremiumStatusAndUpgrade()
+    {
+        // Required policy behavior for unpackaged/non-Store development runs:
+        // - Basic/Premium status text remains hidden.
+        // - Upgrade button remains hidden.
+        // - Basic/Premium upsell prompts are not surfaced from development-mode gating UX paths.
+    }
+
     [Fact]
     public async Task BasicMode_ReadDocument_RemainsAvailable()
     {

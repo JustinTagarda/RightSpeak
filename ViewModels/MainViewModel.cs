@@ -57,6 +57,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _isPremiumOwned;
     private bool _isPremiumBusy;
     private bool _isPremiumUiReady;
+    private bool _shouldShowPremiumUi = true;
     private bool _isStoreUpdateAvailable;
     private bool _isStoreUpdateBusy;
     private bool _isStoreUpdateProgressVisible;
@@ -337,7 +338,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool IsPremiumOwned => _isPremiumOwned;
     public bool IsPremiumBusy => _isPremiumBusy;
     public bool IsPremiumUiReady => _isPremiumUiReady;
-    public bool IsUpgradeButtonVisible => _isPremiumUiReady && !_isPremiumOwned && _premiumPurchaseService is not null;
+    public bool IsUpgradeButtonVisible => _isPremiumUiReady && _shouldShowPremiumUi && !_isPremiumOwned && _premiumPurchaseService is not null;
     public bool IsUpgradeAvailable => !_isPremiumOwned && !_isPremiumBusy && _premiumPurchaseService is not null;
     public bool IsUpdateButtonVisible => _isStoreUpdateAvailable;
     public bool IsUpdateAvailable => _isStoreUpdateAvailable && !_isStoreUpdateBusy;
@@ -1022,12 +1023,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
         try
         {
             var state = await _premiumEntitlementService.RefreshEntitlementAsync(cancellationToken).ConfigureAwait(true);
+            SetShouldShowPremiumUi(state.ShouldShowPremiumUi);
             SetPremiumOwned(state.IsPremiumOwned);
             SetStatusMessage(state.Message);
         }
         finally
         {
-            SetPremiumUiReady(true);
+            SetPremiumUiReady(_shouldShowPremiumUi);
         }
     }
 
@@ -1114,6 +1116,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(AppModeText));
         OnPropertyChanged(nameof(UpgradeTooltipText));
         UpdateCommandStates();
+    }
+
+    private void SetShouldShowPremiumUi(bool shouldShowPremiumUi)
+    {
+        if (_shouldShowPremiumUi == shouldShowPremiumUi)
+        {
+            return;
+        }
+
+        _shouldShowPremiumUi = shouldShowPremiumUi;
+        OnPropertyChanged(nameof(IsUpgradeButtonVisible));
     }
 
     private void SetPremiumBusy(bool isPremiumBusy)

@@ -109,13 +109,17 @@ dotnet build .\RightSpeak.csproj
 - Store model: main app remains free in `Basic`; `Premium` is unlocked by owning a durable Microsoft Store add-on.
 - Premium purchase path uses in-app Store purchase (`Windows.Services.Store` + `RequestPurchaseAsync`) through a shared purchase service.
 - Entitlement is Store-verified first; verified cache is fallback-only when Store services are unavailable.
+- Online Premium verification now combines `StoreContext.GetAppLicenseAsync()` and `StoreContext.GetUserCollectionAsync(["Durable"])`.
+- Premium durable add-on matching accepts Premium SKU Store ID suffixes instead of relying on exact `AddOnLicenses` dictionary-key equality.
 - Premium purchase and upgrade dialog flows always run main-window accessibility recovery on exit paths (success/cancel/failure/exception): main window is re-enabled and re-focused.
 - Premium purchase calls bind Store owner window handle per invocation (active top-level app window fallback chain) and execute on the app UI dispatcher for Store UI safety.
 - Premium-gated hotkey customization now routes blocked Basic-mode attempts through the existing in-app upgrade confirmation dialog and shared premium purchase flow (including Store fallback for unsupported purchase environments).
 - Footer status uses bottom-right `AppStatusDisplay`:
 - startup: `Basic/Premium` text and `Upgrade` button stay hidden until the first entitlement refresh completes
+- unpackaged development run: footer `Basic/Premium` text and `Upgrade` button remain hidden, and Premium upsell gating UX is not surfaced
 - owned entitlement: show `Premium` text only
 - not owned entitlement: show `Basic` text plus compact `Upgrade` button
+- app activation re-runs entitlement refresh so externally redeemed Premium promo codes can be detected after returning to the app
 
 ### Run
 ```powershell
@@ -188,7 +192,7 @@ Contributors and coding agents should read [`AGENTS.md`](./AGENTS.md) before mak
 ## Store Packaging Verification Baseline
 - Store packaging runs must follow `D:\Projects\4-MSSTORE-PACKAGE-GENERATION.md` end-to-end.
 - Use Visual Studio 2026 MSBuild only: `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`.
-- Before packaging, verify pinned SDK `10.0.204` from `D:\Projects\global.json` is installed and resolver root points to that SDK band.
+- Before packaging, verify pinned SDK `10.0.300` from `D:\Projects\global.json` is installed and resolver root points to that SDK band.
 - Packaging output must be x64-only and the upload artifact must contain exactly one x64 package.
 - Increment `RightSpeak.Package\Package.appxmanifest` identity version for each submission using `Major.Minor.Build.0` with revision `0`.
 - Clean stale artifacts before packaging so only the newest `.msixupload` remains as the submission candidate.
@@ -253,6 +257,13 @@ Contributors and coding agents should read [`AGENTS.md`](./AGENTS.md) before mak
 - Existing Store Premium durable add-on architecture, shared purchase route (`Windows.Services.Store` + `RequestPurchaseAsync`), CTA convergence, and bottom-right `AppStatusDisplay` behavior remain aligned and were retained.
 - Premium flow test harness was aligned for WPF dialog execution by running Premium purchase-flow UI tests on STA threads (`[StaFact]`) so checklist-oriented Premium flow tests execute reliably.
 
+## Premium Add-ons Re-Application Record (2026-06-08)
+- Instruction baseline re-applied to close remaining entitlement-resolution gaps from `D:\Projects\2-MSSTORE-PREMIUM-ADDONS.md`.
+- Premium entitlement resolution now combines `GetAppLicenseAsync()` license evidence with `GetUserCollectionAsync(["Durable"])` collection evidence so promo redemption and purchase share the same Store-verified resolver.
+- Premium durable add-on matching now accepts Premium SKU Store ID suffixes instead of relying on exact `AddOnLicenses` dictionary-key equality.
+- Unpackaged development runs keep footer `Basic/Premium` status UI hidden and disable Premium upsell gating UX while preserving packaged Store behavior.
+- App activation now re-runs Premium entitlement refresh so externally redeemed promo codes can be detected after returning to the app.
+
 
 ## Store Package Generation Record (2026-05-29, 4-MSSTORE end-to-end)
 - Instruction baseline applied end-to-end from `D:\Projects\4-MSSTORE-PACKAGE-GENERATION.md`.
@@ -260,3 +271,13 @@ Contributors and coding agents should read [`AGENTS.md`](./AGENTS.md) before mak
 - Pinned SDK verification source: `D:\Projects\global.json` -> `10.0.204` (`rollForward=disable`).
 - Manifest `RightSpeak.Package\Package.appxmanifest` identity version advanced to `1.0.23.0` (`Major.Minor.Build.0`, revision `0`).
 - Packaging target remains x64-only with single-architecture upload artifact verification required.
+
+## Store Package Generation Record (2026-06-09)
+- Instruction baseline applied end-to-end from `D:\Projects\4-MSSTORE-PACKAGE-GENERATION.md`.
+- Submission packaging mode: FULL-BUILD via Visual Studio 2026 MSBuild only.
+- Pinned SDK verification source: `D:\Projects\global.json` -> `10.0.300` (`rollForward=disable`).
+- Manifest `RightSpeak.Package\Package.appxmanifest` identity version advanced to `1.0.30.0` (`Major.Minor.Build.0`, revision `0`).
+- Final Store upload artifact (`.msixupload`):
+  - `D:\Projects\RightSpeak\RightSpeak.Package\bin\x64\Release\AppPackages\RightSpeak.Package_1.0.30.0_x64.msixupload`
+- Generated x64 package inside upload artifact:
+  - `RightSpeak.Package_1.0.30.0_x64.msix`

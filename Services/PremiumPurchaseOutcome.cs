@@ -8,6 +8,5 @@ public enum PremiumPurchaseOutcome
     Failed,
     NetworkError,
     ServerError,
-    NotSupported,
-    Blocked
+    NotSupported
 }

@@ -9,6 +9,7 @@ Minimal regression checklist for enforcing `BASIC-PREMIUM-GATING-POLICY.md`.
 - Test harness can control entitlement mode (`Basic` vs `Premium`) through fakes/mocks.
 - Dialog assertions can verify that blocked actions surface Premium upgrade UX.
 - Existing purchase/navigation route can be observed (in-app purchase first, Store fallback second).
+- Premium entitlement resolver can be exercised with both Store license evidence and Store collection evidence.
 
 ## Basic Mode - Allowed
 
@@ -54,9 +55,15 @@ For each blocked feature path, assert:
 6. `Basic_Blocks_HotkeyCustomization_ShowsPremiumDialog`
 7. `Premium_Allows_AllGatedFeatures`
 8. `BlockedDialog_Upgrade_UsesExistingPurchaseRoute`
+9. `PremiumResolver_LicenseSkuPrefix_MatchesConfiguredPremiumAddOn`
+10. `PremiumResolver_WrongDurableAddOn_DoesNotUnlockPremium`
+11. `DevelopmentMode_HidesFooterPremiumStatusAndUpgrade`
+12. `ActivationRefresh_DetectsExternallyRedeemedPremiumEntitlement`
 
 ## Manual Smoke Additions
 
 1. In Basic mode, open Manage Voices and verify browse works while install/update/remove are blocked with dialog.
 2. In Basic mode, verify Read Document still works end to end on representative external targets.
 3. In Premium mode, verify blocked dialogs do not appear for previously gated actions.
+4. In a packaged Store build, redeem a Premium durable add-on promo code outside the app, reactivate the app, and verify Premium is detected after refresh.
+5. In an unpackaged development run, verify footer `Basic/Premium` status text and `Upgrade` stay hidden.

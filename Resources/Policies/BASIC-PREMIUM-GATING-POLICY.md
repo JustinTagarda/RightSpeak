@@ -19,9 +19,28 @@ Primary goal:
 
 - Use the existing Microsoft Store durable add-on entitlement flow already implemented in the app.
 - Use existing entitlement refresh/cache behavior and purchase/navigation services.
+- Store entitlement verification must treat `StoreContext.GetAppLicenseAsync()` and `StoreContext.GetUserCollectionAsync(...)` as the authoritative online verification pair for Premium ownership.
+- Premium durable add-on matching must handle Premium SKU Store ID suffixes and must not rely on exact `AddOnLicenses` dictionary-key equality with the 12-character add-on Store ID.
 - Do not introduce alternate entitlement systems unless explicitly approved.
 
 ## Policy Rules
+
+### Development Mode Exception (Unpackaged / Non-Store Run)
+
+When the app runs as a local development build (for example, launched directly from Debug executable output and not Store-installed/package-identity runtime):
+
+- Do not surface Basic/Premium gating UX.
+- Keep `Basic/Premium` status text hidden/collapsed/clipped.
+- Keep `Upgrade` button hidden/collapsed/clipped.
+- Do not trigger Basic/Premium upsell prompts from this development-mode path.
+
+Scope and non-override:
+- This exception applies only to unpackaged/non-Store development runs.
+- Packaged Store-installed behavior remains governed by Store entitlement verification and all other rules in this policy.
+- In this development-mode path, runtime feature gating is effectively disabled:
+  - do not surface footer Premium status/upgrade UI
+  - do not surface blocked-action upgrade prompts
+  - do not require Premium entitlement checks to use otherwise gated features
 
 ### Basic Mode: Allowed Features
 
@@ -88,6 +107,7 @@ Implementation note:
 - Do not gate or degrade core reading reliability paths in `Basic`.
 - Do not alter established retrieval/speech reliability baselines as part of gating changes.
 - Preserve existing diagnostics needed to troubleshoot runtime failures.
+- App activation/foreground return must refresh Premium entitlement so promo codes redeemed outside the app can be detected after the user returns.
 
 ## Logging and Diagnostics Expectations
 
@@ -126,6 +146,17 @@ At minimum, policy regression coverage must verify:
 4. Blocked action UX:
 - blocked paths show required Premium dialog
 - dialog upgrade path uses existing purchase route and fallback
+
+5. Store entitlement semantics:
+- Premium purchase and Premium promo redemption resolve through the same Store-verified entitlement path
+- Premium SKU Store ID suffixes match correctly
+- wrong-product or wrong-account promo redemption does not unlock Premium locally
+- app activation refresh can detect Premium redeemed outside the app
+
+6. Development mode exception:
+- unpackaged/non-Store runs keep footer `Basic/Premium` status text hidden
+- unpackaged/non-Store runs keep `Upgrade` hidden
+- unpackaged/non-Store runs do not surface Premium upsell gating UX
 
 ## Change Control
 

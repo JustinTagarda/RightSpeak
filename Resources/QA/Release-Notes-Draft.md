@@ -22,6 +22,9 @@ Date: `2026-04-16`
 - Settings save flow hardened with temp/replace write strategy.
 - Corrupt settings recovery now backs up malformed files and restores safe defaults.
 - Fixed a local speech playback clipping issue observed on a real Windows machine by adding validated leading silence before buffered playback.
+- Premium add-on verification now combines Store license and durable collection checks so in-app purchase and promo redemption share one entitlement resolver.
+- Premium durable add-on detection now handles SKU Store ID suffixes instead of requiring exact `AddOnLicenses` dictionary-key equality.
+- App activation now refreshes Premium entitlement so externally redeemed promo codes can be detected after returning to the app.
 
 ## Known Limitations
 - Selected/paragraph/document retrieval depends on what target apps expose through UI Automation; compatibility is not universal.
@@ -29,10 +32,12 @@ Date: `2026-04-16`
 
 ## Upgrade Notes
 - Existing settings files remain compatible; malformed files are auto-backed up and reset.
+- Unpackaged development runs intentionally hide footer `Basic/Premium` status UI and do not surface Premium upsell gating UX.
 
 ## Diagnostics
-- App diagnostics log path:
-  - `%LocalAppData%\RightSpeak\logs\rightspeak.log`
+- Debug diagnostics are `Debug`-only and write beside the launched executable:
+  - `...\bin\Debug\...\rightspeak.log`
+- Release builds and installed distributions, including Microsoft Store installs, do not emit diagnostics logs.
 
 ## Validation Status
 - Automated build checks passed.

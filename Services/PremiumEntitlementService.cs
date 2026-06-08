@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Windows.Services.Store;
@@ -28,8 +29,12 @@ public sealed class PremiumEntitlementService : IPremiumEntitlementService
 
         if (!IsPackagedProcess())
         {
-            _premiumEntitlementCache.ClearVerifiedPremiumEntitlement();
-            return new PremiumEntitlementState(false, false, false, "Basic mode (Store package identity not found).");
+            return new PremiumEntitlementState(
+                true,
+                false,
+                false,
+                "Development build: Premium gating is disabled.",
+                ShouldShowPremiumUi: false);
         }
 
         var storeContext = _storeContextProvider.TryGetDefaultContext();
@@ -42,7 +47,28 @@ public sealed class PremiumEntitlementService : IPremiumEntitlementService
         {
             cancellationToken.ThrowIfCancellationRequested();
             var appLicense = await storeContext.GetAppLicenseAsync().AsTask(cancellationToken).ConfigureAwait(false);
-            var isOwned = IsPremiumOwnedByLicense(appLicense, _premiumAddOnStoreId);
+            var licenseEvidence = GetLicenseEvidence(appLicense);
+            var ownsFromLicense = PremiumEntitlementResolver.OwnsPremiumFromLicenses(
+                licenseEvidence,
+                _premiumAddOnStoreId);
+            var collectionEvidence = await GetCollectionEvidenceAsync(storeContext, cancellationToken).ConfigureAwait(false);
+            var ownsFromCollection = PremiumEntitlementResolver.OwnsPremiumFromCollection(
+                collectionEvidence,
+                _premiumAddOnStoreId);
+            var isOwned = ownsFromLicense || ownsFromCollection;
+
+            AppDiagnostics.Info(
+                "premium_entitlement_resolved",
+                new Dictionary<string, string?>
+                {
+                    ["packageFullName"] = TryGetPackageFullName(),
+                    ["premiumAddOnStoreId"] = _premiumAddOnStoreId,
+                    ["licenseOwned"] = ownsFromLicense.ToString(),
+                    ["collectionOwned"] = ownsFromCollection.ToString(),
+                    ["licenseSkuStoreIds"] = string.Join(",", licenseEvidence.Select(static item => item.SkuStoreId)),
+                    ["collectionStoreIds"] = string.Join(",", collectionEvidence.Select(static item => item.StoreId))
+                });
+
             if (isOwned)
             {
                 _premiumEntitlementCache.SaveVerifiedPremiumEntitlement();
@@ -50,7 +76,11 @@ public sealed class PremiumEntitlementService : IPremiumEntitlementService
             }
 
             _premiumEntitlementCache.ClearVerifiedPremiumEntitlement();
-            return new PremiumEntitlementState(false, true, false, "Basic mode is active.");
+            return new PremiumEntitlementState(
+                false,
+                true,
+                false,
+                "Basic mode is active. If you redeemed a Premium promo code, make sure Microsoft Store is signed into the same account, then restore purchases.");
         }
         catch (OperationCanceledException)
         {
@@ -62,6 +92,8 @@ public sealed class PremiumEntitlementService : IPremiumEntitlementService
                 "premium_entitlement_refresh_failed",
                 new Dictionary<string, string?>
                 {
+                    ["packageFullName"] = TryGetPackageFullName(),
+                    ["premiumAddOnStoreId"] = _premiumAddOnStoreId,
                     ["exceptionType"] = ex.GetType().FullName,
                     ["message"] = ex.Message
                 });
@@ -79,19 +111,58 @@ public sealed class PremiumEntitlementService : IPremiumEntitlementService
         return new PremiumEntitlementState(false, false, true, $"{message} Basic mode is enabled.");
     }
 
-    private static bool IsPremiumOwnedByLicense(StoreAppLicense? appLicense, string addOnStoreId)
+    private static IReadOnlyList<PremiumAddOnLicenseEvidence> GetLicenseEvidence(StoreAppLicense? appLicense)
     {
-        if (appLicense?.AddOnLicenses is null || string.IsNullOrWhiteSpace(addOnStoreId))
+        if (appLicense?.AddOnLicenses is null)
         {
-            return false;
+            return Array.Empty<PremiumAddOnLicenseEvidence>();
         }
 
-        if (!appLicense.AddOnLicenses.TryGetValue(addOnStoreId, out var addOnLicense))
+        return appLicense.AddOnLicenses.Values
+            .Where(static license => license is not null)
+            .Select(static license => new PremiumAddOnLicenseEvidence(
+                license.SkuStoreId ?? string.Empty,
+                license.IsActive,
+                license.InAppOfferToken))
+            .ToArray();
+    }
+
+    private static async Task<IReadOnlyList<PremiumAddOnCollectionEvidence>> GetCollectionEvidenceAsync(
+        StoreContext storeContext,
+        CancellationToken cancellationToken)
+    {
+        var result = await storeContext
+            .GetUserCollectionAsync(["Durable"])
+            .AsTask(cancellationToken)
+            .ConfigureAwait(false);
+        if (result.ExtendedError is not null)
         {
-            return false;
+            throw result.ExtendedError;
         }
 
-        return addOnLicense.IsActive;
+        if (result.Products is null)
+        {
+            return Array.Empty<PremiumAddOnCollectionEvidence>();
+        }
+
+        return result.Products.Values
+            .Where(static product => product is not null)
+            .Select(static product => new PremiumAddOnCollectionEvidence(
+                product.StoreId ?? string.Empty,
+                product.InAppOfferToken))
+            .ToArray();
+    }
+
+    private static string? TryGetPackageFullName()
+    {
+        try
+        {
+            return Windows.ApplicationModel.Package.Current.Id.FullName;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static bool IsPackagedProcess()

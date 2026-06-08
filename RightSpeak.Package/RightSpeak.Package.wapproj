@@ -6,9 +6,9 @@
     <TargetPlatformVersion>10.0.26100.0</TargetPlatformVersion>
     <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
     <DefaultLanguage>en-US</DefaultLanguage>
-    <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
+    <AppxPackageSigningEnabled>true</AppxPackageSigningEnabled>
     <EntryPointProjectUniqueName>..\RightSpeak.csproj</EntryPointProjectUniqueName>
-    <PackageCertificateThumbprint></PackageCertificateThumbprint>
+    <PackageCertificateThumbprint>2644D13B6C6D47696193226D2D0DDF935F62B9F2</PackageCertificateThumbprint>
     <GenerateAppInstallerFile>false</GenerateAppInstallerFile>
     <AppxBundle>Never</AppxBundle>
     <AppxBundlePlatforms>x64</AppxBundlePlatforms>
